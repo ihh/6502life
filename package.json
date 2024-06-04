@@ -1,0 +1,19 @@
+{
+  "name": "6502life",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "6502": "github:mat-sz/6502",
+    "@neshacker/6502-tools": "^0.1.0",
+    "@sfotty-pie/sfotty": "^0.1.0",
+    "gemu-6502": "^0.1.2",
+    "mersennetwister": "^0.2.3",
+    "mos-6502": "github:SlideeScherz/mossy-cpu"
+  }
+}
