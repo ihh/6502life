@@ -122,11 +122,11 @@ class BoardController {
                 cpuCycles += this.sfotty.cycleCounter;
             }
             const isTimerInterrupt = cpuCycles >= schedulerCycles;
-            if (isTimerInterrupt) {
-                if (this.sfotty.I)
+            if (isTimerInterrupt || isSoftwareInterrupt) {
+                if (isTimerInterrupt && this.sfotty.I)
                     this.board.undoWrites();
                 else {
-                    this.pushIrq(false);
+                    this.pushIrq (isSoftwareInterrupt);
                     this.writeSAXY();
                 }
                 this.board.sampleNextMove();
@@ -135,9 +135,6 @@ class BoardController {
                 this.clearPPC();
                 this.writeRng();
                 break;
-            } else if (isSoftwareInterrupt) {
-                this.pushIrq(true);
-                this.clearPPC();
             }
         }
         return { cpuCycles, schedulerCycles }

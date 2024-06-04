@@ -10,7 +10,7 @@ class BoardMemory {
 
     get B() { return 256 }
     get M() { return 1024 }
-    get N() { return 5 }
+    get N() { return 7 }
     get log2M() { return 10 }  // = log_2(M)
     get storageSize() { return this.B * this.B * this.M; }
     get neighborhoodSize() { return this.N * this.N * this.M; }
@@ -82,22 +82,28 @@ class BoardMemory {
 
     sampleNextMove() {
         const rv1 = this.mt.int();
-        this.iOrig = rv1 & 0xFF;
-        this.jOrig = (rv1 & 0xFF00) >> 8;
-        this.nextCycles = 0;
         const rv2 = this.mt.int();
-        while (this.nextCycles < 32 && (rv2 & (1 << this.nextCycles)))
-            ++this.nextCycles;
-        this.nextCycles = this.nextCycles << 8;
-        let rv3 = rv1 >> 16;
-        while ((this.nextCycles & 0xFF) < 0xFF && (rv3 & 0xFF) != 0) {
-            if ((this.nextCycles & 3) == 1)
-                rv3 = this.mt.int();
-            else
-                rv3 >>= 8;
-            ++this.nextCycles;
+        this.iOrig = rv1 & 0xFF;
+        this.jOrig = (rv1 >> 8) & 0xFF;
+        // These constants are tweaked to give an expected cycle count of mean 256*C, min 75*C, max 3136*C where C=cycleMultiplier
+        // We want a change of being able to copy an entire 1k cell in an atomic operation, which takes ~19*1024 = 19456 cycles
+        // So the longest cycle count between interrupts (3136*C) should be around 2x that: C = 2*19456/3136 ~= 12
+        const expectedLife = 256;  // 1/(1-p) = 256
+        const halfLife = 180;  // (1-p)**halfLife ~= 0.5
+        const quarterLife = 76;  // (1-p)**quarterLife ~= 0.75
+        const maxHalfLives = 16;
+        const cycleMultiplier = 16;  // so max time between interrupts is comfortably 2x atomic copy time
+        let r = rv1 >> 16;
+        let nHalfLives = 0;
+        while (nHalfLives < maxHalfLives && (r & 1)) {
+            r = r >> 1;
+            ++nHalfLives;
         }
+        this.nextCycles = cycleMultiplier * (halfLife * nHalfLives + (nHalfLives == maxHalfLives ? expectedLife : quarterLife));
+        this.nextRnd = rv2;
     }
 };
+
+
 
 export default BoardMemory;
