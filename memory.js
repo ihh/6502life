@@ -10,11 +10,13 @@ class BoardMemory {
 
     get B() { return 256 }
     get M() { return 1024 }
-    get N() { return 7 }
+    get N() { return 5 }
     get log2M() { return 10 }  // = log_2(M)
     get storageSize() { return this.B * this.B * this.M; }
     get neighborhoodSize() { return this.N * this.N * this.M; }
     get byteOffsetMask() { return this.M - 1 }
+    get N2() { return this.N * this.N }
+    get N4() { return this.N2 * this.N2 }
 
     get state() { return { storage: new TextDecoder().decode(this.storage),
                             iOrig: this.iOrig,

@@ -45,6 +45,10 @@ class BoardController {
         return this.board.read (this.sfotty.PC);
     }
 
+    nextOperand() {
+        return this.board.read (this.sfotty.PC + 1);
+    }
+
     pushByte (val) {
         const S = this.sfotty.S;
         this.board.write (0x100 + S, val);
@@ -93,6 +97,15 @@ class BoardController {
         this.sfotty.PC = 0;
     }
 
+    swapCells (i, j) {
+        const iAddr = i * this.board.M, jAddr = j * this.board.M;
+        for (let b = 0; b < this.board.M; ++b) {
+            const iOld = this.board.read(iAddr+b), jOld = this.board.read(jAddr+b);
+            this.board.write (iAddr, jOld);
+            this.board.write (jAddr, iOld);
+        }
+    }
+
     // NB this randomize() function avoids updating the Board's RNG
     randomize(rng) {
         rng = rng || (() => Math.random() * 2**32);
@@ -126,6 +139,15 @@ class BoardController {
                 if (isTimerInterrupt && this.sfotty.I)
                     this.board.undoWrites();
                 else {
+                    this.board.disableUndoHistory();
+                    if (nextOp == 0) {  // BRK, switch pages
+                        const brkOperand = this.nextOperand();
+                        if (brkOperand < this.board.N4) {
+                            const i = Math.floor (brkOperand / this.board.N2) % this.board.N2;
+                            const j = brkOperand % this.board.N2;
+                            this.swapCells (i, j);
+                        }
+                    }
                     this.pushIrq (isSoftwareInterrupt);
                     this.writeSAXY();
                 }
