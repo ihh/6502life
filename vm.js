@@ -5,25 +5,26 @@ class BoardMemory {
     constructor(seed = 42) {
         this.data = new UIntArray (this.storageSize);
         this.mt = new MersenneTwister (seed);
-        this.sampleOriginAndDuration();
+        this.sampleNextMove();
     }
 
-    sampleOriginAndDuration() {
-        const rv1 = mt.int();
+    sampleNextMove() {
+        const rv1 = this.mt.int();
         this.iOrig = rv1 & 0xFF;
         this.jOrig = (rv1 & 0xFF00) >> 8;
         this.cycles = 0;
-        let rv2 = mt.int();
+        let rv2 = this.mt.int();
         while (this.cycles < 32 && (rv2 & (1 << this.cycles)))
             this.cycles += 256;
         let rv3 = rv1 >> 16;
         while ((this.cycles & 0xFF) < 0xFF && (rv3 & 0xFF == 0)) {
             if ((this.cycles & 3) == 2)
-                rv3 = mt.int();
+                rv3 = this.mt.int();
             else
                 rv3 >>= 8;
             ++this.cycles;
         }
+        this.nextSAXY = this.mt.int();
     }
 
     get B() { return 256 }
@@ -92,8 +93,8 @@ class BoardController {
         return this.board.cycles;
     }
 
-    randomizeLocation() {
-        this.board.sampleOriginAndDuration();
+    sampleNextMove() {
+        this.board.sampleNextMove();
         this.undoSnapshot = this.board.readNeighborhood();
     }
 
@@ -128,11 +129,11 @@ class BoardController {
                     this.board.write (0x0202, sfotty.X);
                     this.board.write (0x0203, sfotty.Y);
                 }
-                this.randomizeLocation();
-                this.sfotty.S = 0;
-                this.sfotty.A = 0;
-                this.sfotty.X = 0;
-                this.sfotty.Y = 0;
+                this.sfotty.S = (this.board.nextSAXY >> 24) & 0xFF;
+                this.sfotty.A = (this.board.nextSAXY >> 16) & 0xFF;
+                this.sfotty.X = (this.board.nextSAXY >> 8) & 0xFF;
+                this.sfotty.Y = this.board.nextSAXY & 0xFF;
+                this.sampleNextMove();
                 this.sfotty.P = 0;
                 this.sfotty.PC = 0;
                 this.sfotty.cycleCounter = 0;
