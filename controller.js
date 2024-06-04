@@ -127,7 +127,9 @@ class BoardController {
         const schedulerCycles = this.board.nextCycles;
         while (true) {
             const nextOp = this.nextOpcode();
-            const isSoftwareInterrupt = nextOp == 0 || !this.isValidOpcode[nextOp];
+            const isBRK = nextOp == 0;
+            const isBadOpcode = !this.isValidOpcode[nextOp];
+            const isSoftwareInterrupt = isBRK || isBadOpcode;
             if (isSoftwareInterrupt) {
                 cpuCycles += 7;  // software interrupt (BRK) takes 7 cycles
             } else {
@@ -140,7 +142,7 @@ class BoardController {
                     this.board.undoWrites();
                 else {
                     this.board.disableUndoHistory();
-                    if (nextOp == 0) {  // BRK, switch pages
+                    if (isBRK) {  // BRK, switch pages
                         const brkOperand = this.nextOperand();
                         if (brkOperand < this.board.N4) {
                             const i = Math.floor (brkOperand / this.board.N2) % this.board.N2;
