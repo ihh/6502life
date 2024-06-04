@@ -22,15 +22,6 @@ class BoardController {
         this.sfotty = new Sfotty(this.memory);
     }
 
-    sampleNextMove() {
-        this.board.sampleNextMove();
-        this.undoSnapshot = this.board.readNeighborhood();
-    }
-
-    undo() {
-        this.board.writeNeighborhood (this.undoSnapshot);
-    }
-
     pushByte (val) {
         const S = this.sfotty.S;
         this.board.write (0x100 + S, val);
@@ -80,18 +71,27 @@ class BoardController {
         this.sfotty.cycleCounter = 0;
     }
 
+    moveAndTakeSnapshot() {
+        this.board.sampleNextMove();
+        this.snapshot = this.board.readNeighborhood();
+    }
+
+    restoreSnapshot() {
+        this.board.writeNeighborhood (this.snapshot);
+    }
+
     runToNextInterrupt() {
         while (true) {
             this.sfotty.run();
             if (this.sfotty.cycleCounter >= this.cyclesToNextInterrupt) {
                 this.cycleCounter += this.cyclesToNextInterrupt;
                 if (this.sfotty.I)
-                    this.undo();
+                    this.restoreSnapshot();
                 else {
                     this.pushIrq();
                     this.writeSAXY();
                 }
-                this.sampleNextMove();
+                this.moveAndTakeSnapshot();
                 this.readSAXY();
                 this.writeRng();
                 break;
