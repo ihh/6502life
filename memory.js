@@ -5,8 +5,8 @@ const cellDir = ['O',  // origin
                  'NE','SE','SW','NW',  // 5..8
                  'NN','EE','SS','WW',  // 9..12
                  'NNE','ENE','ESE','SSE','SSW','WSW','WNW','NNW',  // 13..20
-                 'NNEE','SSEE','SSWW','NNWW',  // 21..24
-                 'NNN','EEE','SSS','WWW',  // 25..27
+                 'NNN','EEE','SSS','WWW',  // 21..24
+                 'NNEE','SSEE','SSWW','NNWW',  // 25..27
                  'NNNE','NEEE','SEEE','SSSE','SSSW','SWWW','NWWW','NNNW',  // 28..35
                  'NNNEE','NNEEE','SSEEE','SSSEE','SSSWW','SSWWW','NNWWW','NNNWW',  // 36..43
                  'NNNEEE','SSSEEE','SSSWWW','NNNWWW'];  // 44..48
