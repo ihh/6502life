@@ -1,5 +1,20 @@
 import MersenneTwister from 'mersennetwister';
 
+const cellDir = ['O',  // origin
+                 'N','E','S','W',  // 1..4
+                 'NE','SE','SW','NW',  // 5..8
+                 'NN','EE','SS','WW',  // 9..12
+                 'NNE','ENE','ESE','SSE','SSW','WSW','WNW','NNW',  // 13..20
+                 'NNEE','SSEE','SSWW','NNWW',  // 21..24
+                 'NNN','EEE','SSS','WWW',  // 25..27
+                 'NNNE','NEEE','SEEE','SSSE','SSSW','SWWW','NWWW','NNNW',  // 28..35
+                 'NNNEE','NNEEE','SSEEE','SSSEE','SSSWW','SSWWW','NNWWW','NNNWW',  // 36..43
+                 'NNNEEE','SSSEEE','SSSWWW','NNNWWW'];  // 44..48
+
+const compassVec = { 'O': [0,0], 'N': [0,+1], 'E': [+1,0], 'S': [0,-1], 'W': [-1,0] }
+const sumVec = (a, b) => a.map((ai,i) => ai + b[i]);
+const cellVec = cellDir.map ((dir) => dir.split('').map((d)=>compassVec[d]).reduce(sumVec));
+
 class BoardMemory {
     constructor(seed = 42) {
         this.storage = new Uint8Array (this.storageSize);
@@ -10,13 +25,11 @@ class BoardMemory {
 
     get B() { return 256 }
     get M() { return 1024 }
-    get N() { return 5 }
+    get N() { return 7 }
     get log2M() { return 10 }  // = log_2(M)
     get storageSize() { return this.B * this.B * this.M; }
     get neighborhoodSize() { return this.N * this.N * this.M; }
     get byteOffsetMask() { return this.M - 1 }
-    get N2() { return this.N * this.N }
-    get N4() { return this.N2 * this.N2 }
 
     get state() { return { storage: new TextDecoder().decode(this.storage),
                             iOrig: this.iOrig,
@@ -64,8 +77,7 @@ class BoardMemory {
             return -1;
         const b = addr & this.byteOffsetMask;
         const nbrIdx = addr >> this.log2M;
-        const x = Math.floor (nbrIdx / this.N);
-        const y = nbrIdx % this.N;
+        const [x, y] = cellVec[nbrIdx];
         return this.ijbToByteIndex (this.wrapCoord (this.iOrig + x),
                                     this.wrapCoord (this.jOrig + y),
                                     b);

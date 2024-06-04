@@ -101,9 +101,21 @@ class BoardController {
         const iAddr = i * this.board.M, jAddr = j * this.board.M;
         for (let b = 0; b < this.board.M; ++b) {
             const iOld = this.board.read(iAddr+b), jOld = this.board.read(jAddr+b);
-            this.board.write (iAddr, jOld);
-            this.board.write (jAddr, iOld);
+            this.board.write (iAddr+b, jOld);
+            this.board.write (jAddr+b, iOld);
         }
+    }
+
+    copyCell (src, dest) {
+        const srcAddr = src * this.board.M, destAddr = dest * this.board.M;
+        for (let b = 0; b < this.board.M; ++b)
+            this.board.write (destAddr+b, this.board.read(srcAddr+b));
+    }
+
+    zeroCell (i) {
+        const iAddr = i * this.board.M;
+        for (let b = 0; b < this.board.M; ++b)
+            this.board.write (iAddr+b, 0);
     }
 
     // NB this randomize() function avoids updating the Board's RNG
@@ -142,12 +154,32 @@ class BoardController {
                     this.board.undoWrites();
                 else {
                     this.board.disableUndoHistory();
-                    if (isBRK) {  // BRK, switch pages
-                        const brkOperand = this.nextOperand();
-                        if (brkOperand < this.board.N4) {
-                            const i = Math.floor (brkOperand / this.board.N2) % this.board.N2;
-                            const j = brkOperand % this.board.N2;
-                            this.swapCells (i, j);
+                    if (isBRK) {  // BRK: bulk memory operations
+                        const operation = this.nextOperand();
+                        if (operation > 0) {
+                            if (operation <= 25) {
+                                const i = operation - 1;
+                                this.zeroCell (i);
+                            } else if (operation <= 49) {
+                                const i = operation - 25;
+                                this.zeroCell (i);
+                                this.zeroCell (0);
+                            } else if (operation <= 55) {
+                                if (operation == 50) this.zeroCell(0);
+                                if (operation != 51) this.zeroCell(1);
+                                if (operation != 52) this.zeroCell(2);
+                                if (operation != 53) this.zeroCell(3);
+                                if (operation != 54) this.zeroCell(4);
+                            } else {  // operation >= 56
+                                const i = 1 + (operation & 7), j = (operation >> 3) - 7;
+                                if (i == j)
+                                    this.copyCell (0, i);
+                                else if (i > j && j != 0) {
+                                    this.zeroCell (i);
+                                    this.zeroCell (j);
+                                } else
+                                    this.swapCells (i, j);
+                            }
                         }
                     }
                     this.pushIrq (isSoftwareInterrupt);
