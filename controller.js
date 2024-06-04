@@ -11,8 +11,6 @@ class BoardController {
         this.clearPPC();
         this.writeRng();
         this.sfotty = new Sfotty(this.board);
-        this.cpuCycles = 0;
-        this.schedulerCycles = 0;
         this.isValidOpcode = Array.from({length: 256 });
         VANILLA_OPCODES.forEach ((opcode) => this.isValidOpcode[opcode.opcode] = true);
     }
@@ -93,21 +91,23 @@ class BoardController {
     }
 
     runToNextInterrupt() {
-        let cycles = 0;
+        let cpuCycles = 0;
+        const schedulerCycles = this.board.nextCycles;
         while (true) {
             const nextOp = this.nextOpcode();
             const isSoftwareInterrupt = nextOp == 0 || !this.isValidOpcode[nextOp];
-            if (!isSoftwareInterrupt)
+            if (isSoftwareInterrupt) {
+                cpuCycles += 7;  // software interrupt (BRK) takes 7 cycles
+            } else {
                 this.sfotty.run();
-            cycles += this.sfotty.cycleCounter;
-            const isTimerInterrupt = cycles >= this.board.nextCycles;
-            if (isSoftwareInterrupt || isTimerInterrupt) {
-                this.cpuCycles += cycles;
-                this.schedulerCycles += this.board.nextCycles;
+                cpuCycles += this.sfotty.cycleCounter;
+            }
+            const isTimerInterrupt = cpuCycles >= schedulerCycles;
+            if (isTimerInterrupt) {
                 if (this.sfotty.I)
                     this.board.undoWrites();
                 else {
-                    this.pushIrq (isSoftwareInterrupt);
+                    this.pushIrq(false);
                     this.writeSAXY();
                 }
                 this.board.sampleNextMove();
@@ -116,17 +116,23 @@ class BoardController {
                 this.clearPPC();
                 this.writeRng();
                 break;
+            } else if (isSoftwareInterrupt) {
+                this.pushIrq(true);
+                this.clearPPC();
             }
         }
+        return { cpuCycles, schedulerCycles }
     }
 
     setUpdater (clockSpeedMHz = 2, callbackRateHz = 100) {
         const targetCyclesPerCallback = 1e6 / clockSpeedMHz;
-        let lastCycleMarker = this.schedulerCycles;
+        let totalSchedulerCycles = 0;
         return setInterval (() => {
-            while (this.schedulerCycles < lastCycleMarker + targetCyclesPerCallback)
-                this.runToNextInterrupt();
-            lastCycleMarker += targetCyclesPerCallback;
+            while (totalSchedulerCycles < targetCyclesPerCallback) {
+                const { schedulerCycles } = this.runToNextInterrupt();
+                totalSchedulerCycles += schedulerCycles;
+            }
+            totalSchedulerCycles -= targetCyclesPerCallback;
         }, 1000 / callbackRateHz)
     }
 };

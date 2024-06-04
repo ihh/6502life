@@ -2,7 +2,7 @@ import BoardController from './controller.js';
 
 async function log() {
     while (true) {
-        console.log ('i='+bc.board.iOrig, 'j='+bc.board.jOrig, 'nextCycles='+bc.board.nextCycles, 'schedulerCycles='+bc.schedulerCycles, 'cpuCycles='+bc.cpuCycles)
+        console.log ('i='+bc.board.iOrig, 'j='+bc.board.jOrig, 'nextCycles='+bc.board.nextCycles)
         await sleep(1000);
     }
 }
