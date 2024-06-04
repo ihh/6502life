@@ -1,7 +1,20 @@
 import BoardController from './controller.js';
 
-let bc = new BoardController();
-while (true) {
-    bc.runToNextInterrupt();
-    console.log (bc.board.i, bc.board.j, bc.board.cycles)
+async function log() {
+    while (true) {
+        console.log ('i='+bc.board.iOrig, 'j='+bc.board.jOrig, 'nextCycles='+bc.board.nextCycles, 'schedulerCycles='+bc.schedulerCycles, 'cpuCycles='+bc.cpuCycles)
+        await sleep(1000);
+    }
 }
+
+function sleep(ms) {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+}
+
+let bc = new BoardController();
+bc.randomize();
+bc.setUpdater();
+
+log();

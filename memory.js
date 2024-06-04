@@ -5,6 +5,7 @@ class BoardMemory {
         this.storage = new Uint8Array (this.storageSize);
         this.mt = new MersenneTwister (seed);
         this.sampleNextMove();
+        this.resetUndoHistory();
     }
 
     get B() { return 256 }
@@ -14,26 +15,42 @@ class BoardMemory {
     get storageSize() { return this.B * this.B * this.M; }
     get neighborhoodSize() { return this.N * this.N * this.M; }
     get byteOffsetMask() { return this.M - 1 }
-    get HIMEM() { return this.neighborhoodSize - 1 }
 
     getByte (idx) { return this.storage[idx]; }
-    setByte (idx, val) { this.storage[idx] = val & 0xFF; }
-
-    ijbToByteIndex (i, j, b) {
-        return this.M * (j + this.B * this.i) + b;
+    setByteWithoutUndo (idx, val) { this.storage[idx] = val & 0xFF; }
+    setByteWithUndo (idx, val) {
+        if (this.undoHistory && !(idx in this.undoHistory))
+            this.undoHistory[idx] = this.getByte(idx);
+        this.setByteWithoutUndo (idx, val);
     }
 
-    wrapCoord (i) { return (i + this.B) % this.B; }
+    undoWrites() {
+        Object.keys(this.undoHistory).forEach ((idx) => this.setByteWithoutUndo (idx, this.undoHistory[idx]));
+    }
+
+    resetUndoHistory() {
+        this.undoHistory = {};
+    }
+
+    disableUndoHistory() {
+        delete this.undoHistory;
+    }
+
+    ijbToByteIndex (i, j, b) {
+        return this.M * (j + this.B * i) + b;
+    }
+
+    wrapCoord (k) { return (k + this.B) % this.B; }
 
     addrToByteIndex (addr) {
-        if (addr < 0 || addr > this.HIMEM)
+        if (addr < 0 || addr >= this.neighborhoodSize)
             return -1;
         const b = addr & this.byteOffsetMask;
         const nbrIdx = addr >> this.log2M;
         const x = Math.floor (nbrIdx / this.N);
         const y = nbrIdx % this.N;
-        return this.ijbToByteIndex (this.wrapCoord (this.i + x),
-                                    this.wrapCoord (this.j + y),
+        return this.ijbToByteIndex (this.wrapCoord (this.iOrig + x),
+                                    this.wrapCoord (this.jOrig + y),
                                     b);
     }
 
@@ -45,33 +62,25 @@ class BoardMemory {
     write (addr, val) {
         const idx = this.addrToByteIndex (addr);
         if (idx >= 0)
-            this.setByte (idx, val);
-    }
-
-    readNeighborhood() {
-        return new Uint8Array (Array.from({length: this.HIMEM + 1})
-                                    .map((_,addr) => this.read(addr)));
-    }
-    
-    writeNeighborhood (snapshot) {
-        snapshot.forEach ((val, addr) => this.write (addr, val));
+            this.setByteWithUndo (idx, val);
     }
 
     sampleNextMove() {
         const rv1 = this.mt.int();
         this.iOrig = rv1 & 0xFF;
         this.jOrig = (rv1 & 0xFF00) >> 8;
-        this.cycles = 0;
-        let rv2 = this.mt.int();
-        while (this.cycles < 32 && (rv2 & (1 << this.cycles)))
-            this.cycles += 256;
+        this.nextCycles = 0;
+        const rv2 = this.mt.int();
+        while (this.nextCycles < 32 && (rv2 & (1 << this.nextCycles)))
+            ++this.nextCycles;
+        this.nextCycles = this.nextCycles << 8;
         let rv3 = rv1 >> 16;
-        while ((this.cycles & 0xFF) < 0xFF && (rv3 & 0xFF == 0)) {
-            if ((this.cycles & 3) == 2)
+        while ((this.nextCycles & 0xFF) < 0xFF && (rv3 & 0xFF) != 0) {
+            if ((this.nextCycles & 3) == 1)
                 rv3 = this.mt.int();
             else
                 rv3 >>= 8;
-            ++this.cycles;
+            ++this.nextCycles;
         }
     }
 };
