@@ -17,6 +17,26 @@ class BoardController {
 
     get rngAddr() { return 0xFC }
 
+    get state() {
+        return { board: this.board.state,
+                 S: this.sfotty.S,
+                 A: this.sfotty.A,
+                 X: this.sfotty.X,
+                 Y: this.sfotty.Y,
+                 P: this.sfotty.P,
+                 PC: this.sfotty.PC };
+    }
+
+    set state(s) {
+        this.board.state = s.state;
+        this.sfotty.S = s.S;
+        this.sfotty.A = s.A;
+        this.sfotty.X = s.X;
+        this.sfotty.Y = s.Y;
+        this.sfotty.P = s.P;
+        this.sfotty.PC = s.PC;
+    }
+
     newSfotty() {
         this.sfotty = new Sfotty(this.memory);
     }
@@ -73,8 +93,7 @@ class BoardController {
         this.sfotty.PC = 0;
     }
 
-    // The rng used by randomize is not the same one the board uses for scheduling
-    // This is deliberate: we avoid perturbing the Board's rng as much as possible
+    // NB this randomize() function avoids updating the Board's RNG
     randomize(rng) {
         rng = rng || (() => Math.random() * 2**32);
         for (let idx = 0; idx < this.board.storageSize; idx += 4) {

@@ -16,6 +16,21 @@ class BoardMemory {
     get neighborhoodSize() { return this.N * this.N * this.M; }
     get byteOffsetMask() { return this.M - 1 }
 
+    get state() { return { storage: new TextDecoder().decode(this.storage),
+                            iOrig: this.iOrig,
+                            jOrig: this.jOrig,
+                            nextCycles: this.nextCycles,
+                            mt: this.mt.mt,
+                            mti: this.mt.mti } }
+    set state(s) {
+        this.storage = new TextDecoder().encode(s.storage);
+        this.iOrig = s.iOrig;
+        this.jOrig = s.jOrig;
+        this.nextCycles = s.nextCycles;
+        this.mt.mt = s.mt;
+        this.mt.mti = s.mti;
+    }    
+
     getByte (idx) { return this.storage[idx]; }
     setByteWithoutUndo (idx, val) { this.storage[idx] = val & 0xFF; }
     setByteWithUndo (idx, val) {
