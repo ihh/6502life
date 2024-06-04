@@ -154,6 +154,8 @@ class BoardController {
                     this.board.undoWrites();
                 else {
                     this.board.disableUndoHistory();
+                    this.pushIrq (isSoftwareInterrupt);
+                    this.writeSAXY();
                     if (isBRK) {  // BRK: bulk memory operations
                         const operation = this.nextOperand();
                         if (operation > 0) {
@@ -165,7 +167,7 @@ class BoardController {
                                 this.zeroCell (i);
                                 this.zeroCell (0);
                             } else if (operation <= 55) {
-                                if (operation == 50) this.zeroCell(0);
+                                if (operation != 50) this.zeroCell(0);
                                 if (operation != 51) this.zeroCell(1);
                                 if (operation != 52) this.zeroCell(2);
                                 if (operation != 53) this.zeroCell(3);
@@ -182,8 +184,6 @@ class BoardController {
                             }
                         }
                     }
-                    this.pushIrq (isSoftwareInterrupt);
-                    this.writeSAXY();
                 }
                 this.board.sampleNextMove();
                 this.board.resetUndoHistory();
