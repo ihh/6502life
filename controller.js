@@ -78,11 +78,13 @@ class BoardController {
     }
 
     readRegisters() {
+        this.sfotty.P = this.board.read (this.regAddr+5);
+        if (this.sfotty.P & 8)
+            this.board.orientation = 0;
         this.sfotty.A = this.board.read (this.regAddr);
         this.sfotty.X = this.board.read (this.regAddr+1);
         this.sfotty.Y = this.board.read (this.regAddr+2);
         this.sfotty.PC = this.board.rotatePC ((this.board.read (this.regAddr+3) << 8) | this.board.read (this.regAddr+4));
-        this.sfotty.P = this.board.read (this.regAddr+5);
         this.sfotty.S = this.board.read (this.regAddr+6);
     }
 
