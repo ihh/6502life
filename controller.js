@@ -156,32 +156,40 @@ class BoardController {
                     this.board.disableUndoHistory();
                     this.pushIrq (isSoftwareInterrupt);
                     this.writeSAXY();
-                    if (isBRK) {  // BRK: bulk memory operations
-                        const operation = this.nextOperand();
-                        if (operation > 0) {
-                            if (operation <= 25) {
-                                const i = operation - 1;
-                                this.zeroCell (i);
-                            } else if (operation <= 49) {
-                                const i = operation - 25;
-                                this.zeroCell (i);
-                                this.zeroCell (0);
-                            } else if (operation <= 55) {
-                                if (operation != 50) this.zeroCell(0);
-                                if (operation != 51) this.zeroCell(1);
-                                if (operation != 52) this.zeroCell(2);
-                                if (operation != 53) this.zeroCell(3);
-                                if (operation != 54) this.zeroCell(4);
-                            } else {  // operation >= 56
-                                const i = 1 + (operation & 7), j = (operation >> 3) - 7;
-                                if (i == j)
-                                    this.copyCell (0, i);
-                                else if (i > j && j != 0) {
-                                    this.zeroCell (i);
-                                    this.zeroCell (j);
-                                } else
-                                    this.swapCells (i, j);
-                            }
+                    if (isBRK && this.nextOperand() == 1) {  // BRK: bulk memory operations
+                        const { A, X, Y } = this.sfotty;
+                        const xValid = X < 49, yValid = Y < 49;
+                        switch (A) {
+                            case 1:  // kill X
+                                if (xValid) this.zeroCell(X);
+                                break;
+                            case 2:  // kill X, Y
+                                if (xValid) this.zeroCell(X);
+                                if (yValid) this.zeroCell(Y);
+                                break;
+                            case 3:  // kill 0, X, Y
+                                this.zeroCell(0);
+                                if (xValid) this.zeroCell(X);
+                                if (yValid) this.zeroCell(Y);
+                                break;
+                            case 4:  // copy X to Y
+                                if (xValid && yValid) this.copyCell(X,Y);
+                                break;
+                            case 5:  // copy 0 to X and Y
+                                if (xValid) this.copyCell(0,X);
+                                if (yValid) this.copyCell(0,Y);
+                                break;
+                            case 6:  // swap X and Y
+                                if (xValid && yValid) this.swapCells(X,Y);
+                                break;
+                            case 7:  // cyclic permutation of 0, X, and Y
+                                if (xValid && yValid) {
+                                    this.swapCells(0,Y);
+                                    this.swapCells(X,Y);
+                                }
+                                break;
+                            default:
+                                break;
                         }
                     }
                 }
