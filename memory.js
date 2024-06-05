@@ -11,7 +11,8 @@ const cellVec = coordRange.reduce ((a,y) => a.concat(coordRange.map (x => [x,y])
 
 let cellIndex = coordRange.map(()=>coordRange.map(()=>null));
 cellVec.forEach ((vec, idx) => cellIndex[vec[0]+3][vec[1]+3] = idx);
-const lookupCellIndex = (vec) => cellIndex[(vec[0]+3+7)%7][(vec[1]+3+7)%7] | (Math.abs(vec[0]) > 3 || Math.abs(vec[1]) > 3 ? 128 : 0);
+//const lookupCellIndex = (vec) => cellIndex[(vec[0]+3+14)%7][(vec[1]+3+14)%7] | (maxDelta(vec) > 3 ? 128 : 0);
+const lookupCellIndex = (vec) => cellIndex[(vec[0]+3+14)%7][(vec[1]+3+14)%7] | (maxDelta(vec) > 3 ? 128 : 0);
 const xCoords = cellVec.map ((vec) => vec[0] + 3);
 const yCoords = cellVec.map ((vec) => vec[1] + 3);
 
@@ -48,6 +49,8 @@ class BoardMemory {
 
     get firstVectorAddr() { return 0x00F0 }
     get lastVectorAddr() { return 0x00F8 }
+    get firstLookupTableAddr() { return 0xE000 }
+    get lastLookupTableAddr() { return 0xEFFF }
 
     get state() { return { storage: new TextDecoder().decode(this.storage),
                             iOrig: this.iOrig,
@@ -107,9 +110,13 @@ class BoardMemory {
         return b >= this.firstVectorAddr && b <= this.lastVectorAddr;
     }
 
+    valIsInVectorRange (val) {
+        return val >= 0 && val <= 48;
+    }
+
     read (addr) {
-        if (addr >= 0xE000 && addr <= 0xEFFF) {
-            const nRow = (addr - 0xE000) >> 6;
+        if (addr >= this.firstLookupTableAddr && addr <= this.lastLookupTableAddr) {
+            const nRow = (addr - this.firstLookupTableAddr) >> 6;
             const nCol = addr & 63;
             if (nRow < transformLookupTable.length && nCol < transformLookupTable[nRow].length)
                 return transformLookupTable[nRow][nCol] & 0xFF;
@@ -117,13 +124,13 @@ class BoardMemory {
         }
         const idx = this.addrToByteIndex (addr);
         const val = idx < 0 ? 0 : this.getByte (idx);
-        return this.addrIsInVectorRange(addr) ? this.rotate(val) : val;
+        return this.addrIsInVectorRange(addr) && this.valIsInVectorRange(val) ? this.rotate(val) : val;
     }
 
     write (addr, val) {
         const idx = this.addrToByteIndex (addr);
         if (idx >= 0)
-            this.setByteWithUndo (idx, this.addrIsInVectorRange(addr) ? this.unrotate(val) : val);
+            this.setByteWithUndo (idx, this.addrIsInVectorRange(addr) && this.valIsInVectorRange(val) ? this.unrotate(val) : val);
     }
 
     rotate (n) {
@@ -135,7 +142,6 @@ class BoardMemory {
     }
 
     rotatePC (PC) {
-        console.warn(this.neighborhoodSize, ' ',PC,' ',PC >> this.log2M)
         return PC >= this.neighborhoodSize ? PC : (PC & this.byteOffsetMask) | (this.rotate(PC >> this.log2M) << this.log2M);
     }
 
@@ -154,7 +160,7 @@ class BoardMemory {
         // These constants are tweaked to give an expected cycle count of mean 256*C, min 75*C, max 3136*C where C=cycleMultiplier
         // We want a change of being able to copy an entire 1k cell in an atomic operation, which takes ~19*1024 = 19456 cycles
         // So the longest cycle count between interrupts (3136*C) should be around 2x that: C = 2*19456/3136 ~= 12
-        const halfLife = 180;  // (1-p)**halfLife ~= 0.5
+        const halfLife = 177;  // (1-p)**halfLife ~= 0.5
         const cycleMultiplier = 16;  // so max time between interrupts is comfortably 2x atomic copy time
         let r = rv2;
         let nHalfLives = 0;
@@ -162,7 +168,7 @@ class BoardMemory {
             r = r >> 1;
             ++nHalfLives;
         }
-        this.nextCycles = Math.ceil (cycleMultiplier * halfLife * (nHalfLives + rv3 / 0x100000000));
+        this.nextCycles = Math.ceil (cycleMultiplier * halfLife * (nHalfLives + rv3));
         this.nextRnd = rv4;
     }
 };

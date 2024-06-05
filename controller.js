@@ -67,7 +67,7 @@ class BoardController {
     }
 
     writeRegisters() {
-        const PC = this.board.unrotatePC (this.sfotty.PC);
+        const PC = this.board.unrotatePC (this.sfotty.PC & 0xFFFF);
         this.board.write (this.regAddr, this.sfotty.A);
         this.board.write (this.regAddr+1, this.sfotty.X);
         this.board.write (this.regAddr+2, this.sfotty.Y);
