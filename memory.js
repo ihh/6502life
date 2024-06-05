@@ -30,6 +30,8 @@ const makeTransformLookupTableRow = (f) => cellVec.map(f).map(lookupCellIndex);
 const transformations = cellVec.map(translate).concat ([rotate1, rotate2, rotate3, reflectX, reflectY]);
 const coordLookupTable = Array.from({length:64}).map((_,n) => (n % 8 == 7 || (n>>3) == 7) ? -1 : lookupCellIndex([(n%8)-3,(n>>3)-3]));
 const transformLookupTable = transformations.map(makeTransformLookupTableRow).concat ([xCoords, yCoords, coordLookupTable]);
+const rotationLookupTable = rotations.map(makeTransformLookupTableRow);
+const inverseRotationLookupTable = inverseRotations.map(makeTransformLookupTableRow);
 
 class BoardMemory {
     constructor(seed = 42) {
@@ -99,7 +101,7 @@ class BoardMemory {
         if (addr < 0 || addr >= this.neighborhoodSize)
             return -1;
         const b = addr & this.byteOffsetMask;
-        const [x, y] = inverseRotations[this.orientation] (cellVec [addr >> this.log2M]);
+        const [x, y] = cellVec[this.unrotate (addr >> this.log2M)]
         return this.ijbToByteIndex (this.wrapCoord (this.iOrig + x),
                                     this.wrapCoord (this.jOrig + y),
                                     b);
@@ -114,6 +116,10 @@ class BoardMemory {
         return val >= 0 && val <= 48;
     }
 
+    doRotateVal (addr, val) {
+        return this.addrIsInVectorRange(addr) && this.valIsInVectorRange(val);
+    }
+
     read (addr) {
         if (addr >= this.firstLookupTableAddr && addr <= this.lastLookupTableAddr) {
             const nRow = (addr - this.firstLookupTableAddr) >> 6;
@@ -124,21 +130,21 @@ class BoardMemory {
         }
         const idx = this.addrToByteIndex (addr);
         const val = idx < 0 ? 0 : this.getByte (idx);
-        return this.addrIsInVectorRange(addr) && this.valIsInVectorRange(val) ? this.rotate(val) : val;
+        return this.doRotateVal(addr,val) ? this.rotate(val) : val;
     }
 
     write (addr, val) {
         const idx = this.addrToByteIndex (addr);
         if (idx >= 0)
-            this.setByteWithUndo (idx, this.addrIsInVectorRange(addr) && this.valIsInVectorRange(val) ? this.unrotate(val) : val);
+            this.setByteWithUndo (idx, this.doRotateVal(addr,val) ? this.unrotate(val) : val);
     }
 
     rotate (n) {
-        return lookupCellIndex (rotations[this.orientation] (cellVec[n]));
+        return rotationLookupTable[this.orientation][n];
     }
 
     unrotate (n) {
-        return lookupCellIndex (inverseRotations[this.orientation] (cellVec[n]));
+        return inverseRotationLookupTable[this.orientation][n];
     }
 
     rotatePC (PC) {
