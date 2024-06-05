@@ -14,6 +14,23 @@ const cellDir = ['O',  // origin
 const compassVec = { 'O': [0,0], 'N': [0,+1], 'E': [+1,0], 'S': [0,-1], 'W': [-1,0] }
 const sumVec = (a, b) => a.map((ai,i) => ai + b[i]);
 const cellVec = cellDir.map ((dir) => dir.split('').map((d)=>compassVec[d]).reduce(sumVec));
+const coordRange = Array.from({length:7}).map((_,n) => n - 3);
+let cellIndex = coordRange.map(()=>coordRange.map(()=>null));
+cellVec.forEach ((vec, idx) => cellIndex[vec[0]+3][vec[1]+3] = idx);
+const lookupCellIndex = (vec) => vec[0] >= -2 && vec[0] <= 2 && vec[1] >= -2 && vec[1] <= 2 ? cellIndex[vec[0]+3][vec[1]+3] : -1;
+const xCoords = cellVec.map ((vec) => vec[0] + 3);
+const yCoords = cellVec.map ((vec) => vec[1] + 3);
+
+const rotate1 = (xy) => [xy[1],-xy[0]];
+const rotate2 = (xy) => rotate1(rotate1(xy));
+const rotate3 = (xy) => rotate1(rotate2(xy));
+const reflectX = (xy) => [xy[0],-xy[1]];
+const reflectY = (xy) => rotate3(reflectX(rotate1(xy)));
+const translate = (xy1) => (xy2) => sumVec (xy1, xy2);
+const makeTransformLookupTableRow = (f) => cellVec.map(f).map(lookupCellIndex);
+const transformations = cellVec.map(translate).concat ([rotate1, rotate2, rotate3, reflectX, reflectY]);
+const coordLookupTable = Array.from({length:64}).map((_,n) => lookupCellIndex([(n%8)-3,(n>>3)-3]));
+const transformLookupTable = transformations.map(makeTransformLookupTableRow).concat ([xCoords, yCoords, coordLookupTable]);
 
 class BoardMemory {
     constructor(seed = 42) {
@@ -84,6 +101,13 @@ class BoardMemory {
     }
 
     read (addr) {
+        if (addr >= 0xE000 && addr <= 0xEFFF) {
+            const nRow = (addr - 0xE000) >> 6;
+            const nCol = addr & 63;
+            if (nRow < transformLookupTable.length && nCol < transformLookupTable[nRow].length)
+                return transformLookupTable[nRow][nCol] & 0xFF;
+            return 0;
+        }
         const idx = this.addrToByteIndex (addr);
         return idx < 0 ? 0 : this.getByte (idx);
     }
