@@ -149,14 +149,14 @@ class BoardMemory {
         return PC >= this.neighborhoodSize ? PC : (PC & this.byteOffsetMask) | (this.unrotate(PC >> this.log2M) << this.log2M);
     }
 
-    sampleNextMove (doRotate) {
+    sampleNextMove() {
         const rv1 = this.mt.int();
         const rv2 = this.mt.int();
         const rv3 = this.mt.real();
         const rv4 = this.mt.int();
         this.iOrig = rv1 & 0xFF;
         this.jOrig = (rv1 >> 8) & 0xFF;
-        this.orientation = doRotate ? ((rv1 >> 16) & 3) : 0;
+        this.orientation = (rv1 >> 16) & 3;
         // These constants are tweaked to give an expected cycle count of mean 256*C, min 75*C, max 3136*C where C=cycleMultiplier
         // We want a change of being able to copy an entire 1k cell in an atomic operation, which takes ~19*1024 = 19456 cycles
         // So the longest cycle count between interrupts (3136*C) should be around 2x that: C = 2*19456/3136 ~= 12
