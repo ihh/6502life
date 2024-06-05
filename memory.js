@@ -1,35 +1,33 @@
 import MersenneTwister from 'mersennetwister';
 
-const cellDir = ['O',  // origin
-                 'N','E','S','W',  // 1..4
-                 'NE','SE','SW','NW',  // 5..8
-                 'NN','EE','SS','WW',  // 9..12
-                 'NNE','ENE','ESE','SSE','SSW','WSW','WNW','NNW',  // 13..20
-                 'NNN','EEE','SSS','WWW',  // 21..24
-                 'NNEE','SSEE','SSWW','NNWW',  // 25..27
-                 'NNNE','NEEE','SEEE','SSSE','SSSW','SWWW','NWWW','NNNW',  // 28..35
-                 'NNNEE','NNEEE','SSEEE','SSSEE','SSSWW','SSWWW','NNWWW','NNNWW',  // 36..43
-                 'NNNEEE','SSSEEE','SSSWWW','NNNWWW'];  // 44..48
+// Create the neighborhood memory map and the lookup tables that live at 0xE000
+const taxicab = (vec) => Math.abs(vec[0]) + Math.abs(vec[1]);
+const maxDelta = (vec) => Math.max(Math.abs(vec[0]), Math.abs(vec[1]));
+const posAngle = (angle) => angle < 0 ? angle + 2*Math.PI : angle;
+const angle = (vec) => posAngle(Math.atan2(vec[0], vec[1]));  // (0,1) is zero
 
-const compassVec = { 'O': [0,0], 'N': [0,+1], 'E': [+1,0], 'S': [0,-1], 'W': [-1,0] }
-const sumVec = (a, b) => a.map((ai,i) => ai + b[i]);
-const cellVec = cellDir.map ((dir) => dir.split('').map((d)=>compassVec[d]).reduce(sumVec));
 const coordRange = Array.from({length:7}).map((_,n) => n - 3);
+const cellVec = coordRange.reduce ((a,y) => a.concat(coordRange.map (x => [x,y])),[]).sort ((a, b) => taxicab(a)-taxicab(b) || maxDelta(a)-maxDelta(b) || angle(a)-angle(b));
+
 let cellIndex = coordRange.map(()=>coordRange.map(()=>null));
 cellVec.forEach ((vec, idx) => cellIndex[vec[0]+3][vec[1]+3] = idx);
-const lookupCellIndex = (vec) => vec[0] >= -2 && vec[0] <= 2 && vec[1] >= -2 && vec[1] <= 2 ? cellIndex[vec[0]+3][vec[1]+3] : -1;
+const lookupCellIndex = (vec) => cellIndex[(vec[0]+3+7)%7][(vec[1]+3+7)%7] | (Math.abs(vec[0]) > 3 || Math.abs(vec[1]) > 3 ? 128 : 0);
 const xCoords = cellVec.map ((vec) => vec[0] + 3);
 const yCoords = cellVec.map ((vec) => vec[1] + 3);
 
+const rotate0 = (xy) => xy;
 const rotate1 = (xy) => [xy[1],-xy[0]];
 const rotate2 = (xy) => rotate1(rotate1(xy));
 const rotate3 = (xy) => rotate1(rotate2(xy));
+const rotations = [rotate0, rotate1, rotate2, rotate3];
+const inverseRotations = rotations.slice(0).reverse();
 const reflectX = (xy) => [xy[0],-xy[1]];
 const reflectY = (xy) => rotate3(reflectX(rotate1(xy)));
+const sumVec = (a, b) => a.map((ai,i) => ai + b[i]);
 const translate = (xy1) => (xy2) => sumVec (xy1, xy2);
 const makeTransformLookupTableRow = (f) => cellVec.map(f).map(lookupCellIndex);
 const transformations = cellVec.map(translate).concat ([rotate1, rotate2, rotate3, reflectX, reflectY]);
-const coordLookupTable = Array.from({length:64}).map((_,n) => lookupCellIndex([(n%8)-3,(n>>3)-3]));
+const coordLookupTable = Array.from({length:64}).map((_,n) => (n % 8 == 7 || (n>>3) == 7) ? -1 : lookupCellIndex([(n%8)-3,(n>>3)-3]));
 const transformLookupTable = transformations.map(makeTransformLookupTableRow).concat ([xCoords, yCoords, coordLookupTable]);
 
 class BoardMemory {
@@ -48,9 +46,13 @@ class BoardMemory {
     get neighborhoodSize() { return this.N * this.N * this.M; }
     get byteOffsetMask() { return this.M - 1 }
 
+    get firstVectorAddr() { return 0x00F0 }
+    get lastVectorAddr() { return 0x00F8 }
+
     get state() { return { storage: new TextDecoder().decode(this.storage),
                             iOrig: this.iOrig,
                             jOrig: this.jOrig,
+                            orientation: this.orientation,
                             nextCycles: this.nextCycles,
                             mt: this.mt.mt,
                             mti: this.mt.mti } }
@@ -58,6 +60,7 @@ class BoardMemory {
         this.storage = new TextDecoder().encode(s.storage);
         this.iOrig = s.iOrig;
         this.jOrig = s.jOrig;
+        this.orientation = s.orientation;
         this.nextCycles = s.nextCycles;
         this.mt.mt = s.mt;
         this.mt.mti = s.mti;
@@ -93,11 +96,15 @@ class BoardMemory {
         if (addr < 0 || addr >= this.neighborhoodSize)
             return -1;
         const b = addr & this.byteOffsetMask;
-        const nbrIdx = addr >> this.log2M;
-        const [x, y] = cellVec[nbrIdx];
+        const [x, y] = inverseRotations[this.orientation] (cellVec [addr >> this.log2M]);
         return this.ijbToByteIndex (this.wrapCoord (this.iOrig + x),
                                     this.wrapCoord (this.jOrig + y),
                                     b);
+    }
+
+    addrIsInVectorRange (addr) {
+        const b = addr & this.byteOffsetMask;
+        return b >= this.firstVectorAddr && b <= this.lastVectorAddr;
     }
 
     read (addr) {
@@ -109,36 +116,54 @@ class BoardMemory {
             return 0;
         }
         const idx = this.addrToByteIndex (addr);
-        return idx < 0 ? 0 : this.getByte (idx);
+        const val = idx < 0 ? 0 : this.getByte (idx);
+        return this.addrIsInVectorRange(addr) ? this.rotate(val) : val;
     }
 
     write (addr, val) {
         const idx = this.addrToByteIndex (addr);
         if (idx >= 0)
-            this.setByteWithUndo (idx, val);
+            this.setByteWithUndo (idx, this.addrIsInVectorRange(addr) ? this.unrotate(val) : val);
     }
 
-    sampleNextMove() {
+    rotate (n) {
+        return lookupCellIndex (rotations[this.orientation] (cellVec[n]));
+    }
+
+    unrotate (n) {
+        return lookupCellIndex (inverseRotations[this.orientation] (cellVec[n]));
+    }
+
+    rotatePC (PC) {
+        console.warn(this.neighborhoodSize, ' ',PC,' ',PC >> this.log2M)
+        return PC >= this.neighborhoodSize ? PC : (PC & this.byteOffsetMask) | (this.rotate(PC >> this.log2M) << this.log2M);
+    }
+
+    unrotatePC (PC) {
+        return PC >= this.neighborhoodSize ? PC : (PC & this.byteOffsetMask) | (this.unrotate(PC >> this.log2M) << this.log2M);
+    }
+
+    sampleNextMove (doRotate) {
         const rv1 = this.mt.int();
         const rv2 = this.mt.int();
+        const rv3 = this.mt.real();
+        const rv4 = this.mt.int();
         this.iOrig = rv1 & 0xFF;
         this.jOrig = (rv1 >> 8) & 0xFF;
+        this.orientation = doRotate ? ((rv1 >> 16) & 3) : 0;
         // These constants are tweaked to give an expected cycle count of mean 256*C, min 75*C, max 3136*C where C=cycleMultiplier
         // We want a change of being able to copy an entire 1k cell in an atomic operation, which takes ~19*1024 = 19456 cycles
         // So the longest cycle count between interrupts (3136*C) should be around 2x that: C = 2*19456/3136 ~= 12
-        const expectedLife = 256;  // 1/(1-p) = 256
         const halfLife = 180;  // (1-p)**halfLife ~= 0.5
-        const quarterLife = 76;  // (1-p)**quarterLife ~= 0.75
-        const maxHalfLives = 16;
         const cycleMultiplier = 16;  // so max time between interrupts is comfortably 2x atomic copy time
-        let r = rv1 >> 16;
+        let r = rv2;
         let nHalfLives = 0;
-        while (nHalfLives < maxHalfLives && (r & 1)) {
+        while (nHalfLives < 32 && (r & 1)) {
             r = r >> 1;
             ++nHalfLives;
         }
-        this.nextCycles = cycleMultiplier * (halfLife * nHalfLives + (nHalfLives == maxHalfLives ? expectedLife : quarterLife));
-        this.nextRnd = rv2;
+        this.nextCycles = Math.ceil (cycleMultiplier * halfLife * (nHalfLives + rv3 / 0x100000000));
+        this.nextRnd = rv4;
     }
 };
 
