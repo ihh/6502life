@@ -3,19 +3,32 @@ import BoardMemory from './memory.js';
 import { Sfotty } from '@sfotty-pie/sfotty';
 import { VANILLA_OPCODES } from "@sfotty-pie/opcodes";
 
+// lookups for permutations and combinations
+const removeNth = (list, n) => list.slice(0,n).concat(list.slice(n+1,list.length));
+const getPermutations = (list) => list.length===0 ? [[]] : list.reduce((r,e,n) => r.concat(getPermutations(removeNth(list,n)).map((p)=>[e].concat(p))), []);
+const getCombinations = (list, k) => k===0 ? [[]] : list.length < k ? [] : list.reduce((r,e,n) => r.concat(getCombinations(list.slice(n+1),k-1).map((c)=>[e].concat(c))), []);
+
+const combos4C2 = getCombinations ([0,1,2,3], 2);  // 6
+const combos4C3 = getCombinations ([0,1,2,3], 3);  // 4
+const perms2 = getPermutations(2);  // 2
+const perms3 = getPermutations(3);  // 6
+const perms4 = getPermutations(4);  // 24
+
+const permute = (list, perm) => perm.map ((n) => list[n]);
+
+// board controller
 class BoardController {
     constructor (board) {
         this.board = board || new BoardMemory();
         this.newSfotty();
-        this.readSAXY();
-        this.clearPPC();
+        this.readRegisters();
         this.writeRng();
         this.sfotty = new Sfotty(this.board);
         this.isValidOpcode = Array.from({length: 256 });
         VANILLA_OPCODES.forEach ((opcode) => this.isValidOpcode[opcode.opcode] = true);
     }
 
-    get rngAddr() { return 0xFC }
+    get regAddr() { return 0xF9 }
 
     get state() {
         return { board: this.board.state,
@@ -68,33 +81,27 @@ class BoardController {
         this.board.write (addr+3, val & 0xFF);
     }
 
-    pushIrq (setBflag) {
-        this.pushWord (this.sfotty.PC | (setBflag ? (1 << 4) : 0));
-        this.pushByte (this.sfotty.P);
-
+    writeRegisters() {
+        this.board.write (this.regAddr, this.sfotty.A);
+        this.board.write (this.regAddr+1, this.sfotty.X);
+        this.board.write (this.regAddr+2, this.sfotty.Y);
+        this.board.write (this.regAddr+3, this.sfotty.PC >> 8);
+        this.board.write (this.regAddr+4, this.sfotty.PC & 8);
+        this.board.write (this.regAddr+5, this.sfotty.P);
+        this.board.write (this.regAddr+6, this.sfotty.S);
     }
 
-    writeSAXY() {
-        this.board.write (this.rngAddr, this.sfotty.S);
-        this.board.write (this.rngAddr+1, this.sfotty.A);
-        this.board.write (this.rngAddr+2, this.sfotty.X);
-        this.board.write (this.rngAddr+3, this.sfotty.Y);
-    }
-
-    readSAXY() {
-        this.sfotty.S = this.board.read (this.rngAddr);
-        this.sfotty.A = this.board.read (this.rngAddr+1);
-        this.sfotty.X = this.board.read (this.rngAddr+2);
-        this.sfotty.Y = this.board.read (this.rngAddr+3);
+    readRegisters() {
+        this.sfotty.A = this.board.read (this.regAddr);
+        this.sfotty.X = this.board.read (this.regAddr+1);
+        this.sfotty.Y = this.board.read (this.regAddr+2);
+        this.sfotty.PC = (this.board.read (this.regAddr+3) << 8) + this.board.read (this.regAddr+4);
+        this.sfotty.P = this.board.read (this.regAddr+5);
+        this.sfotty.S = this.board.read (this.regAddr+6);
     }
 
     writeRng() {
-        this.writeDword (this.rngAddr, this.board.nextRnd);
-    }
-
-    clearPPC() {
-        this.sfotty.P = 0;
-        this.sfotty.PC = 0;
+        this.writeDword (this.regAddr+3, this.board.nextRnd);
     }
 
     swapCells (i, j) {
@@ -129,8 +136,7 @@ class BoardController {
             this.board.setByteWithoutUndo (idx+3, r & 0xFF);
         }
         this.board.resetUndoHistory();
-        this.readSAXY();
-        this.clearPPC();
+        this.readRegisters();
         this.writeRng();
     }
 
@@ -154,11 +160,28 @@ class BoardController {
                     this.board.undoWrites();
                 else {
                     this.board.disableUndoHistory();
-                    this.pushIrq (isSoftwareInterrupt);
-                    this.writeSAXY();
-                    if (isBRK && this.nextOperand() == 1) {  // BRK: bulk memory operations
+                    this.writeRegisters();
+                    if (isBRK) {  // BRK: bulk memory operations
                         const { A, X, Y } = this.sfotty;
-                        const xValid = X < 49, yValid = Y < 49;
+                        if (A > 0) {
+                            const xValid = X < 49, yValid = Y < 49;
+                            let xPages, yPages;
+                            if (A >= 1 && A <= 16) {  //  1 -> 1, 16 options
+                                const op = A - 1;
+                                xPages = [op >> 2];
+                                yPages = [op & 3];
+                            } else if (A >= 17 && A <= 88) {  //  2 -> 2, 72 options
+                                const op = A - 17;
+                                const xCombo = op % 6, yCombo = Math.floor(op / 6) % 6, yPerm = Math.floor(op / 36);
+                                xPages = combos4C2[xCombo];
+                                yPages = permute (combos4C2[yCombo], perms2[yPerm]);
+                            } else if (A >= 89 && A <= 185) {  //  3 -> 3, 96 options
+                                const op = A - 89;
+                                const xCombo = op % 4, yCombo = Math.floor(op / 4) % 4, yPerm = Math.floor(op / 16);
+                                xPages = combos4C2[xCombo];
+                                yPages = permute (combos4C2[yCombo], perms2[yPerm]);
+
+                            }
                         switch (A) {
                             case 1:  // kill X
                                 if (xValid) this.zeroCell(X);
@@ -195,8 +218,7 @@ class BoardController {
                 }
                 this.board.sampleNextMove();
                 this.board.resetUndoHistory();
-                this.readSAXY();
-                this.clearPPC();
+                this.readRegisters();
                 this.writeRng();
                 break;
             }
