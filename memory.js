@@ -4,7 +4,7 @@ import MersenneTwister from 'mersennetwister';
 const taxicab = (vec) => Math.abs(vec[0]) + Math.abs(vec[1]);
 const maxDelta = (vec) => Math.max(Math.abs(vec[0]), Math.abs(vec[1]));
 const posAngle = (angle) => angle < 0 ? angle + 2*Math.PI : angle;
-const angle = (vec) => posAngle(Math.atan2(vec[0], vec[1]));  // (0,1) is zero
+const angle = (vec) => posAngle(Math.atan2(vec[0], vec[1]));  // By switching x and y in the args to atan2, N = (0,1) becomes angle zero, and we get NESW sorting
 
 const coordRange = Array.from({length:7}).map((_,n) => n - 3);
 const cellVec = coordRange.reduce ((a,y) => a.concat(coordRange.map (x => [x,y])),[]).sort ((a, b) => taxicab(a)-taxicab(b) || maxDelta(a)-maxDelta(b) || angle(a)-angle(b));
@@ -21,7 +21,7 @@ const rotate1 = (xy) => [xy[1],-xy[0]];
 const rotate2 = (xy) => rotate1(rotate1(xy));
 const rotate3 = (xy) => rotate1(rotate2(xy));
 const rotations = [rotate0, rotate1, rotate2, rotate3];
-const inverseRotations = rotations.slice(0).reverse();
+const inverseRotations = [rotate0, rotate3, rotate2, rotate1];
 const reflectX = (xy) => [xy[0],-xy[1]];
 const reflectY = (xy) => rotate3(reflectX(rotate1(xy)));
 const sumVec = (a, b) => a.map((ai,i) => ai + b[i]);
@@ -45,9 +45,9 @@ class BoardMemory {
     get M() { return 1024 }
     get N() { return 7 }
     get log2M() { return 10 }  // = log_2(M)
-    get storageSize() { return this.B * this.B * this.M; }
-    get neighborhoodSize() { return this.N * this.N * this.M; }
-    get byteOffsetMask() { return this.M - 1 }
+    get storageSize() { return this.B * this.B * this.M; }  // 64Mb
+    get neighborhoodSize() { return this.N * this.N * this.M; }  // 49Kb
+    get byteOffsetMask() { return this.M - 1 }  // 0x3FF
 
     get firstVectorAddr() { return 0x00F0 }
     get lastVectorAddr() { return 0x00F8 }
@@ -157,10 +157,10 @@ class BoardMemory {
     }
 
     sampleNextMove() {
-        const rv1 = this.mt.int();
-        const rv2 = this.mt.int();
-        const rv3 = this.mt.real();
-        const rv4 = this.mt.int();
+        const rv1 = this.mt.int();  // new origin and orientation
+        const rv2 = this.mt.int();  // transformed into the log part of the waiting time to the next interrupt
+        const rv3 = this.mt.real();  // transformed into the fractional part of the waiting time to the next interrupt
+        const rv4 = this.mt.int();  // stored in nextRnd, retrieved and written back to the board by the controller
         this.iOrig = rv1 & 0xFF;
         this.jOrig = (rv1 >> 8) & 0xFF;
         this.orientation = (rv1 >> 16) & 3;

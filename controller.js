@@ -26,7 +26,15 @@ class BoardController {
         VANILLA_OPCODES.forEach ((opcode) => this.isValidOpcode[opcode.opcode] = true);
     }
 
-    get regAddr() { return 0xF9 }
+    // Zero-page register store. Where the state of the processor is cached on interrupt
+    get firstRegAddr() { return 0xF9 }
+    get regAddrA() { return this.firstRegAddr+1 }  // 0xF9 = A
+    get regAddrX() { return this.firstRegAddr+2 }  // 0xFA = X
+    get regAddrY() { return this.firstRegAddr+3 }  // 0xFB = Y
+    get regAddrPCHI() { return this.firstRegAddr+4 }  // 0xFC = PC(HI)
+    get regAddrPCLO() { return this.firstRegAddr+5 }  // 0xFD = PC(LO)
+    get regAddrP() { return this.firstRegAddr+6 }  // 0xFE = P
+    get regAddrS() { return this.firstRegAddr+7 }  // 0xFF = S
 
     get state() {
         return { board: this.board.state,
@@ -65,29 +73,29 @@ class BoardController {
 
     writeRegisters() {
         const PC = this.board.unrotatePC (this.sfotty.PC & 0xFFFF);
-        this.board.write (this.regAddr, this.sfotty.A);
-        this.board.write (this.regAddr+1, this.sfotty.X);
-        this.board.write (this.regAddr+2, this.sfotty.Y);
-        this.board.write (this.regAddr+3, PC >> 8);
-        this.board.write (this.regAddr+4, PC & 8);
-        this.board.write (this.regAddr+5, this.sfotty.P);
-        this.board.write (this.regAddr+6, this.sfotty.S);
+        this.board.write (this.regAddrA, this.sfotty.A);
+        this.board.write (this.regAddrX, this.sfotty.X);
+        this.board.write (this.regAddrY, this.sfotty.Y);
+        this.board.write (this.regAddrPCHI, PC >> 8);
+        this.board.write (this.regAddrPCLO, PC & 0xFF);
+        this.board.write (this.regAddrP, this.sfotty.P);
+        this.board.write (this.regAddrS, this.sfotty.S);
     }
 
     readRegisters() {
-        this.sfotty.P = this.board.read (this.regAddr+5);
+        this.sfotty.P = this.board.read (this.firstRegAddr+5);
         const D = (this.sfotty.P >> 3) & 1;
         if (this.sfotty.D)
             this.board.orientation = 0;
-        this.sfotty.A = this.board.read (this.regAddr);
-        this.sfotty.X = this.board.read (this.regAddr+1);
-        this.sfotty.Y = this.board.read (this.regAddr+2);
-        this.sfotty.PC = this.board.rotatePC ((this.board.read (this.regAddr+3) << 8) | this.board.read (this.regAddr+4));
-        this.sfotty.S = this.board.read (this.regAddr+6);
+        this.sfotty.A = this.board.read (this.regAddrA);
+        this.sfotty.X = this.board.read (this.regAddrX);
+        this.sfotty.Y = this.board.read (this.regAddrY);
+        this.sfotty.PC = this.board.rotatePC ((this.board.read (this.regAddrPCHI) << 8) | this.board.read (this.regAddrPCLO));
+        this.sfotty.S = this.board.read (this.regAddrS);
     }
 
     writeRng() {
-        this.writeDword (this.regAddr+3, this.board.nextRnd);
+        this.writeDword (this.firstRegAddr, this.board.nextRnd);
     }
 
     swapPages (i, j) {
