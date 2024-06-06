@@ -7,13 +7,6 @@ import { VANILLA_OPCODES } from "@sfotty-pie/opcodes";
 const concatLists = lists => lists.reduce((a,b)=>a.concat(b),[]);
 const range = (A, B) => Array.from({length:B+1-A}).map((_,k)=>A+k);
 
-const pagesFor0 = [[]];
-const pagesForN = N => pagesFor0.concat (concatLists (range(1,N).map(len=>range(0,N-len).map(start=>[range(start,start+len-1)]))));
-const pagesFor4 = pagesForN(4);
-
-const pagesDump = pages => pages.map((p,n)=>n+': ('+p.join(',')+')').join("\n");
-// console.log (pagesDump(pagesFor4))
-
 // board controller
 class BoardController {
     constructor (board) {
@@ -28,13 +21,14 @@ class BoardController {
 
     // Zero-page register store. Where the state of the processor is cached on interrupt
     get firstRegAddr() { return 0xF9 }
-    get regAddrA() { return this.firstRegAddr+1 }  // 0xF9 = A
-    get regAddrX() { return this.firstRegAddr+2 }  // 0xFA = X
-    get regAddrY() { return this.firstRegAddr+3 }  // 0xFB = Y
-    get regAddrPCHI() { return this.firstRegAddr+4 }  // 0xFC = PC(HI)
-    get regAddrPCLO() { return this.firstRegAddr+5 }  // 0xFD = PC(LO)
-    get regAddrP() { return this.firstRegAddr+6 }  // 0xFE = P
-    get regAddrS() { return this.firstRegAddr+7 }  // 0xFF = S
+    get rngAddr() { return this.firstRegAddr }  // 0xF9 = RNG
+    get regAddrA() { return this.firstRegAddr }  // 0xF9 = A
+    get regAddrX() { return this.firstRegAddr+1 }  // 0xFA = X
+    get regAddrY() { return this.firstRegAddr+2 }  // 0xFB = Y
+    get regAddrPCHI() { return this.firstRegAddr+3 }  // 0xFC = PC(HI)
+    get regAddrPCLO() { return this.firstRegAddr+4 }  // 0xFD = PC(LO)
+    get regAddrP() { return this.firstRegAddr+5 }  // 0xFE = P
+    get regAddrS() { return this.firstRegAddr+6 }  // 0xFF = S
 
     get state() {
         return { board: this.board.state,
@@ -148,10 +142,41 @@ class BoardController {
                         const A = this.sfotty.A & 0xFF;
                         const X = this.sfotty.X & 0xFF;
                         const Y = this.sfotty.Y & 0xFF;
-                        if (X < 49 && Y < 49) {
-                            if (A < pagesFor4.length)
-                                pagesFor4[A].forEach (page => this.swapPages (X*4 + page, Y*4 + page));
-                        }
+                        // A=0: swap 4-page blocks at X<<2, Y<<2
+                        // A=1: swap 1-page blocks at X, Y
+                        // Subroutine providing baseline cycle measurement for page copy:
+                        // .C: PHP              1 (bytes), 3 (cycles)
+                        //     PHA              1, 3
+                        //     STX SRC          3, 4
+                        //     STY DEST         3, 4
+                        //     LDY #0           2, 2
+                        //     STY SRC+1        3, 4
+                        //     STY DEST+1       3, 4
+                        // .L: LDA (SRC),Y      3, 5 * 256 (reps)
+                        //     STA (DEST),Y     3, 6 * 256
+                        //     DEY              1, 2 * 256
+                        //     BNE L            2, 3 * 256
+                        //     LDY DEST         3, 4
+                        //     PLA              1, 4
+                        //     PLP              1, 4
+                        //     RTS              1, 6
+                        // Total program size: 1+1+3+3+2+3*4+1+2+3+1*3 = 31 bytes
+                        // Total T = 3+3+4+4+2+4+4+(5+6+2+3)*256+4+4+4+6 = 4138 cycles
+                        // Binary symmetric channel BSC(P) with bit-flip probability P
+                        // has capacity C(P) = 1-H(P) = 1 - P*lg(P) - (1-P)*lg(1-P)
+                        // Time to send L bits error-free over channel with capacity C is T0 = L/C = 4138
+                        // Thus, we can imagine T=L/(1-H(P)) for some P.
+                        // If we do not use an error-correcting code, but just use the raw channel, time should be T1 = L < T0.
+                        // Thus T1/T0 = 1 - H(P)
+                        //       H(P) = 1 - T1/T0
+                        //          P = invH(1 - T1/T0)
+                        // We can approximate invH(Q) = (1-sqrt(1-Q^(4/3)))/2
+                        // thus P = sqrt(1 - (T1/T0)^(4/3))
+                        if (A == 0 && X < 49 && Y < 49)
+                            for (let page = 0; page < 4; ++page)
+                                this.swapPages (X*4 + page, Y*4 + page);
+                        else if (A == 1 && X < 49*4 && Y < 49*4)
+                            this.swapPages (X, Y);
                     }
                     this.board.resetUndoHistory();
                 }

@@ -44,6 +44,7 @@ class BoardMemory {
     get B() { return 256 }
     get M() { return 1024 }
     get N() { return 7 }
+    get Nsquared() { return 49 }
     get log2M() { return 10 }  // = log_2(M)
     get storageSize() { return this.B * this.B * this.M; }  // 64Mb
     get neighborhoodSize() { return this.N * this.N * this.M; }  // 49Kb
