@@ -81,6 +81,7 @@ class BoardMemory {
 
     undoWrites() {
         Object.keys(this.undoHistory).forEach ((idx) => this.setByteWithoutUndo (idx, this.undoHistory[idx]));
+        this.resetUndoHistory();
     }
 
     resetUndoHistory() {

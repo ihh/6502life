@@ -4,18 +4,15 @@ import { Sfotty } from '@sfotty-pie/sfotty';
 import { VANILLA_OPCODES } from "@sfotty-pie/opcodes";
 
 // lookups for permutations and combinations
-const removeNth = (list, n) => list.slice(0,n).concat(list.slice(n+1,list.length));
-const getPermutations = (list) => list.length===0 ? [[]] : list.reduce((r,e,n) => r.concat(getPermutations(removeNth(list,n)).map((p)=>[e].concat(p))), []);
-const getCombinations = (list, k) => k===0 ? [[]] : list.length < k ? [] : list.reduce((r,e,n) => r.concat(getCombinations(list.slice(n+1),k-1).map((c)=>[e].concat(c))), []);
+const concatLists = lists => lists.reduce((a,b)=>a.concat(b),[]);
+const range = (A, B) => Array.from({length:B+1-A}).map((_,k)=>A+k);
 
-const combos4C2 = getCombinations ([0,1,2,3], 2);  // 6
-const combos4C3 = getCombinations ([0,1,2,3], 3);  // 4
-const combos4C4 = getCombinations ([0,1,2,3], 4);  // 1
-const perms2 = getPermutations([0,1]);     // 2
-const perms3 = getPermutations([0,1,2]);   // 6
-const perms4 = getPermutations([0,1,2,3]); // 24
+const xyPairsFor0 = [[[],[]]];
+const xyPairsForN = N => xyPairsFor0.concat (concatLists (range(1,N).map(len=>range(0,N-len).map(start=>[range(start,start+len-1),range(start,start+len-1)]))));
+const xyPages = xyPairsForN(4);
 
-const permute = (list, perm) => perm.map ((n) => list[n]);
+const xyPagesDump = pages => pages.map((xy,n)=>n+': ('+xy[0].join(',')+') -> ('+xy[1].join(',')+')').join("\n");
+// console.log (xyPagesDump(xyPages))
 
 // board controller
 class BoardController {
@@ -139,46 +136,14 @@ class BoardController {
                     this.board.disableUndoHistory();
                     this.writeRegisters();
                     if (isBRK) {  // BRK: bulk memory operations
-                        const { A, X, Y } = this.sfotty;
-                        const swap1 = 1,
-                              swap2 = swap1 + 16,  // 24
-                              swap3 = swap2 + 72,  // 89
-                              swap4 = swap3 + 96,  // 185
-                              swap5 = swap4 + 24;  // 210
-                        if (A >= swap1 && A < swap5) {
-                            let valid = X < 49 && Y < 49;
-                            let xPages, yPages;
-                            if (A >= swap1 && A < swap2) {  //  1 -> 1, 4*4=16 options
-                                const op = A - swap1;
-                                xPages = [op >> 2];
-                                yPages = [op & 3];
-                            } else if (A >= swap2 && A < swap3) {  //  2 -> 2, 6*6*2=72 options
-                                const op = A - swap2;
-                                const xCombo = op % 6, yCombo = Math.floor(op / 6) % 6, yPerm = Math.floor(op / 36);
-                                xPages = combos4C2[xCombo];
-                                yPages = permute (combos4C2[yCombo], perms2[yPerm]);
-                            } else if (A >= swap3 && A < swap4) {  //  3 -> 3, 4*4*6=96 options
-                                const op = A - swap3;
-                                const xCombo = op % 4, yCombo = Math.floor(op / 4) % 4, yPerm = Math.floor(op / 16);
-                                xPages = combos4C3[xCombo];
-                                yPages = permute (combos4C3[yCombo], perms3[yPerm]);
-                            } else if (A >= swap4 && A < swap5) {  // 4 -> 4, 24 options
-                                const op = A - swap4;
-                                xPages = combos4C4[0];
-                                yPages = permute (combos4C4[0], perms4[op]);
-                            }
-                            if (X == Y) {
-                                const hasOverlap = xPages.filter(p=>yPages.includes(p));
-                                const exactMatch = xPages.filter((p,n)=>yPages[n]==p);
-                                valid = valid && (exactMatch || !hasOverlap);
-                            }
-                            if (valid)
-                                xPages.forEach ((xPage, n) => this.swapPages(X*4+xPage,Y*4+yPages[n]));
+                        if (A > 0 && A <= xyPages.length) {
+                            const [xPages, yPages] = xyPages[A];
+                            xPages.forEach ((xPage, n) => this.swapPages (X*4 + xPage, Y*4 + yPages[n]));
                         }
                     }
+                    this.board.resetUndoHistory();
                 }
                 this.board.sampleNextMove();
-                this.board.resetUndoHistory();
                 this.readRegisters();
                 this.writeRng();
                 break;
