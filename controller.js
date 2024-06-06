@@ -7,12 +7,12 @@ import { VANILLA_OPCODES } from "@sfotty-pie/opcodes";
 const concatLists = lists => lists.reduce((a,b)=>a.concat(b),[]);
 const range = (A, B) => Array.from({length:B+1-A}).map((_,k)=>A+k);
 
-const xyPairsFor0 = [[[],[]]];
-const xyPairsForN = N => xyPairsFor0.concat (concatLists (range(1,N).map(len=>range(0,N-len).map(start=>[range(start,start+len-1),range(start,start+len-1)]))));
-const xyPages = xyPairsForN(4);
+const pagesFor0 = [[]];
+const pagesForN = N => pagesFor0.concat (concatLists (range(1,N).map(len=>range(0,N-len).map(start=>[range(start,start+len-1)]))));
+const pagesFor4 = pagesForN(4);
 
-const xyPagesDump = pages => pages.map((xy,n)=>n+': ('+xy[0].join(',')+') -> ('+xy[1].join(',')+')').join("\n");
-// console.log (xyPagesDump(xyPages))
+const pagesDump = pages => pages.map((p,n)=>n+': ('+p.join(',')+')').join("\n");
+// console.log (pagesDump(pagesFor4))
 
 // board controller
 class BoardController {
@@ -22,7 +22,7 @@ class BoardController {
         this.readRegisters();
         this.writeRng();
         this.sfotty = new Sfotty(this.board);
-        this.isValidOpcode = Array.from({length: 256 });
+        this.isValidOpcode = Array.from({length: 256});
         VANILLA_OPCODES.forEach ((opcode) => this.isValidOpcode[opcode.opcode] = true);
     }
 
@@ -76,7 +76,8 @@ class BoardController {
 
     readRegisters() {
         this.sfotty.P = this.board.read (this.regAddr+5);
-        if (this.sfotty.P & 8)
+        const D = (this.sfotty.P >> 3) & 1;
+        if (this.sfotty.D)
             this.board.orientation = 0;
         this.sfotty.A = this.board.read (this.regAddr);
         this.sfotty.X = this.board.read (this.regAddr+1);
@@ -136,9 +137,12 @@ class BoardController {
                     this.board.disableUndoHistory();
                     this.writeRegisters();
                     if (isBRK) {  // BRK: bulk memory operations
-                        if (A > 0 && A <= xyPages.length) {
-                            const [xPages, yPages] = xyPages[A];
-                            xPages.forEach ((xPage, n) => this.swapPages (X*4 + xPage, Y*4 + yPages[n]));
+                        const A = this.sfotty.A & 0xFF;
+                        const X = this.sfotty.X & 0xFF;
+                        const Y = this.sfotty.Y & 0xFF;
+                        if (X < 49 && Y < 49) {
+                            if (A < pagesFor4.length)
+                                pagesFor4[A].forEach (page => this.swapPages (X*4 + page, Y*4 + page));
                         }
                     }
                     this.board.resetUndoHistory();
