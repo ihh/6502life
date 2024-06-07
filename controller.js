@@ -96,6 +96,17 @@ class BoardController {
         }
     }
 
+    // copyPage: errorProb is the probability of having exactly one error in the page
+    copyPage (i, j, errorProb = .1) {
+        const iAddr = i * 256, jAddr = j * 256;
+        for (let b = 0; b < 256; ++b)
+            this.board.write (jAddr+b, this.board.read(iAddr+b));
+        if (this.board.mt.real() < errorProb) {
+            const r = this.board.mt.int();
+            this.board.write (jAddr + (r & 0xFF), (r >> 8) & 0xFF);
+        }
+    }
+
     // NB this randomize() function avoids updating the Board's RNG
     randomize(rng) {
         rng = rng || (() => Math.random() * 2**32);
