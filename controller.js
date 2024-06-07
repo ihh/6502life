@@ -20,15 +20,14 @@ class BoardController {
     }
 
     // Zero-page register store. Where the state of the processor is cached on interrupt
-    get firstRegAddr() { return 0xF9 }
-    get rngAddr() { return this.firstRegAddr }  // 0xF9 = RNG
-    get regAddrA() { return this.firstRegAddr }  // 0xF9 = A
-    get regAddrX() { return this.firstRegAddr+1 }  // 0xFA = X
-    get regAddrY() { return this.firstRegAddr+2 }  // 0xFB = Y
-    get regAddrPCHI() { return this.firstRegAddr+3 }  // 0xFC = PC(HI)
-    get regAddrPCLO() { return this.firstRegAddr+4 }  // 0xFD = PC(LO)
-    get regAddrP() { return this.firstRegAddr+5 }  // 0xFE = P
-    get regAddrS() { return this.firstRegAddr+6 }  // 0xFF = S
+    get rngAddr() { return 0xFC }  // 0xFC..0xFF = random number generator
+    get regAddrPCHI() { return 0xF9 }  // 0xF9 = PC(HI)
+    get regAddrPCLO() { return 0xFA }  // 0xFA = PC(LO)
+    get regAddrP() { return 0xFB }  // 0xFB = P
+    get regAddrA() { return 0xFC }  // 0xFC = A
+    get regAddrX() { return 0xFD }  // 0xFD = X
+    get regAddrY() { return 0xFE }  // 0xFE = Y
+    get regAddrS() { return 0xFF }  // 0xFF = S
 
     get state() {
         return { board: this.board.state,
@@ -66,27 +65,26 @@ class BoardController {
     }
 
     writeRegisters() {
-        const PC = this.board.unrotatePC (this.sfotty.PC & 0xFFFF);
+        this.board.write (this.regAddrPCHI, (this.sfotty.PC >> 8) & 0xFF);
+        this.board.write (this.regAddrPCLO, this.sfotty.PC & 0xFF);
+        this.board.write (this.regAddrP, this.sfotty.P);
         this.board.write (this.regAddrA, this.sfotty.A);
         this.board.write (this.regAddrX, this.sfotty.X);
         this.board.write (this.regAddrY, this.sfotty.Y);
-        this.board.write (this.regAddrPCHI, PC >> 8);
-        this.board.write (this.regAddrPCLO, PC & 0xFF);
-        this.board.write (this.regAddrP, this.sfotty.P);
         this.board.write (this.regAddrS, this.sfotty.S);
     }
 
     readRegisters() {
+        this.sfotty.PC = (this.board.read (this.regAddrPCHI) << 8) | this.board.read (this.regAddrPCLO);
+        this.sfotty.P = this.board.read (this.regAddrP);
         this.sfotty.A = this.board.read (this.regAddrA);
         this.sfotty.X = this.board.read (this.regAddrX);
         this.sfotty.Y = this.board.read (this.regAddrY);
-        this.sfotty.PC = this.board.rotatePC ((this.board.read (this.regAddrPCHI) << 8) | this.board.read (this.regAddrPCLO));
-        this.sfotty.P = this.board.read (this.regAddrP);
         this.sfotty.S = this.board.read (this.regAddrS);
     }
 
     writeRng() {
-        this.writeDword (this.firstRegAddr, this.board.nextRnd);
+        this.writeDword (this.rngAddr, this.board.nextRnd);
     }
 
     swapPages (i, j) {
@@ -149,19 +147,20 @@ class BoardController {
                         //     LDY #0           2, 2
                         //     STY SRC+1        3, 4
                         //     STY DEST+1       3, 4
+                        //     LDY #32          2, 2
                         // .L: LDA (SRC),Y      3, 5 * 256 (reps)
                         //     STA (DEST),Y     3, 6 * 256
                         //     DEY              1, 2 * 256
-                        //     BNE L            2, 3 * 256
+                        //     BMI L            2, 3 * 256
                         //     LDY DEST         3, 4
                         //     PLA              1, 4
                         //     PLP              1, 4
                         //     RTS              1, 6
-                        // Total program size: 1+1+3+3+2+3*4+1+2+3+1*3 = 31 bytes
-                        // Total T = 3+3+4+4+2+4+4+(5+6+2+3)*256+4+4+4+6 = 4138 cycles
+                        // Total program size: 1+1+3+3+2+3+3+2+3+3+1+2+3+1*3 = 33 bytes
+                        // Total T0 = 3+3+4+4+2+4+4+(5+6+2+3)*33+4+4+4+6 = 570 cycles (4138 for 256-byte program)
                         // Binary symmetric channel BSC(P) with bit-flip probability P
                         // has capacity C(P) = 1-H(P) = 1 - P*lg(P) - (1-P)*lg(1-P)
-                        // Time to send L bits error-free over channel with capacity C is T0 = L/C = 4138
+                        // Time to send L bits error-free over channel with capacity C is T0 = L/C
                         // Thus, we can imagine T=L/(1-H(P)) for some P.
                         // If we do not use an error-correcting code, but just use the raw channel, time should be T1 = L < T0.
                         // Thus T1/T0 = 1 - H(P)

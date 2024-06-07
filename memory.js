@@ -11,7 +11,6 @@ const cellVec = coordRange.reduce ((a,y) => a.concat(coordRange.map (x => [x,y])
 
 let cellIndex = coordRange.map(()=>coordRange.map(()=>null));
 cellVec.forEach ((vec, idx) => cellIndex[vec[0]+3][vec[1]+3] = idx);
-//const lookupCellIndex = (vec) => cellIndex[(vec[0]+3+14)%7][(vec[1]+3+14)%7] | (maxDelta(vec) > 3 ? 128 : 0);
 const lookupCellIndex = (vec) => cellIndex[(vec[0]+3+14)%7][(vec[1]+3+14)%7] | (maxDelta(vec) > 3 ? 128 : 0);
 const xCoords = cellVec.map ((vec) => vec[0] + 3);
 const yCoords = cellVec.map ((vec) => vec[1] + 3);
@@ -51,7 +50,7 @@ class BoardMemory {
     get byteOffsetMask() { return this.M - 1 }  // 0x3FF
 
     get firstVectorAddr() { return 0x00F0 }
-    get lastVectorAddr() { return 0x00F8 }
+    get lastVectorAddr() { return 0x00F9 }
     get firstLookupTableAddr() { return 0xE000 }
     get lastLookupTableAddr() { return 0xEFFF }
 
@@ -115,10 +114,10 @@ class BoardMemory {
     }
 
     valIsInVectorRange (val) {
-        return val >= 0 && val <= 48;
+        return ((val >> 2) & 0x3F) <= 48;
     }
 
-    doRotateVal (addr, val) {
+    doRotateTopBits (addr, val) {
         return this.addrIsInVectorRange(addr) && this.valIsInVectorRange(val);
     }
 
@@ -132,13 +131,13 @@ class BoardMemory {
         }
         const idx = this.addrToByteIndex (addr);
         const val = idx < 0 ? 0 : this.getByte (idx);
-        return this.doRotateVal(addr,val) ? this.rotate(val) : val;
+        return this.doRotateTopBits(addr,val) ? this.rotateTopBits(val) : val;
     }
 
     write (addr, val) {
         const idx = this.addrToByteIndex (addr);
         if (idx >= 0)
-            this.setByteWithUndo (idx, this.doRotateVal(addr,val) ? this.unrotate(val) : val);
+            this.setByteWithUndo (idx, this.doRotateTopBits(addr,val) ? this.unrotateTopBits(val) : val);
     }
 
     rotate (n) {
@@ -149,12 +148,12 @@ class BoardMemory {
         return inverseRotationLookupTable[this.orientation][n];
     }
 
-    rotatePC (PC) {
-        return PC >= this.neighborhoodSize ? PC : (PC & this.byteOffsetMask) | (this.rotate(PC >> this.log2M) << this.log2M);
+    rotateTopBits (val) {
+        return (val & 3) | (this.rotate(val >> 2) << 2);
     }
 
-    unrotatePC (PC) {
-        return PC >= this.neighborhoodSize ? PC : (PC & this.byteOffsetMask) | (this.unrotate(PC >> this.log2M) << this.log2M);
+    unrotateTopBits (val) {
+        return (val & 3) | (this.unrotate(val >> 2) << 2);
     }
 
     sampleNextMove() {
