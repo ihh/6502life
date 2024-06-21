@@ -207,6 +207,10 @@ class BoardController {
             totalSchedulerCycles -= targetCyclesPerCallback;
         }, 1000 / callbackRateHz)
     }
+
+    clearUpdater (updater) {
+        clearInterval (updater)
+    }
 };
 
 export default BoardController;

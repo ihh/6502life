@@ -1,4 +1,4 @@
-import BoardController from './controller.js';
+import BoardController from '../controller.js';
 
 async function log() {
     while (true) {
