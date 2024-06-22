@@ -11,6 +11,9 @@ const range = (A, B) => Array.from({length:B+1-A}).map((_,k)=>A+k);
 class BoardController {
     constructor (board) {
         this.board = board || new BoardMemory();
+        this.totalCycles = 0;
+        this.lastWriteTime = this.newCellTimeArray();
+        this.lastMoveTime = this.newCellTimeArray();
         this.newSfotty();
         this.readRegisters();
         this.writeRng();
@@ -47,6 +50,11 @@ class BoardController {
         this.sfotty.Y = s.Y;
         this.sfotty.P = s.P;
         this.sfotty.PC = s.PC;
+    }
+
+    newCellTimeArray() {
+        const B = this.board.B;
+        return Array.from({length:B}).map(()=>Array.from({length:B}).map(()=>0));
     }
 
     newSfotty() {
@@ -93,7 +101,7 @@ class BoardController {
 
     swapCells (i, j) {
         for (let k = 0; k < 4; ++k)
-            this.swapPages (i*4+k, j*4+k)
+            this.swapPages (i*4 + k, j*4 + k)
     }
 
     swapPages (i, j) {
@@ -128,18 +136,22 @@ class BoardController {
             const isBRK = nextOpcode == 0;
             const isBadOpcode = !this.isValidOpcode[nextOpcode];
             const isSoftwareInterrupt = isBRK || isBadOpcode;
+            let elapsedCycles = 0;
             if (isSoftwareInterrupt) {
-                cpuCycles += 7;  // software interrupt (BRK) takes 7 cycles
+                elapsedCycles = 7;  // software interrupt (BRK) takes 7 cycles
                 this.sfotty.PC = (this.sfotty.PC + 2) % 0x10000;
             } else {
                 this.sfotty.run();
-                cpuCycles += this.sfotty.cycleCounter;
+                elapsedCycles = this.sfotty.cycleCounter;
             }
+            cpuCycles += elapsedCycles;
+            this.board.totalCycles += elapsedCycles;
             const isTimerInterrupt = cpuCycles >= schedulerCycles;
             if (isTimerInterrupt || isSoftwareInterrupt) {
                 if (isTimerInterrupt && this.sfotty.I)
                     this.board.undoWrites();
                 else {
+                    this.recordWriteTimes();
                     this.board.disableUndoHistory();
                     this.writeRegisters();
                     if (isBRK) {  // BRK: bulk memory operations
@@ -151,9 +163,10 @@ class BoardController {
                         // Note that opcodes { 0, 50, 100, 150, 200 } do nothing except yield control to the interrupt handler.
                         if (operand > 0 && operand < nSrcCells*nDestCells) {
                             const dest = operand % nDestCells, src = (operand - dest) / nDestCells;
-                            if (src != dest)
-                                for (let page = 0; page < pagesPerCell; ++page)
-                                    this.swapPages (src*pagesPerCell + page, dest*pagesPerCell + page);
+                            if (src != dest) {
+                                this.swapCells (src, dest);
+                                this.recordMoveTime (src, dest);
+                            }
                         }
                     }
                     this.board.resetUndoHistory();
@@ -165,6 +178,24 @@ class BoardController {
             }
         }
         return { cpuCycles, schedulerCycles }
+    }
+
+    recordWriteTimes() {
+        Object.keys(this.board.undoHistory).forEach ((addr) => {
+            const [i, j, b] = this.board.addrToCellCoords (addr);
+            const cellIdx = this.board.ijbToCellIndex (i, j);
+            this.lastWriteTime[cellIdx] = this.totalCycles;
+        })
+        
+    }
+
+    recordMoveTime (src, dest) {
+        this.lastMoveTime[src] = this.totalCycles;
+        this.lastMoveTime[dest] = this.totalCycles;
+        // swap last write time for src and dest
+        const t = this.lastWriteTime[src];
+        this.lastWriteTime[src] = this.lastWriteTime[dest];
+        this.lastWriteTime[dest] = t;
     }
 
     setUpdater (clockSpeedMHz = 2, callbackRateHz = 100) {
@@ -183,40 +214,5 @@ class BoardController {
         clearInterval (updater)
     }
 };
-
-
-// Subroutine providing baseline cycle measurement for page copy:
-// .C: PHP              1 (bytes), 3 (cycles)
-//     PHA              1, 3
-//     STX SRC          3, 4
-//     STY DEST         3, 4
-//     LDY #0           2, 2
-//     STY SRC+1        3, 4
-//     STY DEST+1       3, 4
-//     LDY #32          2, 2
-// .L: LDA (SRC),Y      3, 5 * 256 (reps)
-//     STA (DEST),Y     3, 6 * 256
-//     DEY              1, 2 * 256
-//     BMI L            2, 3 * 256
-//     LDY DEST         3, 4
-//     PLA              1, 4
-//     PLP              1, 4
-//     RTS              1, 6
-// Total program size: 1+1+3+3+2+3+3+2+3+3+1+2+3+1*3 = 33 bytes
-// Total T0 = 3+3+4+4+2+4+4+(5+6+2+3)*33+4+4+4+6 = 570 cycles (4138 for 256-byte program)
-
-// We can model COPY1 (crudely) as a binary symmetric channel with bit-flip probability 0.25
-// This has capacity 1-H(0.25) ~= 0.189
-//
-// Binary symmetric channel BSC(P) with bit-flip probability P
-// has capacity C(P) = 1-H(P) = 1 - P*lg(P) - (1-P)*lg(1-P)
-// Time to send L bits error-free over channel with capacity C is T0 = L/C
-// Thus, we can imagine T=L/(1-H(P)) for some P.
-// If we do not use an error-correcting code, but just use the raw channel, time should be T1 = L < T0.
-// Thus T1/T0 = 1 - H(P)
-//       H(P) = 1 - T1/T0
-//          P = invH(1 - T1/T0)
-// We can approximate invH(Q) = (1-sqrt(1-Q^(4/3)))/2
-// thus P = sqrt(1 - (T1/T0)^(4/3))
 
 export default BoardController;

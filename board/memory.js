@@ -97,20 +97,29 @@ class BoardMemory {
         delete this.undoHistory;
     }
 
+    ijbToCellIndex (i, j) {
+        return j + this.B * i;
+    }
+
     ijbToByteIndex (i, j, b) {
-        return this.M * (j + this.B * i) + b;
+        return this.M * this.ijbToCellIndex(i,j) + b;
     }
 
     wrapCoord (k) { return (k + this.B) % this.B; }
 
+    addrToCellCoords (addr) {
+        const b = addr & this.byteOffsetMask;
+        const [x, y] = cellVec[this.unrotate (addr >> this.log2M)]
+        const i = this.wrapCoord (this.iOrig + x);
+        const j = this.wrapCoord (this.jOrig + y);
+        return [i, j, b];
+    }
+
     addrToByteIndex (addr) {
         if (addr < 0 || addr >= this.neighborhoodSize)
             return -1;
-        const b = addr & this.byteOffsetMask;
-        const [x, y] = cellVec[this.unrotate (addr >> this.log2M)]
-        return this.ijbToByteIndex (this.wrapCoord (this.iOrig + x),
-                                    this.wrapCoord (this.jOrig + y),
-                                    b);
+        const [i, j, b] = this.addrToCellCoords (addr);
+        return this.ijbToByteIndex (i, j, b);
     }
 
     addrIsInVectorRange (addr) {
