@@ -12,8 +12,9 @@ class BoardController {
     constructor (board) {
         this.board = board || new BoardMemory();
         this.totalCycles = 0;
-        this.lastWriteTime = this.newCellTimeArray();
-        this.lastMoveTime = this.newCellTimeArray();
+        this.lastMoveTime = this.newCellArray(()=>0);
+        this.lastWriteTime = this.newCellArray(()=>0);
+        this.lastWriteTimeForByte = this.newCellArray(()=>this.newCellByteArray(()=>0));
         this.newSfotty();
         this.readRegisters();
         this.writeRng();
@@ -52,9 +53,14 @@ class BoardController {
         this.sfotty.PC = s.PC;
     }
 
-    newCellTimeArray() {
+    newCellArray(initializer) {
         const B = this.board.B;
-        return Array.from({length:B}).map(()=>Array.from({length:B}).map(()=>0));
+        return Array.from({length:B*B}).map(initializer);
+    }
+
+    newCellByteArray(initializer) {
+        const M = this.board.M;
+        return Array.from({length:M}).map(initializer);
     }
 
     newSfotty() {
@@ -151,23 +157,15 @@ class BoardController {
                 if (isTimerInterrupt && this.sfotty.I)
                     this.board.undoWrites();
                 else {
-                    this.recordWriteTimes();
-                    this.board.disableUndoHistory();
-                    this.writeRegisters();
+                    this.commitWrites();
                     if (isBRK) {  // BRK: bulk memory operations
+                        // BRK 0..244: Swap 4-page blocks starting at addresses (op%49, op/49) << 10
+                        // Note that opcodes { 0, 50, 100, 150, 200 } do nothing except yield control to the interrupt handler.
                         const operand = this.nextOperandByte();
                         const nDestCells = this.board.Nsquared;  // 49
                         const nSrcCells = 5;
-                        const pagesPerCell = 4;
-                        // BRK 0..244: Swap 4-page blocks starting at addresses (op%49, op/49) << 10
-                        // Note that opcodes { 0, 50, 100, 150, 200 } do nothing except yield control to the interrupt handler.
-                        if (operand > 0 && operand < nSrcCells*nDestCells) {
-                            const dest = operand % nDestCells, src = (operand - dest) / nDestCells;
-                            if (src != dest) {
-                                this.swapCells (src, dest);
-                                this.recordMoveTime (src, dest);
-                            }
-                        }
+                        if (operand > 0 && operand < nSrcCells*nDestCells)
+                            this.commitMove (Math.floor(operand/nDestCells), operand % nDestCells);
                     }
                     this.board.resetUndoHistory();
                 }
@@ -180,22 +178,29 @@ class BoardController {
         return { cpuCycles, schedulerCycles }
     }
 
-    recordWriteTimes() {
+    commitWrites() {
+        this.writeRegisters();
+        this.board.disableUndoHistory();
         Object.keys(this.board.undoHistory).forEach ((addr) => {
             const [i, j, b] = this.board.addrToCellCoords (addr);
-            const cellIdx = this.board.ijbToCellIndex (i, j);
+            const cellIdx = this.board.ijToCellIndex (i, j);
             this.lastWriteTime[cellIdx] = this.totalCycles;
+            this.lastWriteTimeForByte[cellIdx][b] = this.totalCycles;
         })
         
     }
 
-    recordMoveTime (src, dest) {
+    commitMove (src, dest) {
+        if (src != dest)
+            this.swapCells (src, dest);
         this.lastMoveTime[src] = this.totalCycles;
         this.lastMoveTime[dest] = this.totalCycles;
-        // swap last write time for src and dest
-        const t = this.lastWriteTime[src];
+        // swap last write times for src and dest cells
+        const t = this.lastWriteTime[src], tb = this.lastWriteTimeForByte[src];
         this.lastWriteTime[src] = this.lastWriteTime[dest];
         this.lastWriteTime[dest] = t;
+        this.lastWriteTimeForByte[src] = this.lastWriteTimeForByte[dest];
+        this.lastWriteTimeForByte[dest] = tb;
     }
 
     setUpdater (clockSpeedMHz = 2, callbackRateHz = 100) {

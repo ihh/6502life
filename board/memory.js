@@ -50,6 +50,7 @@ class BoardMemory {
     get N() { return 7 }
     get Nsquared() { return 49 }
     get log2M() { return 10 }  // = log_2(M)
+    get sqrtM() { return 32 }  // = sqrt(M)
     get storageSize() { return this.B * this.B * this.M; }  // 64Mb
     get neighborhoodSize() { return this.N * this.N * this.M; }  // 49Kb
     get byteOffsetMask() { return this.M - 1 }  // 0x3FF
@@ -97,12 +98,12 @@ class BoardMemory {
         delete this.undoHistory;
     }
 
-    ijbToCellIndex (i, j) {
+    ijToCellIndex (i, j) {
         return j + this.B * i;
     }
 
     ijbToByteIndex (i, j, b) {
-        return this.M * this.ijbToCellIndex(i,j) + b;
+        return this.M * this.ijToCellIndex(i,j) + b;
     }
 
     wrapCoord (k) { return (k + this.B) % this.B; }
