@@ -148,6 +148,7 @@ class BoardController {
                         const nSrcCells = 5;
                         const pagesPerCell = 4;
                         // BRK 0..244: Swap 4-page blocks starting at addresses (op%49, op/49) << 10
+                        // Note that opcodes { 0, 50, 100, 150, 200 } do nothing except yield control to the interrupt handler.
                         if (operand > 0 && operand < nSrcCells*nDestCells) {
                             const dest = operand % nDestCells, src = (operand - dest) / nDestCells;
                             if (src != dest)
