@@ -96,14 +96,15 @@ class BoardController {
         }
     }
 
-    // copyPage: errorProb is the probability of having exactly one error in the page
-    copyPage (i, j, errorProb = .1) {
+    // copyPage: copy a random 50% of the bits of a page
+    copyPage (i, j) {
         const iAddr = i * 256, jAddr = j * 256;
-        for (let b = 0; b < 256; ++b)
-            this.board.write (jAddr+b, this.board.read(iAddr+b));
-        if (this.board.mt.real() < errorProb) {
-            const r = this.board.mt.int();
-            this.board.write (jAddr + (r & 0xFF), (r >> 8) & 0xFF);
+        for (let q = 0; q < 256; q += 4) {
+            let mask = this.board.mt.int();
+            for (let b = q; b < q + 4; ++b) {
+                const copyMask = mask & 0xFF, resetMask = copyMask ^ 0xFF;
+                this.board.write (jAddr+b, (this.board.read(jAddr+b) & resetMask) | (this.board.read(iAddr+b) & copyMask));
+            }
         }
     }
 
@@ -148,8 +149,9 @@ class BoardController {
                         const A = this.sfotty.A & 0xFF;
                         const X = this.sfotty.X & 0xFF;
                         const Y = this.sfotty.Y & 0xFF;
-                        // A=0: swap 4-page blocks at X<<2, Y<<2
-                        // A=1: swap 1-page blocks at X, Y
+                        // A=0: SWAP4. swap 4-page blocks at X<<2, Y<<2
+                        // A=1: SWAP1. swap 1-page blocks at X, Y
+                        // A=2: COPY1. copy random 50% of bits from X to Y
                         // Subroutine providing baseline cycle measurement for page copy:
                         // .C: PHP              1 (bytes), 3 (cycles)
                         //     PHA              1, 3
@@ -169,6 +171,10 @@ class BoardController {
                         //     RTS              1, 6
                         // Total program size: 1+1+3+3+2+3+3+2+3+3+1+2+3+1*3 = 33 bytes
                         // Total T0 = 3+3+4+4+2+4+4+(5+6+2+3)*33+4+4+4+6 = 570 cycles (4138 for 256-byte program)
+
+                        // We can model COPY1 (crudely) as a binary symmetric channel with bit-flip probability 0.25
+                        // This has capacity 1-H(0.25) ~= 0.189
+                        //
                         // Binary symmetric channel BSC(P) with bit-flip probability P
                         // has capacity C(P) = 1-H(P) = 1 - P*lg(P) - (1-P)*lg(1-P)
                         // Time to send L bits error-free over channel with capacity C is T0 = L/C
@@ -184,6 +190,8 @@ class BoardController {
                                 this.swapPages (X*4 + page, Y*4 + page);
                         else if (A == 1 && X < 49*4 && Y < 49*4)
                             this.swapPages (X, Y);
+                        else if (A == 2 && X < 49*4 && Y < 49*4)
+                            this.copyPage (X, Y);
                     }
                     this.board.resetUndoHistory();
                 }
