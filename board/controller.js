@@ -57,6 +57,10 @@ class BoardController {
         return this.board.read (this.sfotty.PC);
     }
 
+    nextOperandByte() {
+        return this.board.read (this.sfotty.PC + 1);
+    }
+
     writeDword (addr, val) {
         this.board.write (addr, (val >> 24) & 0xFF);
         this.board.write (addr+1, (val >> 16) & 0xFF);
@@ -87,24 +91,17 @@ class BoardController {
         this.writeDword (this.rngAddr, this.board.nextRnd);
     }
 
+    swapCells (i, j) {
+        for (let k = 0; k < 4; ++k)
+            this.swapPages (i*4+k, j*4+k)
+    }
+
     swapPages (i, j) {
         const iAddr = i * 256, jAddr = j * 256;
         for (let b = 0; b < 256; ++b) {
             const iOld = this.board.read(iAddr+b), jOld = this.board.read(jAddr+b);
             this.board.write (iAddr+b, jOld);
             this.board.write (jAddr+b, iOld);
-        }
-    }
-
-    // copyPage: copy a random 50% of the bits of a page
-    copyPage (i, j) {
-        const iAddr = i * 256, jAddr = j * 256;
-        for (let q = 0; q < 256; q += 4) {
-            let mask = this.board.mt.int();
-            for (let b = q; b < q + 4; ++b) {
-                const copyMask = mask & 0xFF, resetMask = copyMask ^ 0xFF;
-                this.board.write (jAddr+b, (this.board.read(jAddr+b) & resetMask) | (this.board.read(iAddr+b) & copyMask));
-            }
         }
     }
 
@@ -127,9 +124,9 @@ class BoardController {
         let cpuCycles = 0;
         const schedulerCycles = this.board.nextCycles;
         while (true) {
-            const nextOp = this.nextOpcode();
-            const isBRK = nextOp == 0;
-            const isBadOpcode = !this.isValidOpcode[nextOp];
+            const nextOpcode = this.nextOpcode();
+            const isBRK = nextOpcode == 0;
+            const isBadOpcode = !this.isValidOpcode[nextOpcode];
             const isSoftwareInterrupt = isBRK || isBadOpcode;
             if (isSoftwareInterrupt) {
                 cpuCycles += 7;  // software interrupt (BRK) takes 7 cycles
@@ -146,52 +143,17 @@ class BoardController {
                     this.board.disableUndoHistory();
                     this.writeRegisters();
                     if (isBRK) {  // BRK: bulk memory operations
-                        const A = this.sfotty.A & 0xFF;
-                        const X = this.sfotty.X & 0xFF;
-                        const Y = this.sfotty.Y & 0xFF;
-                        // A=0: SWAP4. swap 4-page blocks at X<<2, Y<<2
-                        // A=1: SWAP1. swap 1-page blocks at X, Y
-                        // A=2: COPY1. copy random 50% of bits from X to Y
-                        // Subroutine providing baseline cycle measurement for page copy:
-                        // .C: PHP              1 (bytes), 3 (cycles)
-                        //     PHA              1, 3
-                        //     STX SRC          3, 4
-                        //     STY DEST         3, 4
-                        //     LDY #0           2, 2
-                        //     STY SRC+1        3, 4
-                        //     STY DEST+1       3, 4
-                        //     LDY #32          2, 2
-                        // .L: LDA (SRC),Y      3, 5 * 256 (reps)
-                        //     STA (DEST),Y     3, 6 * 256
-                        //     DEY              1, 2 * 256
-                        //     BMI L            2, 3 * 256
-                        //     LDY DEST         3, 4
-                        //     PLA              1, 4
-                        //     PLP              1, 4
-                        //     RTS              1, 6
-                        // Total program size: 1+1+3+3+2+3+3+2+3+3+1+2+3+1*3 = 33 bytes
-                        // Total T0 = 3+3+4+4+2+4+4+(5+6+2+3)*33+4+4+4+6 = 570 cycles (4138 for 256-byte program)
-
-                        // We can model COPY1 (crudely) as a binary symmetric channel with bit-flip probability 0.25
-                        // This has capacity 1-H(0.25) ~= 0.189
-                        //
-                        // Binary symmetric channel BSC(P) with bit-flip probability P
-                        // has capacity C(P) = 1-H(P) = 1 - P*lg(P) - (1-P)*lg(1-P)
-                        // Time to send L bits error-free over channel with capacity C is T0 = L/C
-                        // Thus, we can imagine T=L/(1-H(P)) for some P.
-                        // If we do not use an error-correcting code, but just use the raw channel, time should be T1 = L < T0.
-                        // Thus T1/T0 = 1 - H(P)
-                        //       H(P) = 1 - T1/T0
-                        //          P = invH(1 - T1/T0)
-                        // We can approximate invH(Q) = (1-sqrt(1-Q^(4/3)))/2
-                        // thus P = sqrt(1 - (T1/T0)^(4/3))
-                        if (A == 0 && X < 49 && Y < 49)
-                            for (let page = 0; page < 4; ++page)
-                                this.swapPages (X*4 + page, Y*4 + page);
-                        else if (A == 1 && X < 49*4 && Y < 49*4)
-                            this.swapPages (X, Y);
-                        else if (A == 2 && X < 49*4 && Y < 49*4)
-                            this.copyPage (X, Y);
+                        const operand = this.nextOperandByte();
+                        const nDestCells = this.board.Nsquared;  // 49
+                        const nSrcCells = 5;
+                        const pagesPerCell = 4;
+                        // BRK 0..244: Swap 4-page blocks starting at addresses (op%49, op/49) << 10
+                        if (operand > 0 && operand < nSrcCells*nDestCells) {
+                            const dest = operand % nDestCells, src = (operand - dest) / nDestCells;
+                            if (src != dest)
+                                for (let page = 0; page < pagesPerCell; ++page)
+                                    this.swapPages (src*pagesPerCell + page, dest*pagesPerCell + page);
+ 
                     }
                     this.board.resetUndoHistory();
                 }
@@ -220,5 +182,40 @@ class BoardController {
         clearInterval (updater)
     }
 };
+
+
+// Subroutine providing baseline cycle measurement for page copy:
+// .C: PHP              1 (bytes), 3 (cycles)
+//     PHA              1, 3
+//     STX SRC          3, 4
+//     STY DEST         3, 4
+//     LDY #0           2, 2
+//     STY SRC+1        3, 4
+//     STY DEST+1       3, 4
+//     LDY #32          2, 2
+// .L: LDA (SRC),Y      3, 5 * 256 (reps)
+//     STA (DEST),Y     3, 6 * 256
+//     DEY              1, 2 * 256
+//     BMI L            2, 3 * 256
+//     LDY DEST         3, 4
+//     PLA              1, 4
+//     PLP              1, 4
+//     RTS              1, 6
+// Total program size: 1+1+3+3+2+3+3+2+3+3+1+2+3+1*3 = 33 bytes
+// Total T0 = 3+3+4+4+2+4+4+(5+6+2+3)*33+4+4+4+6 = 570 cycles (4138 for 256-byte program)
+
+// We can model COPY1 (crudely) as a binary symmetric channel with bit-flip probability 0.25
+// This has capacity 1-H(0.25) ~= 0.189
+//
+// Binary symmetric channel BSC(P) with bit-flip probability P
+// has capacity C(P) = 1-H(P) = 1 - P*lg(P) - (1-P)*lg(1-P)
+// Time to send L bits error-free over channel with capacity C is T0 = L/C
+// Thus, we can imagine T=L/(1-H(P)) for some P.
+// If we do not use an error-correcting code, but just use the raw channel, time should be T1 = L < T0.
+// Thus T1/T0 = 1 - H(P)
+//       H(P) = 1 - T1/T0
+//          P = invH(1 - T1/T0)
+// We can approximate invH(Q) = (1-sqrt(1-Q^(4/3)))/2
+// thus P = sqrt(1 - (T1/T0)^(4/3))
 
 export default BoardController;

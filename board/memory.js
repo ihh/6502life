@@ -7,7 +7,12 @@ const posAngle = (angle) => angle < 0 ? angle + 2*Math.PI : angle;
 const angle = (vec) => posAngle(Math.atan2(vec[0], vec[1]));  // By switching x and y in the args to atan2, N = (0,1) becomes angle zero, and we get NESW sorting
 
 const coordRange = Array.from({length:7}).map((_,n) => n - 3);
-const cellVec = coordRange.reduce ((a,y) => a.concat(coordRange.map (x => [x,y])),[]).sort ((a, b) => taxicab(a)-taxicab(b) || maxDelta(a)-maxDelta(b) || angle(a)-angle(b));
+// The following sort yields the spiraling order O,N,E,S,W,NE,SE...
+const cellVec = coordRange
+                    .reduce ((a,y) => a.concat(coordRange.map (x => [x,y])), [])
+                    .sort ((a, b) => taxicab(a) - taxicab(b)
+                                  || maxDelta(a) - maxDelta(b)
+                                  || angle(a) - angle(b));
 
 let cellIndex = coordRange.map(()=>coordRange.map(()=>null));
 cellVec.forEach ((vec, idx) => cellIndex[vec[0]+3][vec[1]+3] = idx);
