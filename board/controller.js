@@ -153,7 +153,7 @@ class BoardController {
                             if (src != dest)
                                 for (let page = 0; page < pagesPerCell; ++page)
                                     this.swapPages (src*pagesPerCell + page, dest*pagesPerCell + page);
- 
+                        }
                     }
                     this.board.resetUndoHistory();
                 }
