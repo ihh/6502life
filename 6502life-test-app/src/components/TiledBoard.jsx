@@ -15,7 +15,6 @@ export default function TiledBoard(props) {
     const { onMouseDown, onMouseUp, onMouseLeave, onMouseMove, onMouseEnterCell, mouseDown } = useBoardUtils ({ onPaint, onHover, onDrag: onDragWrap });
     const cursor = typeof(selectedType)==='undefined' ? (mouseDown ? 'grabbing' : 'grab') : 'pointer';
 
-    const offsetIndex = new Array(tilesPerSide+1).fill(0).map((_,n)=>n);
     const offsetToX = useCallback ((x) => (x + left) % size, [left, size]);
     const offsetToY = useCallback ((y) => (y + top) % size, [top, size]);
 

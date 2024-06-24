@@ -22,7 +22,10 @@ export default function PixelMap(props) {
             context.fillStyle = focusRectCssColor;
             for (let x = -size; x < 2*size; x += size)
                 for (let y = -size; y < 2*size; y += size)
-                    context.fillRect (focusRect.left + x, focusRect.top + y, focusRect.width - 1, focusRect.height - 1);
+                    context.fillRect (focusRect.left + x,
+                                      focusRect.top + y,
+                                      focusRect.width - 1,
+                                      focusRect.height - 1);
         }
     }, [size, overviewBuffer]);
     

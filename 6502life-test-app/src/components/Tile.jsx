@@ -9,6 +9,8 @@ const defaultColor = "white";
 
 export default function Tile(props) {
     let { name, bitmap, hover, focusColor, style, ...otherProps } = props;
+    if (name === '')
+        name = 'orange:bee';
     // First colon-delimited field, if any, is interpreted as a color
     let color = defaultColor;
     if (name.indexOf(':') >= 0) {

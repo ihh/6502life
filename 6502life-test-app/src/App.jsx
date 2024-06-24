@@ -30,7 +30,7 @@ export default function App (props) {
     let [errorMessage, setErrorMessage] = useState(undefined);
     let [importFile, setImportFile] = useState();
 
-    const cellName = visualizer.getCellNameArray (navState.left, navState.top, navState.tilesPerSide, navState.tilesPerSide);
+    const cellName = visualizer.getCellNameArray (navState.left, navState.top, navState.tilesPerSide + 1, navState.tilesPerSide + 1);
     const overviewBuffer = visualizer.getOverviewPixelBuffer();
 //    const detailBuffer = visualizer.getDetailPixelBuffer (navState.left, navState.top, navState.tilesPerSide, navState.tilesPerSide);
 
