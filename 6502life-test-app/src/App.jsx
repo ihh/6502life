@@ -4,9 +4,6 @@ import { useState, useCallback } from 'react';
 //import DebounceInput from 'react-debounce-input';
 import csscolors from 'css-color-names';
 
-import {BoardController} from './board/controller.js';
-import {BoardVisualizer} from './board/visualizer.js';
-
 import TiledBoard from './components/TiledBoard.jsx';
 import PixelMap from './components/PixelMap.jsx';
 
@@ -18,13 +15,13 @@ const cssColorNames = Object.keys(csscolors).filter ((color) => color !== 'black
 
 const clockSpeedMHz = 2;
 const callbackRateHz = 100;
-const targetCyclesPerCallback = 1e6 / clockSpeedMHz;
+const targetCyclesPerCallback = (clockSpeedMHz * 1e6) / callbackRateHz;
 const timerInterval = 1000 / callbackRateHz;  // ms
 
-export default function App() {
-    let [controller, setBoard] = useState(new BoardController());
-    let [visualizer, setVisualizer] = useState(new BoardVisualizer(controller));
-    let [hoverCell, setHoverCell] = useState(undefined);
+export default function App (props) {
+  let { controller, visualizer } = props;
+  let [totalCycles, setTotalCycles] = useState(0);
+  let [hoverCell, setHoverCell] = useState(undefined);
     let [navState, setNavState] = useState({top:0,left:0,pixelsPerTile:32,tilesPerSide:8});
     let [timers] = useState({boardUpdateTimer:null});
     let [icons, setIcons] = useState({bee: {name: 'bee', color: 'orange'}});
@@ -63,11 +60,11 @@ export default function App() {
           const { schedulerCycles } = controller.runToNextInterrupt();
           totalSchedulerCycles += schedulerCycles;
       }
+      setTotalCycles (totalCycles + totalSchedulerCycles);
       startTimer();
-      forceUpdate();
-    }, [controller, startTimer, forceUpdate]);
+    }, [controller, startTimer, totalCycles, setTotalCycles, forceUpdate]);
     
-    const onPauseRestart = timers.boardTimer ? pause : resume;
+    const onPauseRestart = timers.boardUpdateTimer ? pause : resume;
 
     const wrapCoord = useCallback ((coord) => {
       while (coord < 0) coord += controller.memory.B;
@@ -134,8 +131,9 @@ return (
   focusRect={{top:navState.top,left:navState.left,width:navState.tilesPerSide+2,height:navState.tilesPerSide+2}}
   background={background}/>
 </div>
-<span>{hoverCell ? (<i>Cell ({hoverCell.x},{hoverCell.y})</i>) : (<i>Hover over cell to see state</i>)}</span>
-<button onClick={onPauseRestart}>{timers.boardTimer ? "Pause" : "Start"}</button>
+<div><span>Cycles: {totalCycles}</span></div>
+<div><span>{hoverCell ? (<i>Cell ({hoverCell.x},{hoverCell.y})</i>) : (<i>Hover over cell to see state</i>)}</span></div>
+<button onClick={onPauseRestart}>{timers.boardUpdateTimer ? "Pause" : "Start"}</button>
 <button onClick={()=>{
   const json = {icons,selectedType,navState};
   const a = document.createElement('a');

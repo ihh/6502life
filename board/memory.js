@@ -117,7 +117,7 @@ class BoardMemory {
     }
 
     undoWrites() {
-        Object.keys(this.undoHistory).forEach ((idx) => this.setByteWithoutUndo (idx, this.undoHistory[idx]));
+        Object.keys(this.undoHistory).forEach ((addr) => this.setByteWithoutUndo (parseInt(addr), this.undoHistory[addr]));
         this.resetUndoHistory();
     }
 
@@ -137,11 +137,19 @@ class BoardMemory {
         return this.M * this.ijToCellIndex(i,j) + b;
     }
 
+    ijbFromByteIndex (byteIdx) {
+        const b = byteIdx % this.M;
+        const ij = Math.floor (byteIdx / this.M);
+        const j = ij % this.B;
+        const i = Math.floor (ij / this.B);
+        return [i, j, b];
+    }
+
     wrapCoord (k) { return (k + this.B) % this.B; }
 
     addrToCellCoords (addr) {
         const b = addr & this.byteOffsetMask;
-        const [x, y] = spiralSortedCellVec[this.unrotate (addr >> this.log2M)]
+        const [x, y] = spiralSortedCellVec[this.unrotate (addr >> this.log2M)];
         const i = this.wrapCoord (this.iOrig + x);
         const j = this.wrapCoord (this.jOrig + y);
         return [i, j, b];

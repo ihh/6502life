@@ -190,15 +190,14 @@ class BoardController {
     }
 
     commitWrites() {
-        this.writeRegisters();
-        this.memory.disableUndoHistory();
         Object.keys(this.memory.undoHistory).forEach ((addr) => {
-            const [i, j, b] = this.memory.addrToCellCoords (addr);
+            const [i, j, b] = this.memory.ijbFromByteIndex (parseInt(addr));
             const cellIdx = this.memory.ijToCellIndex (i, j);
             this.lastWriteTime[cellIdx] = this.totalCycles;
             this.lastWriteTimeForByte[cellIdx][b] = this.totalCycles;
         })
-        
+        this.memory.disableUndoHistory();        
+        this.writeRegisters();
     }
 
     commitMove (src, dest) {
