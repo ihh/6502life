@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { Icon } from '@iconify/react';
 //import Textarea from 'rc-textarea';
 //import Input from 'rc-input';
 //import DebounceInput from 'react-debounce-input';
@@ -25,6 +26,7 @@ export default function App (props) {
     let [navState, setNavState] = useState({top:0,left:0,pixelsPerTile:32,tilesPerSide:8});
     let [timers] = useState({boardUpdateTimer:null});
     let [icons, setIcons] = useState({bee: {name: 'bee', color: 'orange'}});
+    let [palette, setPalette] = useState([]);
     let [moveCounter, setMoveCounter] = useState(0);  // hacky way to force updates without cloning Board object
     let [selectedType, setSelectedType] = useState(undefined);
     let [errorMessage, setErrorMessage] = useState(undefined);
@@ -131,7 +133,7 @@ return (
   focusRect={{top:navState.top,left:navState.left,width:navState.tilesPerSide+2,height:navState.tilesPerSide+2}}
   background={background}/>
 </div>
-<div><span>Cycles: {totalCycles}</span></div>
+<div><span>Cycles/cell: {Math.floor(totalCycles/(controller.memory.B<<1))}</span></div>
 <div><span>{hoverCell ? (<i>Cell ({hoverCell.x},{hoverCell.y})</i>) : (<i>Hover over cell to see state</i>)}</span></div>
 <button onClick={onPauseRestart}>{timers.boardUpdateTimer ? "Pause" : "Start"}</button>
 <button onClick={()=>{
@@ -155,6 +157,25 @@ return (
   };
   reader.readAsText(importFile);
 }}>Import</button>) : ''}
-</div>
-);
+
+<fieldset><table className="palette">
+  <tbody>
+  {palette.map((tool,n) => (<tr key={`palette-${n}`}>
+    <td><span><label><input type="radio" name="palette" id={n} checked={selectedType===n} onChange={(evt)=>{evt.target.checked && setSelectedType(n)}}/></label></span></td>
+    <td><label htmlFor={type}><span className="paletteTypeIcon"><Tile type={type} state={paintState(type)} value={type} icon={icons[type]}/></span></label></td>
+    </tr>))}
+  <tr>
+    <td><span><label><input type="radio" name="palette" id="=move" checked={typeof(selectedType)==='undefined'} onChange={(evt)=>{evt.target.checked && setSelectedType(undefined)}}/></label></span></td>
+    <td><label htmlFor="=move"><span className="paletteTypeIcon"><Icon icon={moveIcon}/></span></label></td>
+    </tr>
+  </tbody></table></fieldset>
+<div>{selectedType
+      ? (<span>Click on map to
+         {selectedType === '_'
+          ? ' erase'
+          : ' paint'}
+          </span>)
+      : (<span>Drag map to move</span>)}
+  </div>
+</div>);
 }
