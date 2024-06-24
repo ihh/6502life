@@ -10,14 +10,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "css-color-converter": "^2.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@iconify/react": "^5.0.1",
     "@sfotty-pie/sfotty": "^0.1.0",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "css-color-names": "^1.0.1",
     "eslint": "^8.57.0",
     "eslint-plugin-react": "^7.34.2",
     "eslint-plugin-react-hooks": "^4.6.2",

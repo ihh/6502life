@@ -1,0 +1,19 @@
+.TiledBoard {
+    overflow: hidden;
+}
+
+.TiledBoardInner {
+    position: relative;
+    background-color: black;
+}
+
+.TiledBoardInner .tileRow {
+    display: flex;
+    line-height: 1;
+}
+
+.TiledBoardInner .tileRow svg.hover {
+    border-style: solid;
+    border-width: 1px;
+    margin: -1px;
+}

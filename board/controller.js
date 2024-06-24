@@ -1,4 +1,4 @@
-import BoardMemory from './memory.js';
+import { BoardMemory } from './memory.js';
 
 import { Sfotty } from '@sfotty-pie/sfotty';
 import { VANILLA_OPCODES } from "@sfotty-pie/opcodes";
@@ -9,8 +9,8 @@ const range = (A, B) => Array.from({length:B+1-A}).map((_,k)=>A+k);
 
 // board controller
 class BoardController {
-    constructor (board) {
-        this.board = board || new BoardMemory();
+    constructor (memory) {
+        this.memory = memory || new BoardMemory();
         this.totalCycles = 0;
         this.lastMoveTime = this.newCellArray(()=>0);
         this.lastWriteTime = this.newCellArray(()=>0);
@@ -18,7 +18,7 @@ class BoardController {
         this.newSfotty();
         this.readRegisters();
         this.writeRng();
-        this.sfotty = new Sfotty(this.board);
+        this.sfotty = new Sfotty(this.memory);
         this.isValidOpcode = Array.from({length: 256});
         VANILLA_OPCODES.forEach ((opcode) => this.isValidOpcode[opcode.opcode] = true);
     }
@@ -34,7 +34,7 @@ class BoardController {
     get regAddrS() { return 0xFF }  // 0xFF = S
 
     get state() {
-        return { board: this.board.state,
+        return { memory: this.memory.state,
                  S: this.sfotty.S,
                  A: this.sfotty.A,
                  X: this.sfotty.X,
@@ -44,7 +44,7 @@ class BoardController {
     }
 
     set state(s) {
-        this.board.state = s.state;
+        this.memory.state = s.memory;
         this.sfotty.S = s.S;
         this.sfotty.A = s.A;
         this.sfotty.X = s.X;
@@ -54,12 +54,12 @@ class BoardController {
     }
 
     newCellArray(initializer) {
-        const B = this.board.B;
+        const B = this.memory.B;
         return Array.from({length:B*B}).map(initializer);
     }
 
     newCellByteArray(initializer) {
-        const M = this.board.M;
+        const M = this.memory.M;
         return Array.from({length:M}).map(initializer);
     }
 
@@ -68,41 +68,41 @@ class BoardController {
     }
 
     nextOpcode() {
-        return this.board.read (this.sfotty.PC);
+        return this.memory.read (this.sfotty.PC);
     }
 
     nextOperandByte() {
-        return this.board.read (this.sfotty.PC + 1);
+        return this.memory.read (this.sfotty.PC + 1);
     }
 
     writeDword (addr, val) {
-        this.board.write (addr, (val >> 24) & 0xFF);
-        this.board.write (addr+1, (val >> 16) & 0xFF);
-        this.board.write (addr+2, (val >> 8) & 0xFF);
-        this.board.write (addr+3, val & 0xFF);
+        this.memory.write (addr, (val >> 24) & 0xFF);
+        this.memory.write (addr+1, (val >> 16) & 0xFF);
+        this.memory.write (addr+2, (val >> 8) & 0xFF);
+        this.memory.write (addr+3, val & 0xFF);
     }
 
     writeRegisters() {
-        this.board.write (this.regAddrPCHI, (this.sfotty.PC >> 8) & 0xFF);
-        this.board.write (this.regAddrPCLO, this.sfotty.PC & 0xFF);
-        this.board.write (this.regAddrP, this.sfotty.P);
-        this.board.write (this.regAddrA, this.sfotty.A);
-        this.board.write (this.regAddrX, this.sfotty.X);
-        this.board.write (this.regAddrY, this.sfotty.Y);
-        this.board.write (this.regAddrS, this.sfotty.S);
+        this.memory.write (this.regAddrPCHI, (this.sfotty.PC >> 8) & 0xFF);
+        this.memory.write (this.regAddrPCLO, this.sfotty.PC & 0xFF);
+        this.memory.write (this.regAddrP, this.sfotty.P);
+        this.memory.write (this.regAddrA, this.sfotty.A);
+        this.memory.write (this.regAddrX, this.sfotty.X);
+        this.memory.write (this.regAddrY, this.sfotty.Y);
+        this.memory.write (this.regAddrS, this.sfotty.S);
     }
 
     readRegisters() {
-        this.sfotty.PC = (this.board.read (this.regAddrPCHI) << 8) | this.board.read (this.regAddrPCLO);
-        this.sfotty.P = this.board.read (this.regAddrP);
-        this.sfotty.A = this.board.read (this.regAddrA);
-        this.sfotty.X = this.board.read (this.regAddrX);
-        this.sfotty.Y = this.board.read (this.regAddrY);
-        this.sfotty.S = this.board.read (this.regAddrS);
+        this.sfotty.PC = (this.memory.read (this.regAddrPCHI) << 8) | this.memory.read (this.regAddrPCLO);
+        this.sfotty.P = this.memory.read (this.regAddrP);
+        this.sfotty.A = this.memory.read (this.regAddrA);
+        this.sfotty.X = this.memory.read (this.regAddrX);
+        this.sfotty.Y = this.memory.read (this.regAddrY);
+        this.sfotty.S = this.memory.read (this.regAddrS);
     }
 
     writeRng() {
-        this.writeDword (this.rngAddr, this.board.nextRnd);
+        this.writeDword (this.rngAddr, this.memory.nextRnd);
     }
 
     swapCells (i, j) {
@@ -113,30 +113,30 @@ class BoardController {
     swapPages (i, j) {
         const iAddr = i * 256, jAddr = j * 256;
         for (let b = 0; b < 256; ++b) {
-            const iOld = this.board.read(iAddr+b), jOld = this.board.read(jAddr+b);
-            this.board.write (iAddr+b, jOld);
-            this.board.write (jAddr+b, iOld);
+            const iOld = this.memory.read(iAddr+b), jOld = this.memory.read(jAddr+b);
+            this.memory.write (iAddr+b, jOld);
+            this.memory.write (jAddr+b, iOld);
         }
     }
 
-    // NB this randomize() function avoids updating the Board's RNG
+    // NB this randomize() function avoids updating the BoardMemory's RNG
     randomize(rng) {
         rng = rng || (() => Math.random() * 2**32);
-        for (let idx = 0; idx < this.board.storageSize; idx += 4) {
+        for (let idx = 0; idx < this.memory.storageSize; idx += 4) {
             const r = rng();
-            this.board.setByteWithoutUndo (idx, (r >> 24) & 0xFF);
-            this.board.setByteWithoutUndo (idx+1, (r >> 16) & 0xFF);
-            this.board.setByteWithoutUndo (idx+2, (r >> 8) & 0xFF);
-            this.board.setByteWithoutUndo (idx+3, r & 0xFF);
+            this.memory.setByteWithoutUndo (idx, (r >> 24) & 0xFF);
+            this.memory.setByteWithoutUndo (idx+1, (r >> 16) & 0xFF);
+            this.memory.setByteWithoutUndo (idx+2, (r >> 8) & 0xFF);
+            this.memory.setByteWithoutUndo (idx+3, r & 0xFF);
         }
-        this.board.resetUndoHistory();
+        this.memory.resetUndoHistory();
         this.readRegisters();
         this.writeRng();
     }
 
     runToNextInterrupt() {
         let cpuCycles = 0;
-        const schedulerCycles = this.board.nextCycles;
+        const schedulerCycles = this.memory.nextCycles;
         while (true) {
             const nextOpcode = this.nextOpcode();
             const isBRK = nextOpcode == 0;
@@ -151,25 +151,36 @@ class BoardController {
                 elapsedCycles = this.sfotty.cycleCounter;
             }
             cpuCycles += elapsedCycles;
-            this.board.totalCycles += elapsedCycles;
+            this.memory.totalCycles += elapsedCycles;
+            // Was this an interrupt (timer or BRK)?
             const isTimerInterrupt = cpuCycles >= schedulerCycles;
             if (isTimerInterrupt || isSoftwareInterrupt) {
-                if (isTimerInterrupt && this.sfotty.I)
-                    this.board.undoWrites();
-                else {
-                    this.commitWrites();
-                    if (isBRK) {  // BRK: bulk memory operations
-                        // BRK 0..244: Swap 4-page blocks starting at addresses (op%49, op/49) << 10
-                        // Note that opcodes { 0, 50, 100, 150, 200 } do nothing except yield control to the interrupt handler.
+                // If I flag is set, revert all the states to before the interrupt.
+                // Were this fictitious system being implemented as a filesystem, this would be where you'd discard the unsaved work.
+                // If the implementation was sideways RAM, there would be a bulk copy operation here.
+                // Since we have it all in memory, we actually preserve an undo history at the BoardMemory level,
+                // and call its built-in undo here.
+                if (isTimerInterrupt && this.sfotty.I)  // was this a masked interrupt?
+                    this.memory.undoWrites();
+                else {  // this was not a masked interrupt
+                    // Notionally, this is where we write everything back to the filesystem, or discard the update.
+                    // Since the filesystem is all in RAM, we 
+                    this.commitWrites();  // does nothing to board, allows this controller object to update its last-modified times
+                    if (isBRK) {
+                        // BRK: software interrupt triggering fast memory swap
+                        // Operand 0..244: Swap 4-page blocks starting at addresses (op%49, op/49) << 10
+                        // Note that operands { 0, 50, 100, 150, 200 } do nothing except yield control to the interrupt handler.
                         const operand = this.nextOperandByte();
-                        const nDestCells = this.board.Nsquared;  // 49
+                        const nDestCells = this.memory.Nsquared;  // 49
                         const nSrcCells = 5;
-                        if (operand > 0 && operand < nSrcCells*nDestCells)
-                            this.commitMove (Math.floor(operand/nDestCells), operand % nDestCells);
+                        if (operand > 0 && operand < nSrcCells * nDestCells)
+                            this.commitMove (Math.floor(operand / nDestCells),
+                                             operand % nDestCells);
                     }
-                    this.board.resetUndoHistory();
+                    this.memory.resetUndoHistory();
                 }
-                this.board.sampleNextMove();
+                // Randomize
+                this.memory.sampleNextMove();
                 this.readRegisters();
                 this.writeRng();
                 break;
@@ -180,10 +191,10 @@ class BoardController {
 
     commitWrites() {
         this.writeRegisters();
-        this.board.disableUndoHistory();
-        Object.keys(this.board.undoHistory).forEach ((addr) => {
-            const [i, j, b] = this.board.addrToCellCoords (addr);
-            const cellIdx = this.board.ijToCellIndex (i, j);
+        this.memory.disableUndoHistory();
+        Object.keys(this.memory.undoHistory).forEach ((addr) => {
+            const [i, j, b] = this.memory.addrToCellCoords (addr);
+            const cellIdx = this.memory.ijToCellIndex (i, j);
             this.lastWriteTime[cellIdx] = this.totalCycles;
             this.lastWriteTimeForByte[cellIdx][b] = this.totalCycles;
         })
@@ -203,16 +214,23 @@ class BoardController {
         this.lastWriteTimeForByte[dest] = tb;
     }
 
-    setUpdater (clockSpeedMHz = 2, callbackRateHz = 100) {
+    makeUpdater (clockSpeedMHz = 2, callbackRateHz = 100) {
         const targetCyclesPerCallback = 1e6 / clockSpeedMHz;
         let totalSchedulerCycles = 0;
-        return setInterval (() => {
+        const timerCallback = () => {
             while (totalSchedulerCycles < targetCyclesPerCallback) {
                 const { schedulerCycles } = this.runToNextInterrupt();
                 totalSchedulerCycles += schedulerCycles;
             }
             totalSchedulerCycles -= targetCyclesPerCallback;
-        }, 1000 / callbackRateHz)
+        };
+        const timerInterval = 1000 / callbackRateHz;
+        return { timerCallback, timerInterval };
+    }
+
+    setUpdater (clockSpeedMHz = 2, callbackRateHz = 100) {
+        const { timerCallback, timerInterval } = this.makeUpdater (clockSpeedMHz, callbackRateHz);
+        return setInterval (timerCallback, timerInterval);
     }
 
     clearUpdater (updater) {
@@ -220,4 +238,4 @@ class BoardController {
     }
 };
 
-export default BoardController;
+export { BoardController };

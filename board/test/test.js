@@ -1,8 +1,8 @@
-import BoardController from '../controller.js';
+import { BoardController } from '../controller.js';
 
 async function log() {
     while (true) {
-        console.log ('i='+bc.board.iOrig, 'j='+bc.board.jOrig, 'nextCycles='+bc.board.nextCycles)
+        console.log ('i='+bc.memory.iOrig, 'j='+bc.memory.jOrig, 'nextCycles='+bc.memory.nextCycles)
         await sleep(1000);
     }
 }

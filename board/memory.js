@@ -8,17 +8,17 @@ const angle = (vec) => posAngle(Math.atan2(vec[0], vec[1]));  // By switching x 
 
 const coordRange = Array.from({length:7}).map((_,n) => n - 3);
 // The following sort yields the spiraling order O,N,E,S,W,NE,SE...
-const cellVec = coordRange
+const spiralSortedCellVec = coordRange
                     .reduce ((a,y) => a.concat(coordRange.map (x => [x,y])), [])
                     .sort ((a, b) => taxicab(a) - taxicab(b)
                                   || maxDelta(a) - maxDelta(b)
                                   || angle(a) - angle(b));
 
 let cellIndex = coordRange.map(()=>coordRange.map(()=>null));
-cellVec.forEach ((vec, idx) => cellIndex[vec[0]+3][vec[1]+3] = idx);
+spiralSortedCellVec.forEach ((vec, idx) => cellIndex[vec[0]+3][vec[1]+3] = idx);
 const lookupCellIndex = (vec) => cellIndex[(vec[0]+3+14)%7][(vec[1]+3+14)%7] | (maxDelta(vec) > 3 ? 128 : 0);
-const xCoords = cellVec.map ((vec) => vec[0] + 3);
-const yCoords = cellVec.map ((vec) => vec[1] + 3);
+const xCoords = spiralSortedCellVec.map ((vec) => vec[0] + 3);
+const yCoords = spiralSortedCellVec.map ((vec) => vec[1] + 3);
 
 const rotate0 = (xy) => xy;
 const rotate1 = (xy) => [xy[1],-xy[0]];
@@ -30,13 +30,16 @@ const reflectX = (xy) => [xy[0],-xy[1]];
 const reflectY = (xy) => rotate3(reflectX(rotate1(xy)));
 const sumVec = (a, b) => a.map((ai,i) => ai + b[i]);
 const translate = (xy1) => (xy2) => sumVec (xy1, xy2);
-const makeTransformLookupTableRow = (f) => cellVec.map(f).map(lookupCellIndex);
-const transformations = cellVec.map(translate).concat ([rotate1, rotate2, rotate3, reflectX, reflectY]);
-const coordLookupTable = Array.from({length:64}).map((_,n) => (n % 8 == 7 || (n>>3) == 7) ? -1 : lookupCellIndex([(n%8)-3,(n>>3)-3]));
-const transformLookupTable = transformations.map(makeTransformLookupTableRow).concat ([xCoords, yCoords, coordLookupTable]);
+const makeTransformLookupTableRow = (f) => spiralSortedCellVec.map(f).map(lookupCellIndex);
 const rotationLookupTable = rotations.map(makeTransformLookupTableRow);
 const inverseRotationLookupTable = inverseRotations.map(makeTransformLookupTableRow);
+const transformations = spiralSortedCellVec.map(translate).concat ([rotate1, rotate2, rotate3, reflectX, reflectY]);
+const coordLookupTable = Array.from({length:64}).map((_,n) => (n % 8 == 7 || (n>>3) == 7) ? -1 : lookupCellIndex([(n%8)-3,(n>>3)-3]));
+const transformLookupTable = transformations.map(makeTransformLookupTableRow).concat ([xCoords, yCoords, coordLookupTable]);
 
+// Truly random access memory: the hookup to the larger storage is randomly translated and oriented,
+// with connectivity persisting only until the next interrupt, at which a single undo is performed if
+// and only if the software interrupt flag (I) is set at the time of the interrupt.
 class BoardMemory {
     constructor(seed = 42) {
         this.storage = new Uint8Array (this.storageSize);
@@ -45,21 +48,48 @@ class BoardMemory {
         this.resetUndoHistory();
     }
 
-    get B() { return 256 }
-    get M() { return 1024 }
-    get N() { return 7 }
-    get Nsquared() { return 49 }
+    get B() { return 256 }  // cells per dimension (X,Y)
+    get M() { return 1024 }  // memory in bytes per cell
+    get N() { return 7 }  // memory-mapped neighorhood size per dimension
+    get Nsquared() { return 49 }  // memory-mapped neighorhood size
     get log2M() { return 10 }  // = log_2(M)
     get sqrtM() { return 32 }  // = sqrt(M)
     get storageSize() { return this.B * this.B * this.M; }  // 64Mb
     get neighborhoodSize() { return this.N * this.N * this.M; }  // 49Kb
     get byteOffsetMask() { return this.M - 1 }  // 0x3FF
 
+    // 1. Memory map - RAM
+    // A. Used by OS, 0xF0 - 0xFF.
+    // Rotated vectors. These are unmapped/mapped by the memory manager at each random orientation.
     get firstVectorAddr() { return 0x00F0 }
     get lastVectorAddr() { return 0x00F9 }
+
+    // Controller-reserved vectors. Used to store registers between updates, and random numbers during updates
+    get firstControllerAddr() { return 0x00FA }
+    get lastControllerAddr() { return 0x00FF }
+
+    // B. Reserved for visualizer, 0x380-0x3FF.
+    // Conventionally, the upper 128 bytes are for visualization
+    // The program is free to ignore these, they will not disrupt program flow
+    // Debuggers should not rely on them!
+
+    // Name, also used as default icon (32 bytes)
+    get displayNameBytes() { return 32 }
+    get displayNameAddr() { return 0x03E0 }
+
+    // RGB bitmap (96 bytes)
+    get bitmapPixelsPerSide() { return 16 }  // bits per dimension (X,Y)
+    get bitmapBytes() { return this.bitmapPixelsPerSide * this.bitmapPixelsPerSide / 8 }  // bytes per channel = 32
+    get bitmapAddrR() { return 0x0380 }  // red
+    get bitmapAddrG() { return 0x03A0 }  // green
+    get bitmapAddrB() { return 0x03C0 }  // blue
+
+    // 2. Memory map - ROM
+    // Lookup tables for common symmetry operations
     get firstLookupTableAddr() { return 0xE000 }
     get lastLookupTableAddr() { return 0xEFFF }
 
+    // Full serialization & deserialization
     get state() { return { storage: new TextDecoder().decode(this.storage),
                             iOrig: this.iOrig,
                             jOrig: this.jOrig,
@@ -77,6 +107,7 @@ class BoardMemory {
         this.mt.mti = s.mti;
     }    
 
+    // Accessors
     getByte (idx) { return this.storage[idx]; }
     setByteWithoutUndo (idx, val) { this.storage[idx] = val & 0xFF; }
     setByteWithUndo (idx, val) {
@@ -110,7 +141,7 @@ class BoardMemory {
 
     addrToCellCoords (addr) {
         const b = addr & this.byteOffsetMask;
-        const [x, y] = cellVec[this.unrotate (addr >> this.log2M)]
+        const [x, y] = spiralSortedCellVec[this.unrotate (addr >> this.log2M)]
         const i = this.wrapCoord (this.iOrig + x);
         const j = this.wrapCoord (this.jOrig + y);
         return [i, j, b];
@@ -155,6 +186,7 @@ class BoardMemory {
             this.setByteWithUndo (idx, this.doRotateTopBits(addr,val) ? this.unrotateTopBits(val) : val);
     }
 
+    // rotation helpers
     rotate (n) {
         return rotationLookupTable[this.orientation][n];
     }
@@ -171,6 +203,7 @@ class BoardMemory {
         return (val & 3) | (this.unrotate(val >> 2) << 2);
     }
 
+    // randomly sample next move
     sampleNextMove() {
         const rv1 = this.mt.int();  // new origin and orientation
         const rv2 = this.mt.int();  // transformed into the log part of the waiting time to the next interrupt
@@ -196,5 +229,5 @@ class BoardMemory {
 };
 
 
+export { BoardMemory };
 
-export default BoardMemory;
