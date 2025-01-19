@@ -128,3 +128,10 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# latex
+tex/*.out
+tex/*.aux
+tex/*.log
+tex/*.pdf
+tex/*.blg

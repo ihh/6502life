@@ -1,4 +1,5 @@
 import MersenneTwister from 'mersennetwister';
+import { range, concatLists } from './util.js';
 
 // Create the neighborhood memory map and the lookup tables that live at 0xE000
 const taxicab = (vec) => Math.abs(vec[0]) + Math.abs(vec[1]);
@@ -14,8 +15,9 @@ const spiralSortedCellVec = coordRange
                                   || maxDelta(a) - maxDelta(b)
                                   || angle(a) - angle(b));
 
-let cellIndex = coordRange.map(()=>coordRange.map(()=>null));
-spiralSortedCellVec.forEach ((vec, idx) => cellIndex[vec[0]+3][vec[1]+3] = idx);
+let tmpCellIndex = coordRange.map(()=>coordRange.map(()=>null));
+spiralSortedCellVec.forEach ((vec, idx) => tmpCellIndex[vec[0]+3][vec[1]+3] = idx);
+const cellIndex = tmpCellIndex;
 const lookupCellIndex = (vec) => cellIndex[(vec[0]+3+14)%7][(vec[1]+3+14)%7] | (maxDelta(vec) > 3 ? 128 : 0);
 const xCoords = spiralSortedCellVec.map ((vec) => vec[0] + 3);
 const yCoords = spiralSortedCellVec.map ((vec) => vec[1] + 3);
@@ -237,5 +239,4 @@ class BoardMemory {
 };
 
 
-export { BoardMemory };
-
+export { BoardMemory, cellIndex };

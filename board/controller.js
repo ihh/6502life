@@ -3,10 +3,6 @@ import { BoardMemory } from './memory.js';
 import { Sfotty } from '@sfotty-pie/sfotty';
 import { VANILLA_OPCODES } from "@sfotty-pie/opcodes";
 
-// lookups for permutations and combinations
-const concatLists = lists => lists.reduce((a,b)=>a.concat(b),[]);
-const range = (A, B) => Array.from({length:B+1-A}).map((_,k)=>A+k);
-
 // board controller
 class BoardController {
     constructor (memory) {
