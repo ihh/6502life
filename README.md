@@ -14,9 +14,9 @@ It is inspired by various recreational coding and artificial-life experiments, i
 
 JavaScript code to simulate the operating system as described here (the "Board") is in `board/`.
 
-The beginnings of a React-based web app are in `6502life-test-app/` but it's pretty bare-bones at the moment.
+The beginnings of a React-based web app (using Vite) are in `6502life-test-app/` but it's pretty bare-bones at the moment.
 
-The next development priority should be to build out the web app a little.
+The next development priority should be to build out the web app; e.g. better visualization code, a debugger, and so on.
 
 # System design
 
@@ -99,11 +99,12 @@ Within each cell, memory is laid out as follows:
 | Address offset range | Usage |
 |----------------------|-------|
 | 000 | Default entry point |
-| 000-0EF | Zero page, available for use |
+| 000-0EF | Zero page, available for code or data |
 | 0F0-0F9 | Cell index pointers, auto-rotated by memory mapper |
 | 0F9-0FB | Used to save 6502 registers on interrupt, and restore after interrupt |
 | 0FC-0FF | Random number generator, updated on interrupt |
-| 100-1FF | Stack |
+| 100-1FF | Stack (or risky storage...) |
+| 200-37F | Available for code or data |
 | 380-38F | 16x16 pixel bitmap, red channel |
 | 3A0-3AF | 16x16 pixel bitmap, green channel |
 | 3C0-3CF | 16x16 pixel bitmap, blue channel |
@@ -114,6 +115,10 @@ Notes:
 + Bytes F0-F9 of zero page are special because they can be used to store pointers to cell indices in the memory map. When the memory map is randomly rotated, the top 6 bits of these cells are "rotated" too. Note this includes byte F9 which is used to store PCHI, the current program register (which allows the CPU to safely - or at least somewhat safely - execute code in a neighborhood page).
 + Bytes F9-FB are used to store (in order) PCHI, PCLO, P, A, X, Y, S. So a cell can (for example) "hijack" a neighboring cell's execution state by writing directly to its PC, if that is something a developer wants to do.
 + Addresses 380-3FF are reserved for visualization, by convention, but there is nothing stopping a program using them for code or data.
+
+Currently the visualization code parses the display name as an [Iconify](https://iconify.design/) icon
+(optionally preceded by a CSS color name and then a colon); the bitmap is not used.
+This may change.
 
 ## Vector lookup tables
 
