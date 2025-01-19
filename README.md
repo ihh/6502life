@@ -12,9 +12,23 @@ It is inspired by various recreational coding and artificial-life experiments, i
 
 ## Repository layout
 
+### Virtual machine
+
 JavaScript code to simulate the operating system as described here (the "Board") is in `board/`.
 
-The beginnings of a React-based web app (using Vite) are in `6502life-test-app/` but it's pretty bare-bones at the moment.
+### Web front-end
+
+The beginnings of a React-based web app (using Vite) are in `6502life-test-app/` but it's sub-functional at the moment.
+It doesn't yet have a useful way of rendering a cell (and hence distinguishing one type of cell from another),
+and it doesn't yet allow editing or debugging of 6502 assembly language through the UI.
+
+To run what's there:
+
+    cd 6502life-test-app
+    npm install
+    npm run dev
+
+...and navigate to the URL shown.
 
 The next development priority should be to build out the web app; e.g. better visualization code, a debugger, and so on.
 
