@@ -20,11 +20,18 @@ The next development priority should be to build out the web app; e.g. better vi
 
 # System design
 
+## Design principles
+
 The system is designed using the following principles:
 
 + It should be plausibly implementable in hardware
-+ It has some features designed to make it easy to code cellular automata that are well-studied in physics, chemistry, and biology. Specifically, it enforces translational and rotational invariance, and offers some low-level operations to facilitate diffusion. There is a random number generator, and the interrupt flag is used to allow the programmer to make some operations "atomic", which can mitigate some otherwise glitchy (and not very physical) behavior
++ It has some features designed to make it easy to code cellular automata that are well-studied in physics, chemistry, and biology:
+    + It enforces translational and rotational invariance
+    + There is a random number generator
+    + It offers some low-level operations to facilitate diffusion
+    + The interrupt flag allows the programmer to make routines "atomic", which can mitigate some glitchy (and not very physical) behavior
 + As much as possible, the implementation of these extensions is "aligned" with the ways 6502-based machines do things. For example, symmetries are achieved by memory-mapping; atomicity, using the interrupt flag
++ There is a strong-ish prior against implementing other utility subroutines, unless they reflect basic physics
 
 At the risk of repeating this point: extensions to the typical 6502-based machine architecture are pretty minimalistic. We want this to look like a 6502 machine (or, more precisely, a huge array of 6502s networked in a square grid).
 Beyond that, we do not want to impose too many software-level architectural biases (so e.g. we have avoided adding a big library of subroutines in ROM or via software interrupts, though this could conceivably change).
