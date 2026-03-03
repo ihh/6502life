@@ -5,7 +5,11 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run",
+    "assemble": "node cli/bin/assemble.js",
+    "run-board": "node cli/bin/run.js",
+    "inspect": "node cli/bin/inspect.js",
+    "tui": "node cli/bin/tui.js"
   },
   "author": "",
   "license": "ISC",
@@ -16,5 +20,8 @@
     "gemu-6502": "^0.1.2",
     "mersennetwister": "^0.2.3",
     "mos-6502": "github:SlideeScherz/mossy-cpu"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.18"
   }
 }

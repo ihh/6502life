@@ -57,7 +57,7 @@ class BoardVisualizer {
         const currentTime = this.controller.totalCycles;
         const timeSinceLastMove = currentTime - this.controller.lastMoveTime[cellIdx];
         const timeSinceLastWrite = currentTime - this.controller.lastWriteTime[cellIdx];
-        const h = this.overviewHue;
+        const h = this.overviewConfig.hue;
         const s = this.weightedExponential (this.overviewConfig.saturation, timeSinceLastWrite, timeSinceLastMove);
         const v = this.weightedExponential (this.overviewConfig.value, timeSinceLastWrite, timeSinceLastMove);
         return HSVtoRGB32(h,s,v);
@@ -113,8 +113,8 @@ class BoardVisualizer {
         const cellIdx = this.controller.memory.ijToCellIndex(i,j);
         const byteIdx = this.controller.memory.ijbToByteIndex(i,j,b);
         const currentTime = this.controller.totalCycles;
-        const timeSinceLastMove = currentTime - this.controller.memory.lastMoveTime[cellIdx];
-        const timeSinceLastWrite = currentTime - this.controller.memory.lastWriteTimeForByte[byteIdx];
+        const timeSinceLastMove = currentTime - this.controller.lastMoveTime[cellIdx];
+        const timeSinceLastWrite = currentTime - this.controller.lastWriteTimeForByte[cellIdx][b];
         const h = this.controller.memory.getByte(byteIdx) / 256;
         const s = this.weightedExponential (this.detailConfig.saturation, timeSinceLastWrite, timeSinceLastMove);
         const v = this.weightedExponential (this.detailConfig.value, timeSinceLastWrite, timeSinceLastMove);
@@ -126,7 +126,7 @@ class BoardVisualizer {
         for (let x = 0; x < xPixels; x++)
             for (let y = 0; y < yPixels; y++) {
                 const pos = (y*xPixels + x) * 4;
-                const rgb32 = this.getOverviewPixelRGB(xStart+x,yStart+y);
+                const rgb32 = this.getDetailPixelRGB(xStart+x,yStart+y);
                 buffer[pos] = rgb32 & 0xFF;
                 buffer[pos+1] = (rgb32 >> 8) & 0xFF;
                 buffer[pos+2] = (rgb32 >> 16) & 0xFF;

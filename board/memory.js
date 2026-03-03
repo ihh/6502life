@@ -43,14 +43,15 @@ const transformLookupTable = transformations.map(makeTransformLookupTableRow).co
 // with connectivity persisting only until the next interrupt, at which a single undo is performed if
 // and only if the software interrupt flag (I) is set at the time of the interrupt.
 class BoardMemory {
-    constructor(seed = 42) {
+    constructor(seed = 42, boardSize = 256) {
+        this._B = boardSize;
         this.storage = new Uint8Array (this.storageSize);
         this.mt = new MersenneTwister (seed);
         this.sampleNextMove();
         this.resetUndoHistory();
     }
 
-    get B() { return 256 }  // cells per dimension (X,Y)
+    get B() { return this._B }  // cells per dimension (X,Y)
     get M() { return 1024 }  // memory in bytes per cell
     get N() { return 7 }  // memory-mapped neighorhood size per dimension
     get Nsquared() { return 49 }  // memory-mapped neighorhood size
@@ -100,7 +101,7 @@ class BoardMemory {
                             mt: this.mt.mt,
                             mti: this.mt.mti } }
     set state(s) {
-        this.storage = new TextDecoder().encode(s.storage);
+        this.storage = new TextEncoder().encode(s.storage);
         this.iOrig = s.iOrig;
         this.jOrig = s.jOrig;
         this.orientation = s.orientation;
@@ -219,8 +220,8 @@ class BoardMemory {
         const rv2 = this.mt.int();  // transformed into the log part of the waiting time to the next interrupt
         const rv3 = this.mt.real();  // transformed into the fractional part of the waiting time to the next interrupt
         const rv4 = this.mt.int();  // stored in nextRnd, retrieved and written back to the board by the controller
-        this.iOrig = rv1 & 0xFF;
-        this.jOrig = (rv1 >> 8) & 0xFF;
+        this.iOrig = rv1 % this.B;
+        this.jOrig = ((rv1 >> 8) & 0xFFFF) % this.B;
         this.orientation = (rv1 >> 16) & 3;
         // These constants are tweaked to give an expected cycle count of mean 256*C, min 75*C, max 3136*C where C=cycleMultiplier
         // We want a change of being able to copy an entire 1k cell in an atomic operation, which takes ~19*1024 = 19456 cycles
