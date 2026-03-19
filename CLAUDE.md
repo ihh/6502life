@@ -62,12 +62,24 @@ node cli/bin/inspect.js --state state.json --cell 3,5 --all
 node cli/bin/inspect.js --state state.json --registers --json
 ```
 
-### Interactive TUI
+### Interactive TUI (simple)
 ```bash
 node cli/bin/tui.js --size 16 --randomize
 node cli/bin/tui.js --asm program.asm --cell 0,0
 
 # Controls: arrows=move, space=step, r=run, p=pause, 1-9=speed, +/-=zoom, q=quit
+```
+
+### Terminal Debugger (full)
+```bash
+node cli/bin/terminal.js --size 16 --randomize
+node cli/bin/terminal.js --asm program.asm --cell 0,0
+node cli/bin/terminal.js --preset counter --cell 0,0
+
+# Four-pane layout: memory map, disassembler, command prompt, board minimap
+# Tab to switch focus between panes
+# Type "help" in the command pane for debugger commands
+# Presets: counter, nop, copier, overwriter, tumbler, spreader, painter, knight
 ```
 
 ## Key Architecture

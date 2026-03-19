@@ -9,7 +9,8 @@
     "assemble": "node cli/bin/assemble.js",
     "run-board": "node cli/bin/run.js",
     "inspect": "node cli/bin/inspect.js",
-    "tui": "node cli/bin/tui.js"
+    "tui": "node cli/bin/tui.js",
+    "terminal": "node cli/bin/terminal.js"
   },
   "author": "",
   "license": "ISC",
