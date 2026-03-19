@@ -10,27 +10,41 @@ It is inspired by various recreational coding and artificial-life experiments, i
 + [The BBC Micro Bot](https://mastodon.me.uk/@bbcmicrobot) - one of the great wins of the 6502 corner of the retro-coding hobbyist world
 
 
+## Two ways to explore
+
+The project offers two complementary interfaces that share the same simulation engine:
+
+**Web dashboard** (`app/`) — a React+Vite 2D interface for visual exploration.
+Provides a scrollable overview map, a tiled icon view, per-cell inspection (registers, memory, disassembly, bitmap),
+an inline assembly editor, bulk operations, and save/load. Best for getting a bird's-eye view of the board,
+watching patterns emerge in real time, and editing cell programs interactively.
+
+```bash
+npm install && cd app && npm install && npm run dev
+```
+
+**Terminal debugger** (`cli/`) — a four-pane TUI for low-level debugging.
+Includes a sextant-character memory map, a live disassembler, a command prompt with breakpoints and watches,
+and a board minimap. Best for tracing execution, stepping through instructions, inspecting raw memory,
+and scripting batch runs from the command line.
+
+```bash
+node cli/bin/terminal.js --size 16 --preset spreader --cell 0,0
+```
+
+Use them together: prototype a program in the web editor, then drop into the terminal debugger
+to trace a subtle bug, or run a headless batch with `cli/bin/run.js` and load the saved state
+into either UI for inspection.
+
 ## Repository layout
 
-### Virtual machine
-
-JavaScript code to simulate the operating system as described here (the "Board") is in `board/`.
-
-### Web front-end
-
-The beginnings of a React-based web app (using Vite) are in `6502life-test-app/` but it's sub-functional at the moment.
-It doesn't yet have a useful way of rendering a cell (and hence distinguishing one type of cell from another),
-and it doesn't yet allow editing or debugging of 6502 assembly language through the UI.
-
-To run what's there:
-
-    cd 6502life-test-app
-    npm install
-    npm run dev
-
-...and navigate to the URL shown.
-
-The next development priority should be to build out the web app; e.g. better visualization code, a debugger, and so on.
+| Directory | Purpose |
+|-----------|---------|
+| `engine/` | Shared engine layer (board, assembler, formatting) used by both interfaces |
+| `board/`  | Core simulation: memory management, CPU controller, visualizer |
+| `app/`    | React+Vite web dashboard |
+| `cli/`    | Command-line tools: assembler, runner, inspector, TUI, terminal debugger |
+| `tex/`    | LaTeX documentation |
 
 # System design
 
