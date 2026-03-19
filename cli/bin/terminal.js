@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
 import { readFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { parseArgs, getFlag, getIntFlag, getCellFlag } from '../lib/args.js';
 import { createBoard, writeCellBytes } from '../../engine/board.js';
 import { assemble } from '../../engine/assembler.js';
 import { TerminalApp } from '../lib/terminal/app.js';
 import { getPreset } from '../lib/terminal/presets.js';
+import { ProbeServer } from '../lib/probe/server.js';
 
 const { flags } = parseArgs();
 
@@ -17,6 +19,7 @@ const loadFile = getFlag(flags, 'load');
 const presetName = getFlag(flags, 'preset');
 const [cellI, cellJ] = getCellFlag(flags, 'cell', 0, 0);
 const randomize = 'randomize' in flags;
+const listenFlag = getFlag(flags, 'listen');
 
 const { controller, visualizer } = createBoard(size, seed);
 
@@ -69,4 +72,22 @@ const app = new TerminalApp(controller, visualizer);
 app.memoryPane.setCenter(cellI, cellJ);
 app.disasmPane.setCell(cellI, cellJ);
 app.minimapPane.setHighlight(cellI, cellJ);
+
+// Start probe socket server if --listen
+if ('listen' in flags) {
+    const socketPath = listenFlag || `${tmpdir()}/6502life-${process.pid}.sock`;
+    const probeServer = new ProbeServer(app);
+    app.probeServer = probeServer;
+    probeServer.listen(socketPath);
+    probeServer.wrapTick();
+    process.on('exit', () => probeServer.close());
+    process.on('SIGINT', () => { probeServer.close(); process.exit(0); });
+    // Show socket path in command pane after start
+    const origStart = app.start.bind(app);
+    app.start = async function() {
+        await origStart();
+        app.commandPane.print(`Probe socket: ${socketPath}`);
+    };
+}
+
 await app.start();
