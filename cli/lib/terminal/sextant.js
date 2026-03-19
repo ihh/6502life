@@ -73,4 +73,50 @@ export const BORDER_COLOR = [80, 80, 120];
 export const CURSOR_COLOR_ON = [255, 255, 0];
 export const CURSOR_COLOR_OFF = [180, 180, 0];
 
+// --- ASCII byte rendering palette ---
+// Configurable color palette for ASCII byte display mode.
+// Low bytes (0-127) use: normal, zero, control colors.
+// High bytes (128-255) mask out bit 7 and use: highNormal, highZero, highControl.
+export const DEFAULT_ASCII_PALETTE = {
+    normal:     [255, 255, 255], // white — printable ASCII (33-126)
+    zero:       [100, 100, 100], // gray  — space (32), shown as underscore
+    control:    [255, 80,  80],  // red   — control chars (1-31) and DEL (127)
+    highNormal: [255, 165, 0],   // orange — high-bit printable (161-254 → 33-126)
+    highZero:   [255, 255, 100], // yellow — high-bit space (160 → 32)
+    highControl:[255, 130, 180], // pink   — high-bit control (129-159, 255)
+    bgDefault:  [0,   0,   0],   // black  — normal background
+    bgBorder:   [50,  90,  50],  // light green — cell boundary background
+    bgPC:       [0,   0,   100], // dark blue — neighbor cell PC background
+    bgCenterPC: [0,   140, 140], // cyan — central cell PC background
+};
+
+// Convert a byte to { char, fg } using the ASCII palette rules.
+// char: the character to display
+// fg: [r,g,b] foreground color
+export function byteToAsciiChar(byte, palette = DEFAULT_ASCII_PALETTE) {
+    const high = byte >= 128;
+    const low = high ? byte & 0x7F : byte;
+
+    let char, fg;
+    if (low === 0) {
+        char = ' ';
+        fg = high ? palette.highNormal : palette.normal; // won't be visible anyway
+    } else if (low >= 1 && low <= 31) {
+        char = String.fromCharCode(low + 64);
+        fg = high ? palette.highControl : palette.control;
+    } else if (low === 32) {
+        char = '_';
+        fg = high ? palette.highZero : palette.zero;
+    } else if (low >= 33 && low <= 126) {
+        char = String.fromCharCode(low);
+        fg = high ? palette.highNormal : palette.normal;
+    } else {
+        // 127 (DEL)
+        char = '?';
+        fg = high ? palette.highControl : palette.control;
+    }
+
+    return { char, fg };
+}
+
 export { SEXTANT };

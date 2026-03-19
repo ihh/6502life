@@ -24,7 +24,7 @@ export class TerminalApp {
         this.layout = new Layout();
 
         // Panes
-        this.memoryPane = new MemoryPane(controller.memory);
+        this.memoryPane = new MemoryPane(controller.memory, controller);
         this.disasmPane = new DisasmPane(controller);
         this.commandPane = new CommandPane();
         this.minimapPane = new MinimapPane(controller, visualizer);
@@ -240,6 +240,7 @@ export class TerminalApp {
     step() {
         this.controller.runToNextInterrupt();
         this.totalInterrupts++;
+        this.memoryPane.invalidatePC();
         this.needsRender = true;
     }
 
@@ -251,6 +252,7 @@ export class TerminalApp {
                 this.controller.runToNextInterrupt();
                 this.totalInterrupts++;
             }
+            this.memoryPane.invalidatePC();
             this.needsRender = true;
         }
 
@@ -259,6 +261,10 @@ export class TerminalApp {
             this.render();
             this.lastRender = now;
             this.needsRender = false;
+        } else if (!this.needsRender) {
+            // Cursor flash: partial redraw without full screen render
+            const flashOut = this.memoryPane.renderCursorFlash(this.layout.memory);
+            if (flashOut) process.stdout.write(flashOut);
         }
 
         setImmediate(() => this.tick());
