@@ -126,10 +126,10 @@ export class TerminalApp {
         if (key.name === 'arrow') {
             const step = key.shift ? 8 : 1;
             if (key.ctrl) {
-                // Ctrl+arrow: move between cells
-                const dx = key.dir === 'right' ? 1 : key.dir === 'left' ? -1 : 0;
-                const dy = key.dir === 'down' ? 1 : key.dir === 'up' ? -1 : 0;
-                this.memoryPane.moveCellFocus(dx, dy);
+                // Ctrl+arrow: move board cell focus (memory pane + disasm + minimap)
+                const di = key.dir === 'down' ? 1 : key.dir === 'up' ? -1 : 0;
+                const dj = key.dir === 'right' ? 1 : key.dir === 'left' ? -1 : 0;
+                this.moveBoardFocus(di, dj);
             } else {
                 const dx = key.dir === 'right' ? step : key.dir === 'left' ? -step : 0;
                 const dy = key.dir === 'down' ? step : key.dir === 'up' ? -step : 0;
@@ -143,6 +143,9 @@ export class TerminalApp {
             switch (key.char) {
                 case ' ':
                     this.toggleRun();
+                    break;
+                case 'n':
+                    this.step();
                     break;
                 case 'd':
                     this.disasmPane.toggleSync();
@@ -168,11 +171,14 @@ export class TerminalApp {
 
         if (key.name === 'char') {
             switch (key.char) {
-                case 'd':
-                    this.disasmPane.toggleSync();
-                    break;
                 case ' ':
                     this.toggleRun();
+                    break;
+                case 'n':
+                    this.step();
+                    break;
+                case 'd':
+                    this.disasmPane.toggleSync();
                     break;
             }
         }
@@ -185,14 +191,10 @@ export class TerminalApp {
 
     handleMinimapInput(key) {
         if (key.name === 'arrow') {
-            // Arrow keys move the board cell focus
-            const B = this.controller.memory.B;
+            // Arrow keys move the board cell focus — updates memory pane, disasm, and minimap
             const di = key.dir === 'down' ? 1 : key.dir === 'up' ? -1 : 0;
             const dj = key.dir === 'right' ? 1 : key.dir === 'left' ? -1 : 0;
-            const ci = this.disasmPane.cellI;
-            const cj = this.disasmPane.cellJ;
-            this.disasmPane.setCell((ci + di + B) % B, (cj + dj + B) % B);
-            this.minimapPane.setHighlight(this.disasmPane.cellI, this.disasmPane.cellJ);
+            this.moveBoardFocus(di, dj);
             return;
         }
 
@@ -204,11 +206,24 @@ export class TerminalApp {
                 case ' ':
                     this.toggleRun();
                     break;
+                case 'n':
+                    this.step();
+                    break;
             }
         }
     }
 
-    // Keep disasm pane's cell in sync with memory cursor
+    // Move which board cell all panes are focused on
+    moveBoardFocus(di, dj) {
+        const B = this.controller.memory.B;
+        this.memoryPane.moveCenter(di, dj);
+        const ci = this.memoryPane.centerI;
+        const cj = this.memoryPane.centerJ;
+        this.disasmPane.setCell(ci, cj);
+        this.minimapPane.setHighlight(ci, cj);
+    }
+
+    // Keep disasm pane's cell in sync with memory cursor position
     syncCursorToDisasm() {
         const info = this.memoryPane.getCursorInfo();
         if (info.boardI >= 0 && info.boardJ >= 0) {
@@ -285,25 +300,39 @@ export class TerminalApp {
     renderStatusInfo() {
         let out = '';
         const row = this.layout.hDivRow;
-        const col = this.layout.leftW - 55; // position before the vertical divider
 
         // Cursor info
         const info = this.memoryPane.getCursorInfo();
-        const cursorStr = info.addr >= 0
+        const addrStr = info.addr >= 0
             ? `$${info.addr.toString(16).toUpperCase().padStart(4, '0')}`
             : '----';
+        const byteStr = info.byteOff >= 0
+            ? `$${info.byteOff.toString(16).toUpperCase().padStart(3, '0')}`
+            : '---';
         const cellStr = info.boardI >= 0 ? `(${info.boardI},${info.boardJ})` : '---';
+        const neighStr = info.cellIdx >= 0 ? `#${info.cellIdx}` : '-';
+
+        // Byte value at cursor
+        let valStr = '';
+        if (info.addr >= 0) {
+            const val = this.controller.memory.read(info.addr);
+            valStr = `=$${val.toString(16).toUpperCase().padStart(2, '0')}`;
+        }
 
         // Simulation status
         const status = this.running
             ? fgRGB(0, 255, 0) + bold + 'RUN' + reset
-            : dim + 'PAUSE' + reset;
+            : dim + 'PAU' + reset;
 
-        const statusText = ` ${status} ${dim}int:${reset}${this.totalInterrupts} ${dim}spd:${reset}${this.speed} ${dim}cur:${reset}${cursorStr} ${dim}cell:${reset}${cellStr} `;
+        const statusText = ` ${status} `
+            + `${dim}addr:${reset}${addrStr}${valStr} `
+            + `${dim}cell:${reset}${cellStr} `
+            + `${dim}off:${reset}${byteStr} `
+            + `${dim}n:${reset}${neighStr} `
+            + `${dim}int:${reset}${this.totalInterrupts} `
+            + `${dim}spd:${reset}${this.speed} `;
 
-        if (col > 0 && col + statusText.length < this.layout.termW) {
-            out += moveTo(row, Math.max(1, col)) + statusText;
-        }
+        out += moveTo(row, 1) + statusText;
 
         return out;
     }

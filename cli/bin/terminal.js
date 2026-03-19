@@ -66,6 +66,7 @@ if (presetName) {
 }
 
 const app = new TerminalApp(controller, visualizer);
+app.memoryPane.setCenter(cellI, cellJ);
 app.disasmPane.setCell(cellI, cellJ);
 app.minimapPane.setHighlight(cellI, cellJ);
 await app.start();

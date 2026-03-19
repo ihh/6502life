@@ -3,6 +3,10 @@
 // Each terminal char = 1 byte address
 // Each cell = 32x32 terminal chars (1024 bytes in row-major order)
 // 7x7 cells laid out in spiral order → 224x224 total grid
+//
+// The pane has its own center cell (centerI, centerJ) which determines
+// which board cell's 7x7 neighborhood is displayed. This is independent
+// of the scheduler's iOrig/jOrig and is controlled by the user.
 
 import { moveTo, ESC, reset, dim, bold } from '../ansi.js';
 import { byteToSextant, byteColor, BORDER_COLOR, CURSOR_COLOR_ON, CURSOR_COLOR_OFF, hsvToRGB } from './sextant.js';
@@ -35,8 +39,6 @@ cellToGrid.forEach(([gx, gy], idx) => {
 });
 
 // Convert a byte address in the memory-mapped space to (termCol, termRow) in the 224x224 grid
-// Address format: top 6 bits = cell index, bottom 10 bits = byte offset
-// Within a cell: byte offset → (byteX, byteY) in 32x32 row-major
 function addrToGrid(addr) {
     if (addr < 0 || addr >= 49 * 1024) return null;
     const cellIdx = addr >> 10;
@@ -69,8 +71,11 @@ function gridToAddr(col, row) {
 export class MemoryPane {
     constructor(memory) {
         this.memory = memory;
+        // The board cell whose 7x7 neighborhood we're displaying
+        this.centerI = 0;
+        this.centerJ = 0;
         // Viewport in the 224x224 grid
-        this.scrollX = 3 * 32; // start centered on origin cell (grid pos 3,3)
+        this.scrollX = 3 * 32; // start centered on the center cell (grid pos 3,3)
         this.scrollY = 3 * 32;
         // Cursor position in the grid
         this.cursorCol = 3 * 32;
@@ -82,6 +87,19 @@ export class MemoryPane {
 
     get cursorAddr() {
         return gridToAddr(this.cursorCol, this.cursorRow);
+    }
+
+    // Set which board cell is the center of the displayed neighborhood
+    setCenter(i, j) {
+        this.centerI = ((i % this.memory.B) + this.memory.B) % this.memory.B;
+        this.centerJ = ((j % this.memory.B) + this.memory.B) % this.memory.B;
+    }
+
+    // Move the center cell (and keep cursor at same relative position within grid)
+    moveCenter(di, dj) {
+        const B = this.memory.B;
+        this.centerI = (this.centerI + di + B) % B;
+        this.centerJ = (this.centerJ + dj + B) % B;
     }
 
     // Move cursor by delta
@@ -108,14 +126,9 @@ export class MemoryPane {
     }
 
     // Move the board-level cell focus (ctrl+arrows equivalent)
-    // This changes which board cell's VM we're inspecting
+    // Moves the center cell, keeping cursor at same grid position
     moveCellFocus(dx, dy) {
-        const gx = Math.floor(this.cursorCol / 32);
-        const gy = Math.floor(this.cursorRow / 32);
-        const newGx = Math.max(0, Math.min(6, gx + dx));
-        const newGy = Math.max(0, Math.min(6, gy + dy));
-        this.cursorCol = newGx * 32 + (this.cursorCol % 32);
-        this.cursorRow = newGy * 32 + (this.cursorRow % 32);
+        this.moveCenter(dx, dy);
     }
 
     // Ensure cursor is visible by scrolling viewport
@@ -135,6 +148,21 @@ export class MemoryPane {
         }
     }
 
+    // Read a byte from storage for a given grid position
+    // Maps grid → cell index → absolute board coords → storage byte
+    readByteAt(gridCol, gridRow) {
+        const addr = gridToAddr(gridCol, gridRow);
+        if (addr < 0) return 0;
+        const cellIdx = addr >> 10;
+        const byteOff = addr & 0x3FF;
+        const [dx, dy] = spiralVec[cellIdx];
+        const B = this.memory.B;
+        const i = (this.centerI + dx + B) % B;
+        const j = (this.centerJ + dy + B) % B;
+        const storageIdx = this.memory.ijbToByteIndex(i, j, byteOff);
+        return this.memory.getByte(storageIdx);
+    }
+
     // Get info about what the cursor is pointing at
     getCursorInfo() {
         const addr = this.cursorAddr;
@@ -143,12 +171,13 @@ export class MemoryPane {
         const cellIdx = gridToCell[gy * 7 + gx];
         const byteOff = addr >= 0 ? addr & 0x3FF : -1;
 
-        // Map cell index to absolute board coords
+        // Map cell index to absolute board coords using our center cell
         let boardI = -1, boardJ = -1;
         if (cellIdx >= 0) {
             const [dx, dy] = spiralVec[cellIdx];
-            boardI = (this.memory.iOrig + dx + this.memory.B) % this.memory.B;
-            boardJ = (this.memory.jOrig + dy + this.memory.B) % this.memory.B;
+            const B = this.memory.B;
+            boardI = (this.centerI + dx + B) % B;
+            boardJ = (this.centerJ + dy + B) % B;
         }
 
         return { addr, cellIdx, byteOff, boardI, boardJ, gx, gy };
@@ -164,7 +193,8 @@ export class MemoryPane {
         this.ensureCursorVisible(rect);
 
         let out = '';
-        const { fgRGB, bgRGB } = getColorFns();
+        const fg = (r, g, b) => `\x1b[38;2;${r};${g};${b}m`;
+        const bg = (r, g, b) => `\x1b[48;2;${r};${g};${b}m`;
 
         for (let screenRow = 0; screenRow < rect.height; screenRow++) {
             out += moveTo(rect.row + screenRow, rect.col);
@@ -179,38 +209,31 @@ export class MemoryPane {
                 }
 
                 const addr = gridToAddr(gridCol, gridRow);
-                const isCursor = (gridCol === this.cursorCol && gridRow === this.cursorRow);
-                const isOnCellBorderX = (gridCol % 32 === 31);
-                const isOnCellBorderY = (gridRow % 32 === 31);
-
                 if (addr < 0) {
                     out += ' ';
                     continue;
                 }
 
-                const byte = this.memory.read(addr);
+                const isCursor = (gridCol === this.cursorCol && gridRow === this.cursorRow);
+                const isOnCellBorderX = (gridCol % 32 === 31);
+                const isOnCellBorderY = (gridRow % 32 === 31);
+
+                const byte = this.readByteAt(gridCol, gridRow);
                 const ch = byteToSextant(byte);
                 const [cr, cg, cb] = byteColor(byte);
 
                 if (isCursor && this.flashOn) {
-                    out += fgRGB(0, 0, 0) + bgRGB(255, 255, 0) + ch + reset;
+                    out += fg(0, 0, 0) + bg(255, 255, 0) + ch + reset;
                 } else if (isOnCellBorderX || isOnCellBorderY) {
-                    out += fgRGB(cr, cg, cb) + bgRGB(...BORDER_COLOR) + ch + reset;
+                    out += fg(cr, cg, cb) + bg(...BORDER_COLOR) + ch + reset;
                 } else {
-                    out += fgRGB(cr, cg, cb) + ch + reset;
+                    out += fg(cr, cg, cb) + ch + reset;
                 }
             }
         }
 
         return out;
     }
-}
-
-function getColorFns() {
-    return {
-        fgRGB: (r, g, b) => `\x1b[38;2;${r};${g};${b}m`,
-        bgRGB: (r, g, b) => `\x1b[48;2;${r};${g};${b}m`,
-    };
 }
 
 export { addrToGrid, gridToAddr, cellToGrid, gridToCell, spiralVec };

@@ -65,6 +65,7 @@ export class CommandExecutor {
                     j = parseInt(args[1]);
                 }
                 if (isNaN(i) || isNaN(j)) return 'Usage: cell <i>,<j>';
+                this.app.memoryPane.setCenter(i, j);
                 this.app.disasmPane.setCell(i, j);
                 this.app.minimapPane.setHighlight(i, j);
                 return `Inspecting cell (${i},${j})`;
