@@ -103,31 +103,37 @@ BRK
 
     spreader: {
         name: 'Spreader',
-        desc: 'Copies self to a random neighbor using RNG at $FC',
-        source: `; Spreader: uses RNG at $FC to pick a target, then copies self there
-; Read RNG byte
+        desc: 'Copies self to a random cardinal neighbor using RNG',
+        source: `; Random spreader: copies self to a random cardinal neighbor
+; Uses RNG byte at $FC to select N/E/S/W (cells 1-4)
+; Target cell page 0 high byte: cell 1=$04, 2=$08, 3=$0C, 4=$10
+; Self-modifying code patches the STA high bytes in the copy loops
 LDA $FC
-AND #$03   ; mask to 0-3, giving cells 1-4 (N/E/S/W) when +1
+AND #$03
 CLC
-ADC #$01   ; now 1-4
-TAX        ; X = source cell (self = 0), but for page copy: BRK 3 copies page X to Y
-; Copy page 0 of self to page 0 of target
-; BRK operand for copy: 3
-; For BRK 3, X=source page, Y=dest page
-; Self page 0 = page 0, target cell N page 0 = page N*4
-; Actually BRK 3 copies page X to page Y where pages are 256-byte blocks
-; Self code is in pages 0-1 (first 512 bytes of cell 0)
-; Target cell 1 (N) pages are 4-7
-; So copy page 0 to page 4*target
-TXA
-ASL        ; *2
-ASL        ; *4 = target page 0
-TAY
-LDX #$01   ; source = page 0... wait, page 0 is first 256 bytes = page index 0
-; BRK operand 3 copies page X→Y
-; Nope, this is getting complicated with page indexing, simplify:
-; Just do a byte-by-byte copy like copier
-LDX #$01
+ADC #$01        ; A = 1..4
+ASL
+ASL             ; A = 4,8,12,16 = high byte of target page 0
+STA $17         ; patch high byte of STA at @st0 (offset $15)
+CLC
+ADC #$01        ; high byte of page 1
+STA $20         ; patch high byte of STA at @st1 (offset $1E)
+; Copy page 0 (bytes 1-255)
+LDY #$01
+@lp0:
+LDA $0201,Y    ; read self page 0
+@st0:
+STA $0401,Y    ; target page 0 (high byte at $12 is patched)
+INY
+BNE @lp0
+; Copy page 1 (bytes 1-255)
+@lp1:
+LDA $0101,Y    ; read self page 1
+@st1:
+STA $0501,Y    ; target page 1 (high byte at $1D is patched)
+INY
+BNE @lp1
+; Yield to scheduler
 BRK
 .byte $01`,
     },

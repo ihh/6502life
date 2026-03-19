@@ -9,7 +9,8 @@ A virtual 256x256 grid of interconnected 6502 CPUs simulating cellular automata.
 - `app/` — React+Vite web dashboard for running and inspecting the board
 - `cli/` — Command-line tools for assembling, running, inspecting, and visualizing the board
 - `6502life-test-app/` — Legacy prototype UI (broken, superseded by `app/`)
-- `tex/` — LaTeX documentation
+- `tex/` — LaTeX documentation (run `make` in tex/ to build PDF)
+- `doc/` — Built PDFs and tutorials
 
 ## How to Run
 
@@ -76,11 +77,31 @@ node cli/bin/terminal.js --size 16 --randomize
 node cli/bin/terminal.js --asm program.asm --cell 0,0
 node cli/bin/terminal.js --preset counter --cell 0,0
 
+# With probe socket for external CLI tools:
+node cli/bin/terminal.js --size 16 --preset copier --cell 0,0 --listen
+
 # Four-pane layout: memory map, disassembler, command prompt, board minimap
 # Tab to switch focus between panes
 # Type "help" in the command pane for debugger commands
-# Presets: counter, nop, copier, overwriter, tumbler, spreader, painter, knight
+# Presets: counter, nop, copier, overwriter, tumbler, spreader, painter, knight, crawler
 ```
+
+### CLI Probe (connects to running debugger)
+```bash
+# Requires terminal.js running with --listen
+node cli/bin/probe.js status                    # board status
+node cli/bin/probe.js fingerprint 0,0           # MinHash cell fingerprint
+node cli/bin/probe.js scan                      # board-wide fingerprint table
+node cli/bin/probe.js diff 0,0 1,0              # byte-level diff
+node cli/bin/probe.js tag 0,0 origin            # tag a cell
+node cli/bin/probe.js track 0,0                 # stream lineage events
+node cli/bin/probe.js census --interval 500     # periodic census stream
+node cli/bin/probe.js subscribe writes          # raw write event stream
+```
+
+### Tutorial
+See `doc/tutorial-tracking-replicators.md` for a walkthrough of writing,
+loading, and tracking self-replicating programs.
 
 ## Key Architecture
 
