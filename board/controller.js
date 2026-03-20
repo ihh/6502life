@@ -19,6 +19,9 @@ class BoardController {
             pCellMask: 0,
             pCellNoise: 0,
         }, noiseParams);
+        // Hook for BRK copy/swap events. Called with (type, src, dest) where
+        // type is 'swap' or 'copy', src/dest are neighborhood cell indices.
+        this.onBrkEvent = null;
         this.newSfotty();
         this.readRegisters();
         this.writeRng();
@@ -229,14 +232,17 @@ class BoardController {
                         const nSrcCells = 5;
                         if (operand > 0 && operand < nSrcCells * nDestCells) {
                             // Operand 1..244: swap cells (src = floor(op/49), dest = op%49)
-                            this.commitMove (Math.floor(operand / nDestCells),
-                                             operand % nDestCells);
+                            const src = Math.floor(operand / nDestCells);
+                            const dest = operand % nDestCells;
+                            this.commitMove (src, dest);
+                            if (this.onBrkEvent) this.onBrkEvent('swap', src, dest);
                         } else if (operand >= 245 && operand <= 252) {
                             // Operand 245..252: noisy copy origin → cell (operand - 244)
                             const dest = operand - 244;
                             this.copyCellWithNoise (dest);
                             this.lastMoveTime[0] = this.totalCycles;
                             this.lastMoveTime[dest] = this.totalCycles;
+                            if (this.onBrkEvent) this.onBrkEvent('copy', 0, dest);
                         }
                     }
                     this.memory.resetUndoHistory();

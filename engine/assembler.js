@@ -53,13 +53,125 @@ export function hexToBytes(hex) {
     return bytes;
 }
 
+// Fix addressing mode bugs in the upstream assembler:
+// The assembler classifies any address < $100 as zero-page, but zero_page,Y
+// only exists for LDX/STX. For all other instructions with ,Y the assembler
+// throws "Invalid addressing mode". We fix this by replacing zero-page ,Y
+// addresses with a placeholder absolute address ($0100 + original), assembling
+// to get the correct absolute_y opcode, then patching the address bytes back.
+// The fixup is done in a preprocessing pass using sentinel addresses.
+const ZP_Y_SENTINEL = 0x0100;  // add this to force absolute mode
+function fixAddressingModes(source) {
+    // For ,Y addressing: LDX/STX DO have zero_page,Y so leave them alone.
+    // For everything else with $XX,Y where XX fits in a byte, add sentinel.
+    const sentinels = [];
+    const fixed = source.replace(
+        /(\b(?:LDA|STA|ADC|SBC|AND|ORA|EOR|CMP)\s+\$)([0-9a-fA-F]{1,2})(,\s*Y\b)/gi,
+        (match, prefix, addr, suffix) => {
+            const orig = parseInt(addr, 16);
+            const newAddr = orig + ZP_Y_SENTINEL;
+            sentinels.push({ orig, newAddr });
+            return `${prefix}${newAddr.toString(16).padStart(4, '0')}${suffix}`;
+        }
+    );
+    return { source: fixed, sentinels };
+}
+
+// Resolve label arithmetic expressions: @label+N, @label-N
+// Two-pass: first collect label addresses, then substitute.
+// Only handles local labels (@name) with constant offsets.
+function resolveExpressions(source) {
+    const lines = source.split('\n');
+
+    // Pass 1: find .org base and collect label positions
+    let org = 0;
+    let pc = 0;
+    const labels = {};
+    const orgMatch = source.match(/\.org\s+\$([0-9a-fA-F]+)/i);
+    if (orgMatch) org = parseInt(orgMatch[1], 16);
+    pc = org;
+
+    // Rough size estimation for each instruction line (for label resolution)
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith(';')) continue;
+        if (trimmed.match(/^\.org\s/i)) { pc = org; continue; }
+        const labelMatch = trimmed.match(/^(@\w+):/);
+        if (labelMatch) {
+            labels[labelMatch[1]] = pc;
+            // Label might be on the same line as an instruction
+            const rest = trimmed.slice(labelMatch[0].length).trim();
+            if (rest && !rest.startsWith(';')) pc += estimateInsnSize(rest);
+            continue;
+        }
+        if (trimmed.startsWith('.byte')) {
+            // Count comma-separated values
+            pc += trimmed.replace(/^\.byte\s+/i, '').split(',').length;
+            continue;
+        }
+        pc += estimateInsnSize(trimmed);
+    }
+
+    // Pass 2: replace @label+N and @label-N with computed addresses
+    const result = lines.map(line => {
+        return line.replace(/@(\w+)\s*([+-])\s*(\d+)/g, (match, name, op, offset) => {
+            const label = '@' + name;
+            if (!(label in labels)) return match; // leave unresolved
+            const addr = op === '+' ? labels[label] + parseInt(offset) : labels[label] - parseInt(offset);
+            return '$' + addr.toString(16).padStart(4, '0');
+        });
+    });
+    return result.join('\n');
+}
+
+function estimateInsnSize(line) {
+    const trimmed = line.trim().replace(/;.*$/, '').trim();
+    if (!trimmed) return 0;
+    // Implied/accumulator: 1 byte
+    if (trimmed.match(/^(NOP|CLC|SEC|CLI|SEI|CLV|CLD|SED|TAX|TAY|TXA|TYA|TSX|TXS|PHA|PLA|PHP|PLP|INX|INY|DEX|DEY|RTS|RTI|ASL|LSR|ROL|ROR)\s*$/i)) return 1;
+    // Branches: 2 bytes
+    if (trimmed.match(/^(BCC|BCS|BEQ|BNE|BMI|BPL|BVC|BVS)\s/i)) return 2;
+    // Immediate: 2 bytes
+    if (trimmed.match(/#/)) return 2;
+    // Zero page (no comma or with ,X): 2 bytes; but if 4-digit address: 3 bytes
+    if (trimmed.match(/\$[0-9a-fA-F]{3,4}/i)) return 3;
+    if (trimmed.match(/\$[0-9a-fA-F]{1,2}[,\s]/i) || trimmed.match(/\$[0-9a-fA-F]{1,2}$/i)) return 2;
+    // JMP/JSR: 3 bytes
+    if (trimmed.match(/^(JMP|JSR)\s/i)) return 3;
+    // BRK: 1 byte
+    if (trimmed.match(/^BRK/i)) return 1;
+    return 2; // default guess
+}
+
 export async function assemble(source) {
     const Asm = await loadAssembler();
     if (!Asm) {
         throw new Error('Assembler not available');
     }
-    const hex = Asm.toHexString(source);
-    return hexToBytes(hex);
+    const resolved = resolveExpressions(source);
+    const { source: fixed, sentinels } = fixAddressingModes(resolved);
+    const hex = Asm.toHexString(fixed);
+    const bytes = hexToBytes(hex);
+
+    // Patch sentinel addresses back to the original values.
+    // The absolute,Y instruction is 3 bytes: opcode, lo, hi.
+    // We need to find each sentinel address in the bytes and replace it.
+    if (sentinels.length > 0) {
+        for (let i = 0; i < bytes.length - 2; i++) {
+            const lo = bytes[i + 1];
+            const hi = bytes[i + 2];
+            const addr = (hi << 8) | lo;
+            for (const s of sentinels) {
+                if (addr === s.newAddr) {
+                    bytes[i + 1] = s.orig & 0xFF;
+                    bytes[i + 2] = 0x00;
+                    break;
+                }
+            }
+        }
+    }
+
+    return bytes;
 }
 
 export async function assembleTo(source, memory, cellI, cellJ, startByte = 0) {

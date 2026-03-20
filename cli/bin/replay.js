@@ -91,6 +91,48 @@ const origCommitWrites = controller.commitWrites.bind(controller);
 const mem = controller.memory;
 const origUndoWrites = mem.undoWrites.bind(mem);
 
+// Hook BRK copy/swap events directly from the controller
+controller.onBrkEvent = (type, src, dest) => {
+    const srcCoords = mem.addrToCellCoords(src * mem.M);
+    const dstCoords = mem.addrToCellCoords(dest * mem.M);
+    const event = {
+        channel: type === 'copy' ? 'brk-copy' : 'brk-swap',
+        time: controller.totalCycles,
+        interrupt: tracker.interruptCount,
+        origin: [mem.iOrig, mem.jOrig],
+        src: [srcCoords[0], srcCoords[1]],
+        dst: [dstCoords[0], dstCoords[1]],
+    };
+    logEvent(event);
+    // For copy events, also emit a lineage event if the source is tracked
+    if (type === 'copy') {
+        const srcIdx = mem.ijToCellIndex(srcCoords[0], srcCoords[1]);
+        if (tracker.trackedCells.has(srcIdx)) {
+            const lineageEvent = {
+                channel: 'lineage',
+                time: controller.totalCycles,
+                interrupt: tracker.interruptCount,
+                event: 'copied_to',
+                src: [srcCoords[0], srcCoords[1]],
+                dst: [dstCoords[0], dstCoords[1]],
+                similarity: 1.0,  // BRK copy is a full cell copy
+                bytesWritten: mem.M,
+                mechanism: 'brk-noisy-copy',
+            };
+            logEvent(lineageEvent);
+            // Auto-track the destination
+            const dstIdx = mem.ijToCellIndex(dstCoords[0], dstCoords[1]);
+            tracker.trackedCells.add(dstIdx);
+            // Propagate tags
+            const srcTags = tracker.tags.get(srcIdx);
+            if (srcTags && srcTags.size > 0) {
+                if (!tracker.tags.has(dstIdx)) tracker.tags.set(dstIdx, new Set());
+                for (const tag of srcTags) tracker.tags.get(dstIdx).add(tag);
+            }
+        }
+    }
+};
+
 for (let interrupt = 0; interrupt < targetInterrupts; interrupt++) {
     let capturedHistory = null;
     let wasAtomic = false;

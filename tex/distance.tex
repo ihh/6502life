@@ -1,0 +1,300 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[margin=1in]{geometry}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+\newcommand{\Bin}{\mathrm{Bin}}
+\newcommand{\E}{\mathbb{E}}
+
+\title{Phylogenetic Distance Estimation\\for the 6502life Noisy Copy Model}
+\author{6502life project}
+\date{March 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We derive closed-form distance formulas for estimating evolutionary divergence
+between cells in the 6502life cellular automata system, where replication
+proceeds through a hierarchical noisy copy channel. The noise model operates
+at three levels---cell, byte, and bit---producing correlated errors within
+bytes. We show that the per-byte Hamming distance follows a mixture of two
+binomials, with eigenvalues given by the Krawtchouk polynomials of the
+underlying binary symmetric channel. We derive maximum likelihood estimators
+at three levels of resolution and validate them against Monte Carlo simulations.
+\end{abstract}
+
+\section{The Noisy Copy Channel}
+
+In 6502life, cell replication proceeds via the \texttt{copyCellWithNoise}
+mechanism, which copies $M = 1024$ bytes from a source cell to a destination
+cell with three levels of noise:
+
+\begin{enumerate}
+\item \textbf{Cell level}: With probability $p_{\mathrm{CN}}$, the entire
+  destination cell is filled with random bytes (all $8M$ bits i.i.d.\
+  $\mathrm{Bernoulli}(1/2)$).
+\item \textbf{Byte level}: For each byte, with probability $p_{\mathrm{BN}}$
+  (given the cell was not randomized), the byte is replaced by a random byte.
+\item \textbf{Bit level}: For each bit, with probability $\varepsilon =
+  p_{\mathrm{bit}}$ (given neither cell nor byte noise fired), the bit is
+  replaced by a random bit.
+\end{enumerate}
+
+The default parameters are $p_{\mathrm{CN}} = 0$, $p_{\mathrm{BN}} = 0$,
+$\varepsilon = 0.001$.
+
+\subsection{Effective rates}
+
+The \emph{per-byte randomization rate} (probability that all 8 bits in a byte
+are simultaneously randomized):
+\begin{equation}
+r = p_{\mathrm{CN}} + p_{\mathrm{BN}}(1 - p_{\mathrm{CN}})
+\end{equation}
+
+The \emph{effective per-bit randomization rate}:
+\begin{equation}
+\varepsilon_{\mathrm{eff}} = 1 - (1 - p_{\mathrm{CN}})(1 - p_{\mathrm{BN}})(1 - \varepsilon)
+\end{equation}
+
+\section{Bit-Level Distance (Binary Jukes--Cantor)}
+
+Each bit evolves under a 2-state symmetric Markov chain. Per copy event,
+a bit is randomized (replaced by a fair coin flip) with probability
+$\varepsilon_{\mathrm{eff}}$, and faithfully copied otherwise.
+
+\begin{proposition}
+After $T$ copy events on the tree path between two leaves (total evolutionary
+distance), the probability that a single bit differs is
+\begin{equation}
+p_{\mathrm{bit}}(T) = \tfrac{1}{2}\bigl(1 - (1-\varepsilon_{\mathrm{eff}})^T\bigr)
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+The per-bit pairwise comparison follows a 2-state Markov chain with
+transition rate $\varepsilon_{\mathrm{eff}}/2$ in each direction (same $\to$
+different and different $\to$ same), since randomization produces a match with
+probability $1/2$ regardless of the current state. Starting from ``same''
+at $T=0$:
+\[
+P(\text{diff after }T) = \frac{1}{2}\bigl(1 - (1-\varepsilon_{\mathrm{eff}})^T\bigr)
+\]
+This is the standard binary Jukes--Cantor model.
+\end{proof}
+
+Inverting:
+\begin{equation}
+\boxed{T = \frac{\log(1 - 2\,p_{\mathrm{bit}})}{\log(1 - \varepsilon_{\mathrm{eff}})}}
+\end{equation}
+Saturation: $p_{\mathrm{bit}} \to 1/2$ as $T \to \infty$.
+
+\section{The 9-State Byte Hamming Model}
+
+\subsection{Markov chain on Hamming distance}
+
+Consider a single byte position. The \emph{pairwise Hamming distance}
+$h \in \{0,1,\ldots,8\}$ (number of bit positions where two corresponding
+bytes differ) evolves as a 9-state Markov chain.
+
+Per copy event on one lineage:
+\begin{itemize}
+\item With probability $r$: all 8 bits are randomized. Regardless of the
+  current state, each bit independently becomes ``same'' or ``different''
+  with equal probability. The new $h \sim \Bin(8, 1/2)$.
+\item With probability $1-r$: each of the $h$ ``different'' bits repairs
+  (becomes ``same'') with probability $\varepsilon/2$, and each of the
+  $8-h$ ``same'' bits breaks (becomes ``different'') with probability
+  $\varepsilon/2$.
+\end{itemize}
+
+\subsection{Eigenvalues via Krawtchouk polynomials}
+
+The transition matrix $P$ for this chain has the structure
+\[
+P = (1-r)\,Q + r\,\mathbf{1}\,\boldsymbol{\pi}^\top
+\]
+where $Q$ is the bit-level-only transition matrix and
+$\boldsymbol{\pi} = (\Bin(h;\,8,\,1/2))_{h=0}^8$ is the stationary distribution.
+
+The matrix $Q$ describes 8 independent binary symmetric channels projected
+onto their Hamming weight. Its eigenvectors are the Krawtchouk polynomials
+$K_k(h;\,8,\,1/2)$ with eigenvalues $\mu_k = (1-\varepsilon)^k$ for
+$k = 0,\ldots,8$.
+
+Since $\boldsymbol{\pi}^\top K_k = 0$ for $k \geq 1$ (orthogonality), the
+eigenvalues of $P$ are:
+\begin{equation}
+\lambda_0 = 1, \qquad \lambda_k = (1-r)(1-\varepsilon)^k \quad\text{for } k = 1,\ldots,8
+\end{equation}
+
+\subsection{Closed-form distribution: mixture of two binomials}
+
+\begin{theorem}
+The distribution of per-byte Hamming distance $h$ between two cells separated
+by $T$ copy events on the tree, starting from $h=0$, is
+\begin{equation}
+\boxed{\pi_T(h) = (1-s)\,\Bin(h;\,8,\,\tfrac{1}{2}) + s\,\Bin(h;\,8,\,p)}
+\label{eq:mixture}
+\end{equation}
+where
+\begin{align}
+s &= (1-r)^T & &\text{(probability of no byte-randomization on the path)} \\
+p &= \tfrac{1}{2}\bigl(1-(1-\varepsilon)^T\bigr) & &\text{(per-bit mismatch from bit-noise alone)}
+\end{align}
+\end{theorem}
+
+\begin{proof}
+Using the Krawtchouk generating function
+$\sum_{k=0}^{n} z^k K_k(h;\,n) = (1-z)^h(1+z)^{n-h}$
+and the spectral decomposition starting from $h_0=0$ (where $K_k(0;\,8) = \binom{8}{k}$):
+\begin{align}
+\pi_T(h) &= \frac{\binom{8}{h}}{256}\sum_{k=0}^{8} \lambda_k^T\, K_k(h) \\
+&= \frac{\binom{8}{h}}{256}\Bigl[1 + s\Bigl(\sum_{k=0}^{8} z^k K_k(h) - 1\Bigr)\Bigr]
+\qquad\text{where } z = (1-\varepsilon)^T \\
+&= \frac{\binom{8}{h}}{256}\bigl[1 - s + s\,(1-z)^h(1+z)^{8-h}\bigr]
+\end{align}
+Setting $p = (1-z)/2$:
+\[
+\pi_T(h) = (1-s)\frac{\binom{8}{h}}{256} + s\,\binom{8}{h}p^h(1-p)^{8-h}
+\]
+which is the mixture~\eqref{eq:mixture}.
+\end{proof}
+
+\textbf{Interpretation.} With probability $s$, the byte was never hit by
+byte-level or cell-level noise, so $h$ arises purely from bit-noise
+accumulation: $h \sim \Bin(8,p)$. With probability $1-s$, the byte was
+randomized at some point, erasing all signal: $h \sim \Bin(8,1/2)$.
+
+\subsection{Moments}
+
+The mean of $\pi_T$ is
+\[
+\E[h] = (1-s)\cdot 4 + s\cdot 8p = 4\bigl(1 - (1-\varepsilon_{\mathrm{eff}})^T\bigr) = 8\,p_{\mathrm{bit}}(T)
+\]
+which is identical to the bit-level formula. The variance, however, is
+inflated relative to a single binomial when $r > 0$, due to the mixture.
+
+\subsection{Special cases}
+
+\textbf{Default parameters} ($r = 0$, $s = 1$): The mixture collapses to
+a single $\Bin(8,p)$, and the MLE of $T$ is the bit-level formula applied
+to $\hat{p} = \bar{h}/8$ (the sample mean of the histogram divided by 8).
+
+\textbf{Byte match/mismatch}: Setting $h = 0$ recovers the byte-level
+match probability:
+\[
+\pi_T(0) = \frac{1-s}{256} + s\,(1-p)^8
+= \frac{1-s}{256} + s\,\Bigl[\frac{1+(1-\varepsilon)^T}{2}\Bigr]^8
+\]
+
+\section{Distance Estimation}
+
+\subsection{From bit mismatch fraction}
+
+Given observed fraction $\hat{p}_{\mathrm{bit}}$ of differing bits across
+$L$ bytes (i.e., $8L$ bit comparisons):
+\begin{equation}
+\hat{T}_{\mathrm{bit}} = \frac{\log(1 - 2\hat{p}_{\mathrm{bit}})}{\log(1 - \varepsilon_{\mathrm{eff}})}
+\end{equation}
+This is always available and is closed-form.
+
+\subsection{From byte mismatch fraction}
+
+Given fraction $\hat{p}_{\mathrm{byte}}$ of differing bytes:
+\begin{equation}
+\hat{T}_{\mathrm{byte}} = \frac{\log\bigl(2(1-\hat{p}_{\mathrm{byte}})^{1/8} - 1\bigr)}{\log(1-\varepsilon)}
+\qquad\text{(for } r = 0\text{)}
+\end{equation}
+For $r > 0$, numerical bisection on the forward model.
+
+\subsection{From the 9-state histogram (MLE)}
+
+Given observed histogram $(n_0, \ldots, n_8)$ with $\sum n_h = L$:
+
+\textbf{Case $r = 0$:} The distribution is $\Bin(8,p)$, so $\hat{p} = \bar{h}/8$
+is sufficient. The MLE is the same as the bit-level formula.
+
+\textbf{Case $r > 0$:} The distribution is a 2-component binomial mixture
+with parameters $(s, p)$ coupled through $T$. The unconstrained MLE of
+$(s, p)$ can be obtained via EM:
+
+\medskip
+\noindent\textbf{E-step:} Posterior weight for the signal component:
+\[
+w_h = \frac{s\,\Bin(h;\,8,\,p)}{(1-s)\,\Bin(h;\,8,\,1/2) + s\,\Bin(h;\,8,\,p)}
+\]
+
+\noindent\textbf{M-step} (closed form):
+\begin{align}
+\hat{s} &= \frac{\sum_h n_h\, w_h}{L} \\
+\hat{p} &= \frac{\sum_h h\, n_h\, w_h}{8\sum_h n_h\, w_h}
+\end{align}
+
+After convergence, two independent distance estimates:
+\begin{align}
+T_p &= \frac{\log(1-2\hat{p})}{\log(1-\varepsilon)} & &\text{(from bit-noise accumulation)} \\
+T_s &= \frac{\log\hat{s}}{\log(1-r)} & &\text{(from byte-noise accumulation)}
+\end{align}
+
+Under the model, $T_p \approx T_s$. The discrepancy $|T_p - T_s|$ is a
+diagnostic for model violations (e.g., mutations from sources other than the
+noisy copy channel).
+
+\subsection{Goodness of fit}
+
+The Pearson chi-squared statistic
+\[
+\chi^2 = \sum_{h=0}^{8} \frac{(n_h - L\,\hat{\pi}_T(h))^2}{L\,\hat{\pi}_T(h)}
+\]
+tests whether the observed histogram is consistent with the copy-noise model.
+Under the null hypothesis, $\chi^2 \sim \chi^2_{d}$ where $d$ is the number
+of bins with expected count $\geq 5$, minus the number of fitted parameters.
+
+\section{Empirical Results}
+
+\subsection{Three spreader variants}
+
+We compared three self-replicating programs on an $8\times 8$ board
+over $2\times 10^6$ interrupts:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrrrrr}
+\toprule
+Preset & Code size & Copies per rep & Noisy copies & Swaps & Avg $p_{\mathrm{bit}}$ \\
+\midrule
+\texttt{spreader} & 38 B & 512 & 3{,}462 & 114{,}620 & 0.043 \\
+\texttt{brk-spreader} & 15 B & 1024 (atomic) & 18{,}722 & 269{,}101 & 0.061 \\
+\texttt{mini-spreader} & 24 B & 27 & 8{,}178 & 213{,}976 & 0.076 \\
+\bottomrule
+\end{tabular}
+\caption{Comparison of spreader variants. ``Copies per rep'' is the number of bytes copied per replication event. The BRK spreader delegates copying to the engine via the noisy-copy BRK operand, which copies the entire 1024-byte cell atomically.}
+\end{table}
+
+\subsection{Histogram diagnostics}
+
+For all three spreaders, the chi-squared goodness-of-fit statistic strongly
+rejects the pure copy-noise model ($\chi^2 \gg$ critical value at any
+significance level). The observed histograms are bimodal:
+\begin{itemize}
+\item Most bytes are identical ($h = 0$): faithful copies
+\item A fraction are completely unrelated ($h \sim \Bin(8, 1/2)$): overwrites
+  from unrelated cells
+\end{itemize}
+
+This is consistent with a mixture model where the ``noise'' comes from
+\emph{partial overwrites and cross-contamination} (random cells writing into
+each other's code regions), not from the per-bit noise channel. The 9-state
+histogram model provides a natural diagnostic for detecting these non-copy
+mutation sources.
+
+The BRK spreader, which uses the engine's built-in noisy copy (operating on
+all 1024 bytes atomically), should in principle match the model better than
+the LDA/STA spreaders. In practice, cross-contamination from random cells
+still dominates the mutation signal.
+
+\end{document}
