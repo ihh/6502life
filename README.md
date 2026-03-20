@@ -202,8 +202,8 @@ Hardware interrupts arrive as an (approximately) Poisson process with an average
 ### Software interrupts
 
 A BRK software interrupt triggers a fast cell swap and returns control to the scheduler.
-The operand byte A encodes a source cell s = floor(A/49) from cells 0-4 (origin + cardinal neighbors)
-and a destination cell d = A mod 49 from cells 0-48 (full neighborhood). If s != d and 1 <= A < 245,
+The operand byte `b` (the byte in memory immediately after the BRK opcode) encodes a source cell s = floor(b/49) from cells 0-4 (origin + cardinal neighbors)
+and a destination cell d = b mod 49 from cells 0-48 (full neighborhood). If s != d and 1 <= b < 245,
 cells s and d are swapped (1024 bytes each). Otherwise, nothing happens (control still passes to the scheduler).
 The interrupt disable flag is ignored by BRK; memory is always committed (never reverted).
 A bad (unrecognized) opcode is handled like BRK 0: nothing happens, control returns to the scheduler.
