@@ -69,7 +69,7 @@ describe('fingerprint', () => {
         const fp = fingerprint(bytes);
         expect(typeof fp.hash).toBe('number');
         expect(fp.minhash).toBeInstanceOf(Uint32Array);
-        expect(fp.minhash.length).toBe(32);
+        expect(fp.minhash.length).toBe(64);
     });
 
     it('custom range works', () => {

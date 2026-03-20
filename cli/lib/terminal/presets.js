@@ -34,9 +34,10 @@ BEQ @loop`,
     copier: {
         name: 'Self-Copier',
         desc: 'Copies own code to neighbor cell (East, cell 2)',
-        source: `; Copy own code (page 0+1) to cell 2 (East neighbor)
+        source: `; Copy own code from page 2 (template) to cell 2 (East neighbor)
 ; Cell 2 starts at address $0800 in the memory map
-; Copy 512 bytes ($200): page 0 from $0201 and page 1 from $0101
+; Loop 1: template (page 2) -> target page 0 (execution copy)
+; Loop 2: template (page 2) -> target page 2 (template copy)
 LDY #$01
 @loop_p0:
 LDA $0201,Y
@@ -44,8 +45,8 @@ STA $0801,Y
 INY
 BNE @loop_p0
 @loop_p1:
-LDA $0101,Y
-STA $0901,Y
+LDA $0201,Y
+STA $0A01,Y
 INY
 BNE @loop_p1
 ; Done, yield to scheduler
@@ -104,29 +105,30 @@ BRK
 ; Uses RNG byte at $FC to select N/E/S/W (cells 1-4)
 ; Target cell page 0 high byte: cell 1=$04, 2=$08, 3=$0C, 4=$10
 ; Self-modifying code patches the STA high bytes in the copy loops
+; Reads from page 2 (template); writes to target page 0 + page 2
 LDA $FC
 AND #$03
 CLC
 ADC #$01        ; A = 1..4
 ASL
 ASL             ; A = 4,8,12,16 = high byte of target page 0
-STA $17         ; patch high byte of STA at @st0 (offset $15)
+STA $17         ; patch high byte of STA at @st0
 CLC
-ADC #$01        ; high byte of page 1
-STA $20         ; patch high byte of STA at @st1 (offset $1E)
-; Copy page 0 (bytes 1-255)
+ADC #$02        ; high byte of target page 2
+STA $20         ; patch high byte of STA at @st1
+; Copy template -> target page 0 (execution copy)
 LDY #$01
 @lp0:
-LDA $0201,Y    ; read self page 0
+LDA $0201,Y    ; read self page 2 (template)
 @st0:
-STA $0401,Y    ; target page 0 (high byte at $12 is patched)
+STA $0401,Y    ; target page 0 (high byte is patched)
 INY
 BNE @lp0
-; Copy page 1 (bytes 1-255)
+; Copy template -> target page 2 (template copy for further spreading)
 @lp1:
-LDA $0101,Y    ; read self page 1
+LDA $0201,Y    ; read self page 2 (template)
 @st1:
-STA $0501,Y    ; target page 1 (high byte at $1D is patched)
+STA $0601,Y    ; target page 2 (high byte is patched)
 INY
 BNE @lp1
 ; Yield to scheduler

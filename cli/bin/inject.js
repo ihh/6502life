@@ -89,6 +89,7 @@ for (let i = 0; i < argv.length; i++) {
         } else {
             const bytes = await assemble(source);
             writeCellBytes(controller, ci, cj, 0, bytes);
+            writeCellBytes(controller, ci, cj, 0x200, bytes);
             if (!quiet) console.error(`Assembled ${bytes.length} bytes into cell (${ci},${cj}) from ${argv[i + 1]}`);
         }
         actions++;
@@ -105,6 +106,7 @@ for (let i = 0; i < argv.length; i++) {
         const bytes = await assemble(preset.source);
         const [ci, cj] = currentCell;
         writeCellBytes(controller, ci, cj, 0, bytes);
+        writeCellBytes(controller, ci, cj, 0x200, bytes);
         if (!quiet) console.error(`Loaded preset "${preset.name}" (${bytes.length} bytes) into cell (${ci},${cj})`);
         actions++;
         i++;

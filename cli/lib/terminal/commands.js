@@ -144,6 +144,7 @@ export class CommandExecutor {
                     const ci = this.app.disasmPane.cellI;
                     const cj = this.app.disasmPane.cellJ;
                     writeCellBytes(this.controller, ci, cj, 0, bytes);
+                    writeCellBytes(this.controller, ci, cj, 0x200, bytes);
                     return `Assembled ${bytes.length} bytes into (${ci},${cj})`;
                 });
             }
@@ -156,6 +157,7 @@ export class CommandExecutor {
                     const ci = this.app.disasmPane.cellI;
                     const cj = this.app.disasmPane.cellJ;
                     writeCellBytes(this.controller, ci, cj, 0, bytes);
+                    writeCellBytes(this.controller, ci, cj, 0x200, bytes);
                     return `Loaded ${args[0]}: ${bytes.length} bytes into (${ci},${cj})`;
                 });
             }
@@ -170,6 +172,7 @@ export class CommandExecutor {
                     const ci = this.app.disasmPane.cellI;
                     const cj = this.app.disasmPane.cellJ;
                     writeCellBytes(this.controller, ci, cj, 0, bytes);
+                    writeCellBytes(this.controller, ci, cj, 0x200, bytes);
                     return `Loaded preset "${p.name}" (${bytes.length} bytes) into (${ci},${cj})`;
                 });
             }

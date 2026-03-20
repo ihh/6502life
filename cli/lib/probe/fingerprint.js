@@ -1,5 +1,5 @@
 // MinHash-based fingerprinting for cell content
-// Uses k-mer (shingle) hashing with MinHash for mutation-resilient similarity detection
+// Uses RLE-compressed k-mer (shingle) hashing with MinHash for mutation-resilient similarity detection
 
 // FNV-1a 32-bit hash — fast, no dependencies
 function fnv1a(data, offset, length) {
@@ -11,27 +11,46 @@ function fnv1a(data, offset, length) {
     return h >>> 0;
 }
 
-// Hash a k-mer (shingle) starting at position `pos` in `data`
-function hashKmer(data, pos, k) {
-    return fnv1a(data, pos, k);
+// Run-length encode: collapses runs of repeated bytes into (byte, byte, count-2).
+// This prevents long runs of padding (e.g. 800+ zero bytes) from dominating the
+// k-mer set and drowning out the actual program content.
+function rleEncode(data, offset, length) {
+    const result = [];
+    let i = offset;
+    const end = offset + length;
+    while (i < end) {
+        const b = data[i];
+        let run = 1;
+        while (i + run < end && data[i + run] === b && run < 257) {
+            run++;
+        }
+        if (run >= 2) {
+            result.push(b, b, run - 2);
+            i += run;
+        } else {
+            result.push(b);
+            i++;
+        }
+    }
+    return new Uint8Array(result);
 }
 
-// Compute MinHash signature: the N smallest hash values over all k-mers
-// This is resilient to single-byte substitutions since most k-mers are unaffected
-export function minhash(data, offset, length, k = 4, numHashes = 32) {
+// Compute MinHash signature over RLE-compressed k-mers.
+// RLE compression ensures that long runs of identical bytes (padding) are collapsed,
+// so the MinHash signature reflects actual program content rather than background fill.
+export function minhash(data, offset, length, k = 4, numHashes = 64) {
+    const encoded = rleEncode(data, offset, length);
     const mins = new Uint32Array(numHashes).fill(0xFFFFFFFF);
 
-    const end = offset + length - k + 1;
-    if (end <= offset) {
-        // Data too short for even one k-mer
+    const end = encoded.length - k + 1;
+    if (end <= 0) {
         return mins;
     }
 
-    for (let pos = offset; pos < end; pos++) {
-        const base = hashKmer(data, pos, k);
+    for (let pos = 0; pos < end; pos++) {
+        const base = fnv1a(encoded, pos, k);
         // For each hash function, mix with a different seed
         for (let h = 0; h < numHashes; h++) {
-            // Cheap secondary hash: multiply by different odd constants
             const v = Math.imul(base ^ (h * 0x9e3779b9), 0x85ebca6b) >>> 0;
             if (v < mins[h]) mins[h] = v;
         }
