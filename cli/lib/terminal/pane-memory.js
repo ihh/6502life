@@ -9,8 +9,10 @@
 // of the scheduler's iOrig/jOrig and is controlled by the user.
 
 import { moveTo, ESC, reset, dim, bold } from '../ansi.js';
-import { byteToSextant, byteColor, BORDER_COLOR, CURSOR_COLOR_ON, CURSOR_COLOR_OFF, hsvToRGB } from './sextant.js';
+import { byteToSextant, byteColor, BORDER_COLOR, CURSOR_COLOR_ON, CURSOR_COLOR_OFF, hsvToRGB,
+         byteToAsciiChar, DEFAULT_ASCII_PALETTE } from './sextant.js';
 import { hex16 } from './disassembler.js';
+import { readCellRegisters } from '../../../engine/board.js';
 
 // Build the spiral layout: map (gridX, gridY) → cell index for the 7x7 neighborhood
 // Using the same spiral order as memory.js
@@ -69,8 +71,9 @@ function gridToAddr(col, row) {
 }
 
 export class MemoryPane {
-    constructor(memory) {
+    constructor(memory, controller) {
         this.memory = memory;
+        this.controller = controller;
         // The board cell whose 7x7 neighborhood we're displaying
         this.centerI = 0;
         this.centerJ = 0;
@@ -80,9 +83,18 @@ export class MemoryPane {
         // Cursor position in the grid
         this.cursorCol = 3 * 32;
         this.cursorRow = 3 * 32;
-        // Flash state
+        // Flash state (250ms cursor blink)
         this.flashOn = true;
         this.lastFlash = 0;
+        // Configurable palette
+        this.palette = { ...DEFAULT_ASCII_PALETTE };
+        // Cached PC grid positions (set of "col,row" strings for fast lookup)
+        this._pcPositions = new Map(); // "col,row" → cellIdx
+        this._pcDirty = true;
+        // Last rendered cursor position (for partial redraw)
+        this._lastCursorScreenCol = -1;
+        this._lastCursorScreenRow = -1;
+        this._lastRect = null;
     }
 
     get cursorAddr() {
@@ -93,6 +105,7 @@ export class MemoryPane {
     setCenter(i, j) {
         this.centerI = ((i % this.memory.B) + this.memory.B) % this.memory.B;
         this.centerJ = ((j % this.memory.B) + this.memory.B) % this.memory.B;
+        this._pcDirty = true;
     }
 
     // Move the center cell (and keep cursor at same relative position within grid)
@@ -100,6 +113,7 @@ export class MemoryPane {
         const B = this.memory.B;
         this.centerI = (this.centerI + di + B) % B;
         this.centerJ = (this.centerJ + dj + B) % B;
+        this._pcDirty = true;
     }
 
     // Move cursor by delta
@@ -183,18 +197,108 @@ export class MemoryPane {
         return { addr, cellIdx, byteOff, boardI, boardJ, gx, gy };
     }
 
+    // Mark PC positions as needing recomputation (call after stepping/running)
+    invalidatePC() {
+        this._pcDirty = true;
+    }
+
+    // Recompute the set of grid positions where each neighbor's PC points
+    _refreshPCPositions() {
+        this._pcPositions.clear();
+        if (!this.controller) { this._pcDirty = false; return; }
+        const B = this.memory.B;
+        for (let cellIdx = 0; cellIdx < 49; cellIdx++) {
+            const [dx, dy] = spiralVec[cellIdx];
+            const i = (this.centerI + dx + B) % B;
+            const j = (this.centerJ + dy + B) % B;
+            const regs = readCellRegisters(this.controller, i, j);
+            const pc = regs.PC;
+            // PC is in the memory-mapped address space; convert to grid position
+            // PC addresses are cell-local (0x000-0x3FF), within this cell's address range
+            const addr = (cellIdx << 10) | (pc & 0x3FF);
+            const pos = addrToGrid(addr);
+            if (pos) {
+                this._pcPositions.set(`${pos.col},${pos.row}`, cellIdx);
+            }
+        }
+        this._pcDirty = false;
+    }
+
+    // Render a single cell at the given grid position, returning the ANSI string
+    _renderCell(gridCol, gridRow, isCursor, flashOn) {
+        const pal = this.palette;
+        const fg = (r, g, b) => `\x1b[38;2;${r};${g};${b}m`;
+        const bg = (r, g, b) => `\x1b[48;2;${r};${g};${b}m`;
+
+        if (gridRow < 0 || gridRow >= 224 || gridCol < 0 || gridCol >= 224) {
+            return reset + ' ';
+        }
+        const addr = gridToAddr(gridCol, gridRow);
+        if (addr < 0) return reset + ' ';
+
+        const byte = this.readByteAt(gridCol, gridRow);
+        const { char, fg: fgColor } = byteToAsciiChar(byte, pal);
+
+        // Determine background color
+        const isOnBorder = (gridCol % 32 === 31) || (gridRow % 32 === 31);
+        const pcKey = `${gridCol},${gridRow}`;
+        const pcCellIdx = this._pcPositions.get(pcKey);
+        let bgColor;
+        if (pcCellIdx !== undefined) {
+            bgColor = pcCellIdx === 0 ? pal.bgCenterPC : pal.bgPC;
+        } else if (isOnBorder) {
+            bgColor = pal.bgBorder;
+        } else {
+            bgColor = pal.bgDefault;
+        }
+
+        if (isCursor && flashOn) {
+            // Inverse: swap fg and bg
+            return fg(...bgColor) + bg(...fgColor) + char + reset;
+        } else {
+            return fg(...fgColor) + bg(...bgColor) + char + reset;
+        }
+    }
+
+    // Render just the cursor cell (old and new positions) for flash updates
+    renderCursorFlash(rect) {
+        if (!this._lastRect) return '';
+
+        const now = Date.now();
+        const newFlash = (now - this.lastFlash > 250);
+        if (!newFlash) return '';
+
+        this.flashOn = !this.flashOn;
+        this.lastFlash = now;
+
+        let out = '';
+        const cursorScreenCol = this.cursorCol - this.scrollX;
+        const cursorScreenRow = this.cursorRow - this.scrollY;
+
+        // Redraw current cursor position
+        if (cursorScreenCol >= 0 && cursorScreenCol < rect.width &&
+            cursorScreenRow >= 0 && cursorScreenRow < rect.height) {
+            out += moveTo(rect.row + cursorScreenRow, rect.col + cursorScreenCol);
+            out += this._renderCell(this.cursorCol, this.cursorRow, true, this.flashOn);
+        }
+
+        return out;
+    }
+
     render(rect) {
         const now = Date.now();
-        if (now - this.lastFlash > 400) {
+        if (now - this.lastFlash > 250) {
             this.flashOn = !this.flashOn;
             this.lastFlash = now;
         }
 
         this.ensureCursorVisible(rect);
+        this._lastRect = rect;
+
+        // Refresh PC positions if needed
+        if (this._pcDirty) this._refreshPCPositions();
 
         let out = '';
-        const fg = (r, g, b) => `\x1b[38;2;${r};${g};${b}m`;
-        const bg = (r, g, b) => `\x1b[48;2;${r};${g};${b}m`;
 
         for (let screenRow = 0; screenRow < rect.height; screenRow++) {
             out += moveTo(rect.row + screenRow, rect.col);
@@ -202,33 +306,14 @@ export class MemoryPane {
 
             for (let screenCol = 0; screenCol < rect.width; screenCol++) {
                 const gridCol = this.scrollX + screenCol;
-
-                if (gridRow < 0 || gridRow >= 224 || gridCol < 0 || gridCol >= 224) {
-                    out += ' ';
-                    continue;
-                }
-
-                const addr = gridToAddr(gridCol, gridRow);
-                if (addr < 0) {
-                    out += ' ';
-                    continue;
-                }
-
                 const isCursor = (gridCol === this.cursorCol && gridRow === this.cursorRow);
-                const isOnCellBorderX = (gridCol % 32 === 31);
-                const isOnCellBorderY = (gridRow % 32 === 31);
 
-                const byte = this.readByteAt(gridCol, gridRow);
-                const ch = byteToSextant(byte);
-                const [cr, cg, cb] = byteColor(byte);
-
-                if (isCursor && this.flashOn) {
-                    out += fg(0, 0, 0) + bg(255, 255, 0) + ch + reset;
-                } else if (isOnCellBorderX || isOnCellBorderY) {
-                    out += fg(cr, cg, cb) + bg(...BORDER_COLOR) + ch + reset;
-                } else {
-                    out += fg(cr, cg, cb) + ch + reset;
+                if (isCursor) {
+                    this._lastCursorScreenCol = rect.col + screenCol;
+                    this._lastCursorScreenRow = rect.row + screenRow;
                 }
+
+                out += this._renderCell(gridCol, gridRow, isCursor, this.flashOn);
             }
         }
 
