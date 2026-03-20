@@ -124,7 +124,7 @@ Colors encode cell activity using HSV with exponential decay of write/move recen
 - **Oriented registers** at 0xF0-0xF9: top 6 bits are rotated with the orientation
 - **Register save area** at 0xF9-0xFF: PCHI, PCLO, P, A, X, Y, S
 - **RNG** at 0xFC-0xFF: 4 bytes of pseudorandom numbers, refreshed each interrupt
-- **BRK operands**: 0=noop, 1=swap cells X,Y, 2=swap pages X,Y, 3=copy page X→Y (with errors)
+- **BRK operands**: operand A encodes src=floor(A/49) from cells 0-4, dest=A%49 from cells 0-48; swaps 1024-byte cells if src!=dest and 1<=A<245. Bad opcodes handled as BRK 0.
 - **Interrupt flag (I)**: when set, writes are reverted on timer interrupt (atomic mode)
 - **Display name** at 0x3E0-0x3FF: 32 bytes of ASCII. Parsed by the web app as
   `[cssColor]:[iconifyIconName]` (e.g. `orange:bee`, `red:sword`). If no colon present,

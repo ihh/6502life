@@ -133,5 +133,4 @@ dist
 tex/*.out
 tex/*.aux
 tex/*.log
-tex/*.pdf
 tex/*.blg

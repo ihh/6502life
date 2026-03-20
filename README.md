@@ -201,22 +201,11 @@ Hardware interrupts arrive as an (approximately) Poisson process with an average
 
 ### Software interrupts
 
-A BRK software interrupt is handled almost identically, with the following differences:
+A BRK software interrupt triggers a fast cell swap and returns control to the scheduler.
+The operand byte A encodes a source cell s = floor(A/49) from cells 0-4 (origin + cardinal neighbors)
+and a destination cell d = A mod 49 from cells 0-48 (full neighborhood). If s != d and 1 <= A < 245,
+cells s and d are swapped (1024 bytes each). Otherwise, nothing happens (control still passes to the scheduler).
+The interrupt disable flag is ignored by BRK; memory is always committed (never reverted).
+A bad (unrecognized) opcode is handled like BRK 0: nothing happens, control returns to the scheduler.
 
-+ The B flag is set before P is pushed to the stack.
-+ After saving registers Y,X,A,S to memory, the operand byte following the BRK opcode is examined.
-
-| Operand byte | Operation |
-|--------------|-----------|
-| 0 | Does nothing |
-| 1 | The cells indexed by X and Y are swapped (that is, 1024-byte blocks starting from 0x400\*X and 0x400\*Y) |
-| 2 | The pages indexed by X and Y are swapped (that is, 256-byte blocks from 0x100\*X and 0x100\*Y) |
-| 3 | Page X is copied to page Y, with a small error probability |
-| 4-255 | Reserved; currently does nothing |
-
-The guiding principle when considering adding more software interrupts,
-or expanding the OS in any way, should be to not add any functionality that can't be justified via quasi-physical principles. For example, instant page swap is justifiable to implement diffusion; error-prone copy at higher rates is justifiable on thermodynamic grounds and/or by Shannon's noisy channel coding theorem.
-
-After any memory operation is performed as part of a software interrupt, control returns to the scheduler, which will randomly pass control to another cell (as in the case of a hardware interrupt).
-
-The interrupt disable flag is ignored by the BRK handler; memory is always copied back to storage (i.e. never reverted) following a software interrupt.
+See [tex/6502life.pdf](tex/6502life.pdf) for the full specification.

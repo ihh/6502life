@@ -163,9 +163,9 @@ class BoardController {
                     // Since the filesystem is all in RAM, we 
                     this.commitWrites();  // does nothing to board, allows this controller object to update its last-modified times
                     if (isBRK) {
-                        // BRK: software interrupt triggering fast memory swap
-                        // Operand 0..244: Swap 4-page blocks starting at addresses (op%49, op/49) << 10
-                        // Note that operands { 0, 50, 100, 150, 200 } do nothing except yield control to the interrupt handler.
+                        // BRK: software interrupt triggering fast cell swap
+                        // Operand encodes src=floor(A/49) from cells 0-4, dest=A%49 from cells 0-48
+                        // Swaps 1024-byte cells if src!=dest and 1<=A<245; otherwise yields to scheduler
                         const operand = this.nextOperandByte();
                         const nDestCells = this.memory.Nsquared;  // 49
                         const nSrcCells = 5;

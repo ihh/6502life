@@ -130,20 +130,23 @@ $y=-3$ & 47 & 41 & 33 & 27 & 32 & 40 & 46
 \item A BRK software interrupt is handled almost identically, with the following differences:
   \begin{itemize}
     \item The B flag is set before P is pushed to the stack.
-    \item After saving registers Y,X,A,S to memory, the operand byte following the BRK opcode is examined.
-      
-      \begin{tabular}{l|p{.8\textwidth}}
-        A & Operation \\ \hline
-        0 & Does nothing \\
-    1 & The cells indexed by X and Y are swapped (that is, 1024-byte blocks starting from $1024X$ and $1024Y$) \\
-    2 & The pages indexed by X and Y are swapped (that is, 256-byte blocks from $256X$ and $256Y$) \\
-    3 & Page X is copied to page Y, with a small error probability \\
-    4-255 & Reserved; currently does nothing
-      \end{tabular}
+    \item After saving registers Y,X,A,S to memory, the operand byte $A$ following the BRK opcode is examined.
+      Let $N^2 = 49$ (the number of cells in the 7x7 neighborhood).
+      The operand encodes a source cell $s = \lfloor A / N^2 \rfloor$ and a destination cell $d = A \bmod N^2$,
+      where $s$ ranges over cells 0--4 (the origin and its four cardinal neighbors)
+      and $d$ ranges over cells 0--48 (any cell in the neighborhood).
+
+      If $1 \leq A < 245$ and $s \neq d$, cells $s$ and $d$ are swapped (1024-byte blocks each).
+      Otherwise ($A = 0$, $s = d$, or $A \geq 245$) nothing happens.
+      In all cases, control returns to the scheduler.
+
+      Instant cell swap is justifiable as implementing diffusion.
+      A future extension may add error-prone copy (justifiable on thermodynamic grounds
+      and/or by Shannon's noisy channel coding theorem), with a board-specific error rate parameter.
 
       The guiding principle when considering adding more software interrupts,
-      or expanding the OS in any way, should be to not add any functionality that can't be justified as ``physics''. For example, instant page swap is justifiable to implement diffusion; error-prone copy at higher rates is justifiable on thermodynamic grounds and/or by Shannon's noisy channel coding theorem.
-    \item After any memory operation is performed, control returns to the scheduler, which will randomly pass control to another cell.
+      or expanding the OS in any way, should be to not add any functionality that can't be justified as ``physics''.
+    \item After any swap is performed, control returns to the scheduler, which will randomly pass control to another cell.
     \item The interrupt disable flag is ignored by BRK; memory is always copied back to storage following a software interrupt.
 \end{itemize}
 \item A software interrupt due to a bad instruction is handled like a BRK 0 (nothing happens, control returns to scheduler).
