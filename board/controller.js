@@ -147,7 +147,7 @@ class BoardController {
                 elapsedCycles = this.sfotty.cycleCounter;
             }
             cpuCycles += elapsedCycles;
-            this.memory.totalCycles += elapsedCycles;
+            this.totalCycles += elapsedCycles;
             // Was this an interrupt (timer or BRK)?
             const isTimerInterrupt = cpuCycles >= schedulerCycles;
             if (isTimerInterrupt || isSoftwareInterrupt) {

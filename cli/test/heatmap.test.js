@@ -1,8 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createBoard, zeroAllCells, writeCellBytes, readCellMemory, getActivityStats } from '../../engine/board.js';
-// Note: controller.totalCycles and memory.totalCycles are not properly
-// initialized in the current codebase (pre-existing bug), so we don't
-// test getActivityStats with running simulations here.
+import { assemble } from '../../engine/assembler.js';
 
 describe('heatmap (activity metrics)', () => {
     it('getActivityStats returns empty for fresh board', () => {
@@ -10,6 +8,48 @@ describe('heatmap (activity metrics)', () => {
         zeroAllCells(controller);
         const stats = getActivityStats(controller);
         expect(stats.length).toBe(0);
+    });
+
+    it('getActivityStats detects write activity after simulation', async () => {
+        const { controller } = createBoard(4, 42);
+        zeroAllCells(controller);
+
+        // Load a counter that writes to $10 each iteration
+        const source = 'TXA\n@loop:\nCLC\nADC #$01\nSTA $10\nBNE @loop';
+        const bytes = await assemble(source);
+        writeCellBytes(controller, 0, 0, 0, bytes);
+
+        // Set up deterministic origin at (0,0) and run
+        const mem = controller.memory;
+        mem.iOrig = 0;
+        mem.jOrig = 0;
+        mem.orientation = 0;
+        mem.nextCycles = 10000;
+        controller.sfotty.PC = 0;
+        controller.sfotty.A = 0;
+        controller.sfotty.X = 0;
+        controller.sfotty.Y = 0;
+        controller.sfotty.S = 0xFF;
+        controller.sfotty.setP(0);
+        mem.resetUndoHistory();
+
+        controller.runToNextInterrupt();
+
+        const stats = getActivityStats(controller);
+        expect(stats.length).toBeGreaterThan(0);
+        const first = stats[0];
+        expect(typeof first.i).toBe('number');
+        expect(typeof first.j).toBe('number');
+        expect(first.lastWrite).toBeGreaterThan(0);
+    });
+
+    it('totalCycles increments after running', () => {
+        const { controller } = createBoard(4, 42);
+        expect(controller.totalCycles).toBe(0);
+
+        controller.runToNextInterrupt();
+
+        expect(controller.totalCycles).toBeGreaterThan(0);
     });
 
     it('readCellMemory returns 1024 bytes', () => {
