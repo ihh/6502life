@@ -131,18 +131,48 @@ $y=-3$ & 47 & 41 & 33 & 27 & 32 & 40 & 46
   \begin{itemize}
     \item The B flag is set before P is pushed to the stack.
     \item After saving registers Y,X,A,S to memory, the operand byte $b$ (the byte in memory immediately following the BRK opcode) is examined.
-      Let $N^2 = 49$ (the number of cells in the 7x7 neighborhood).
-      The operand encodes a source cell $s = \lfloor b / N^2 \rfloor$ and a destination cell $d = b \bmod N^2$,
-      where $s$ ranges over cells 0--4 (the origin and its four cardinal neighbors)
-      and $d$ ranges over cells 0--48 (any cell in the neighborhood).
+      The memory-mapped neighborhood has $N^2 = 49$ cells. The 5 inner cells
+      (origin plus 4 cardinal neighbors, indices 0--4) may be used as swap sources.
 
-      If $1 \leq b < 245$ and $s \neq d$, cells $s$ and $d$ are swapped (1024-byte blocks each).
-      Otherwise ($b = 0$, $s = d$, or $b \geq 245$) nothing happens.
-      In all cases, control returns to the scheduler.
+      \begin{tabular}{l|p{.65\textwidth}}
+        Operand $b$ & Operation \\ \hline
+        0 & Does nothing (yields control to scheduler) \\
+        $1 \leq b < 245$ & Swap cells: source $= \lfloor b/49 \rfloor$ (cells 0--4),
+          destination $= b \bmod 49$ (cells 0--48).
+          Self-swaps (src $=$ dest) update move times but do not copy data. \\
+        $245 \leq b \leq 252$ & Noisy copy: origin cell is copied to cell $b - 244$ (cells 1--8),
+          subject to the hierarchical noise model (see below). \\
+        $253$--$255$ & Reserved; currently does nothing.
+      \end{tabular}
 
-      Instant cell swap is justifiable as implementing diffusion.
-      A future extension may add error-prone copy (justifiable on thermodynamic grounds
-      and/or by Shannon's noisy channel coding theorem), with a board-specific error rate parameter.
+      \subsubsection*{Noisy copy model}
+
+      The noisy copy operation (operands 245--252) copies the 1024-byte origin cell
+      to a destination cell. Each bit in the destination is determined by a hierarchical
+      coin-flip model governed by six board-level probability parameters:
+      $p_{\mathrm{CellMask}}$, $p_{\mathrm{CellNoise}}$,
+      $p_{\mathrm{ByteMask}}$, $p_{\mathrm{ByteNoise}}$,
+      $p_{\mathrm{BitMask}}$, $p_{\mathrm{BitNoise}}$.
+
+      At each level of the hierarchy (cell, byte, bit), two independent coins are
+      flipped using the board PRNG:
+      \begin{enumerate}
+      \item \textbf{Cell level.}
+        Flip $p_{\mathrm{CellMask}}$: if heads, the entire destination cell is untouched (copy aborted).
+        Otherwise flip $p_{\mathrm{CellNoise}}$: if heads, the entire cell is filled with pseudorandom bytes.
+      \item \textbf{Byte level} (for each of the 1024 bytes).
+        Flip $p_{\mathrm{ByteMask}}$: if heads, the byte is untouched.
+        Otherwise flip $p_{\mathrm{ByteNoise}}$: if heads, the byte is replaced with a pseudorandom byte.
+      \item \textbf{Bit level} (for each of the 8 bits in the byte).
+        Flip $p_{\mathrm{BitMask}}$: if heads, the destination bit is untouched.
+        Otherwise flip $p_{\mathrm{BitNoise}}$: if heads, the bit is sampled uniformly
+        from $\{0,1\}$. If tails, the bit is set to the corresponding source bit (faithful copy).
+      \end{enumerate}
+
+      Coarser levels override finer levels: a cell-level decision preempts all byte-
+      and bit-level processing. Default values are $p_{\mathrm{BitNoise}} = 0.001$
+      with all other probabilities zero, yielding a near-faithful copy with
+      approximately 8 mutated bits per cell.
 
       The guiding principle when considering adding more software interrupts,
       or expanding the OS in any way, should be to not add any functionality that can't be justified as ``physics''.

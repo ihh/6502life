@@ -52,6 +52,7 @@ if (loadFile) {
         data = new Uint8Array(content);
     }
     writeCellBytes(controller, cellI, cellJ, 0, data);
+    writeCellBytes(controller, cellI, cellJ, 0x200, data);
 }
 
 // Assemble and load source
@@ -59,6 +60,7 @@ if (asmFile) {
     const source = readFileSync(asmFile, 'utf-8');
     const bytes = await assemble(source);
     writeCellBytes(controller, cellI, cellJ, 0, bytes);
+    writeCellBytes(controller, cellI, cellJ, 0x200, bytes);
     if (!quiet) {
         console.error(`Assembled ${bytes.length} bytes into cell (${cellI},${cellJ})`);
     }

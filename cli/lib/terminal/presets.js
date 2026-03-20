@@ -34,9 +34,10 @@ BEQ @loop`,
     copier: {
         name: 'Self-Copier',
         desc: 'Copies own code to neighbor cell (East, cell 2)',
-        source: `; Copy own code (page 0+1) to cell 2 (East neighbor)
+        source: `; Copy own code from page 2 (template) to cell 2 (East neighbor)
 ; Cell 2 starts at address $0800 in the memory map
-; Copy 512 bytes ($200): page 0 from $0201 and page 1 from $0101
+; Loop 1: template (page 2) -> target page 0 (execution copy)
+; Loop 2: template (page 2) -> target page 2 (template copy)
 LDY #$01
 @loop_p0:
 LDA $0201,Y
@@ -44,8 +45,8 @@ STA $0801,Y
 INY
 BNE @loop_p0
 @loop_p1:
-LDA $0101,Y
-STA $0901,Y
+LDA $0201,Y
+STA $0A01,Y
 INY
 BNE @loop_p1
 ; Done, yield to scheduler
@@ -83,11 +84,7 @@ BRK
         desc: 'Alternates between moving forward and turning (tumble-roll)',
         source: `; Tumbler: swap with North neighbor, then rotate oriented registers
 ; This creates movement across the board
-; Step 1: swap self with North (cell 1)
-LDA #$01   ; cell index 1 = North
-TAX
-LDY #$01   ; swap with self? No - BRK operand = X + 49*Y
-; BRK 1 swaps cells X and Y
+; Step 1: swap origin with cell 1 / North (operand $01)
 BRK
 .byte $01
 ; After BRK, scheduler moves us. When we get control again:
@@ -103,31 +100,38 @@ BRK
 
     spreader: {
         name: 'Spreader',
-        desc: 'Copies self to a random neighbor using RNG at $FC',
-        source: `; Spreader: uses RNG at $FC to pick a target, then copies self there
-; Read RNG byte
+        desc: 'Copies self to a random cardinal neighbor using RNG',
+        source: `; Random spreader: copies self to a random cardinal neighbor
+; Uses RNG byte at $FC to select N/E/S/W (cells 1-4)
+; Target cell page 0 high byte: cell 1=$04, 2=$08, 3=$0C, 4=$10
+; Self-modifying code patches the STA high bytes in the copy loops
+; Reads from page 2 (template); writes to target page 0 + page 2
 LDA $FC
-AND #$03   ; mask to 0-3, giving cells 1-4 (N/E/S/W) when +1
+AND #$03
 CLC
-ADC #$01   ; now 1-4
-TAX        ; X = source cell (self = 0), but for page copy: BRK 3 copies page X to Y
-; Copy page 0 of self to page 0 of target
-; BRK operand for copy: 3
-; For BRK 3, X=source page, Y=dest page
-; Self page 0 = page 0, target cell N page 0 = page N*4
-; Actually BRK 3 copies page X to page Y where pages are 256-byte blocks
-; Self code is in pages 0-1 (first 512 bytes of cell 0)
-; Target cell 1 (N) pages are 4-7
-; So copy page 0 to page 4*target
-TXA
-ASL        ; *2
-ASL        ; *4 = target page 0
-TAY
-LDX #$01   ; source = page 0... wait, page 0 is first 256 bytes = page index 0
-; BRK operand 3 copies page X→Y
-; Nope, this is getting complicated with page indexing, simplify:
-; Just do a byte-by-byte copy like copier
-LDX #$01
+ADC #$01        ; A = 1..4
+ASL
+ASL             ; A = 4,8,12,16 = high byte of target page 0
+STA $17         ; patch high byte of STA at @st0
+CLC
+ADC #$02        ; high byte of target page 2
+STA $20         ; patch high byte of STA at @st1
+; Copy template -> target page 0 (execution copy)
+LDY #$01
+@lp0:
+LDA $0201,Y    ; read self page 2 (template)
+@st0:
+STA $0401,Y    ; target page 0 (high byte is patched)
+INY
+BNE @lp0
+; Copy template -> target page 2 (template copy for further spreading)
+@lp1:
+LDA $0201,Y    ; read self page 2 (template)
+@st1:
+STA $0601,Y    ; target page 2 (high byte is patched)
+INY
+BNE @lp1
+; Yield to scheduler
 BRK
 .byte $01`,
     },
@@ -180,26 +184,20 @@ BRK
         source: `; Crawler: swaps self with cell 1 (forward neighbor) every interrupt
 ; Orientation is random each time the cell is scheduled, so the
 ; direction of "forward" changes randomly → visible random walk
-; Phase 0: copy own code page to forward neighbor (so it persists)
+; Phase 0: noisy copy origin to forward neighbor (so code persists)
 ; Phase 1: swap entire cell with forward neighbor (actually moves)
 ; Phase counter at $10, toggled each interrupt
 LDA $10
 EOR #$01
 STA $10
 BNE @swap
-; Phase 0: copy page 0 → cell 1 page 0 (BRK 3)
-LDX #$01
-DEX          ; X=0 (our page)
-LDY #$04    ; cell 1 page 0 = page index 4
+; Phase 0: noisy copy origin → cell 1 (BRK $F5)
 BRK
-.byte $03   ; copy page X→Y, yield
+.byte $F5   ; noisy copy to cell 1, yield
 @swap:
-; Phase 1: swap cell 0 and cell 1 (BRK 1)
-LDX #$01
-DEX          ; X=0 (self)
-LDY #$01    ; cell 1 (forward)
+; Phase 1: swap cell 0 and cell 1 (BRK $01 = swap origin with cell 1)
 BRK
-.byte $01   ; swap cells X,Y, yield`,
+.byte $01   ; swap cells, yield`,
     },
 
     knight: {
@@ -207,25 +205,22 @@ BRK
         desc: 'Swaps with cells in an L-shaped pattern like a chess knight',
         source: `; Knight: swap with cells at (2,1), (1,2), etc. - L-shaped moves
 ; Cell 14 = NE^2 = (2,1), Cell 13 = N^2E = (1,2)
+; Operand = src*49 + dest; src=0 (origin), so operand = dest
 ; Alternate between these two
 LDA $10     ; load move counter
 AND #$01    ; alternate
 BNE @move2
-; Move 1: swap with cell 14
-LDX #$0E    ; cell 14
-LDY #$01    ; swap with cell 0
+; Move 1: swap origin with cell 14 (operand $0E)
 BRK
-.byte $01
+.byte $0E
 @move2:
-; Move 2: swap with cell 13
-LDX #$0D    ; cell 13
-LDY #$01
+; Move 2: swap origin with cell 13 (operand $0D)
 BRK
-.byte $01
+.byte $0D
 @done:
 INC $10     ; increment counter
 BRK
-.byte $01`,
+.byte $01   ; swap origin with cell 1 (North)`,
     },
 };
 

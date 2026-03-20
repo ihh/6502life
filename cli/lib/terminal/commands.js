@@ -7,6 +7,8 @@ import { hexByte, hexWord } from '../../../engine/format.js';
 import { hex, hex16 } from './disassembler.js';
 import { listPresets, getPreset } from './presets.js';
 import { readFileSync, writeFileSync } from 'fs';
+import { hashHex } from '../probe/fingerprint.js';
+
 
 export class CommandExecutor {
     constructor(app) {
@@ -142,6 +144,7 @@ export class CommandExecutor {
                     const ci = this.app.disasmPane.cellI;
                     const cj = this.app.disasmPane.cellJ;
                     writeCellBytes(this.controller, ci, cj, 0, bytes);
+                    writeCellBytes(this.controller, ci, cj, 0x200, bytes);
                     return `Assembled ${bytes.length} bytes into (${ci},${cj})`;
                 });
             }
@@ -154,6 +157,7 @@ export class CommandExecutor {
                     const ci = this.app.disasmPane.cellI;
                     const cj = this.app.disasmPane.cellJ;
                     writeCellBytes(this.controller, ci, cj, 0, bytes);
+                    writeCellBytes(this.controller, ci, cj, 0x200, bytes);
                     return `Loaded ${args[0]}: ${bytes.length} bytes into (${ci},${cj})`;
                 });
             }
@@ -168,6 +172,7 @@ export class CommandExecutor {
                     const ci = this.app.disasmPane.cellI;
                     const cj = this.app.disasmPane.cellJ;
                     writeCellBytes(this.controller, ci, cj, 0, bytes);
+                    writeCellBytes(this.controller, ci, cj, 0x200, bytes);
                     return `Loaded preset "${p.name}" (${bytes.length} bytes) into (${ci},${cj})`;
                 });
             }
@@ -228,12 +233,138 @@ export class CommandExecutor {
                 ].join('\n');
             }
 
+            // --- Probe/tracking commands (work with or without socket) ---
+            case 'fingerprint': case 'fp': {
+                const tracker = this.getTracker();
+                if (!tracker) return 'Probe not active. Start with --listen';
+                let i, j;
+                if (args[0] && args[0].includes(',')) {
+                    [i, j] = args[0].split(',').map(Number);
+                } else {
+                    i = this.app.disasmPane.cellI;
+                    j = this.app.disasmPane.cellJ;
+                }
+                const fp = tracker.fingerprintCell(i, j);
+                return `Cell (${i},${j}): hash=${hashHex(fp.hash)} minhash=[${Array.from(fp.minhash).slice(0,4).map(h => (h>>>0).toString(16)).join(',')}...]`;
+            }
+
+            case 'tag': {
+                const tracker = this.getTracker();
+                if (!tracker) return 'Probe not active. Start with --listen';
+                let i, j, tag;
+                if (args[0] && args[0].includes(',')) {
+                    [i, j] = args[0].split(',').map(Number);
+                    tag = args[1];
+                } else {
+                    i = this.app.disasmPane.cellI;
+                    j = this.app.disasmPane.cellJ;
+                    tag = args[0];
+                }
+                if (!tag) return 'Usage: tag [i,j] <name>';
+                tracker.addTag(i, j, tag);
+                return `Tagged (${i},${j}) as "${tag}"`;
+            }
+
+            case 'untag': {
+                const tracker = this.getTracker();
+                if (!tracker) return 'Probe not active. Start with --listen';
+                let i, j, tag;
+                if (args[0] && args[0].includes(',')) {
+                    [i, j] = args[0].split(',').map(Number);
+                    tag = args[1];
+                } else {
+                    i = this.app.disasmPane.cellI;
+                    j = this.app.disasmPane.cellJ;
+                    tag = args[0];
+                }
+                if (!tag) return 'Usage: untag [i,j] <name>';
+                tracker.removeTag(i, j, tag);
+                return `Untagged (${i},${j}) "${tag}"`;
+            }
+
+            case 'tags': {
+                const tracker = this.getTracker();
+                if (!tracker) return 'Probe not active. Start with --listen';
+                if (args[0]) {
+                    // Find cells with tag
+                    const cells = tracker.findByTag(args[0]);
+                    if (cells.length === 0) return `No cells tagged "${args[0]}"`;
+                    return `"${args[0]}": ${cells.map(c => `(${c[0]},${c[1]})`).join(' ')}`;
+                }
+                const i = this.app.disasmPane.cellI;
+                const j = this.app.disasmPane.cellJ;
+                const t = tracker.getTags(i, j);
+                return t.length > 0 ? `(${i},${j}) tags: ${t.join(', ')}` : `(${i},${j}) has no tags`;
+            }
+
+            case 'track': {
+                const tracker = this.getTracker();
+                if (!tracker) return 'Probe not active. Start with --listen';
+                let i, j;
+                if (args[0] && args[0].includes(',')) {
+                    [i, j] = args[0].split(',').map(Number);
+                } else {
+                    i = this.app.disasmPane.cellI;
+                    j = this.app.disasmPane.cellJ;
+                }
+                tracker.trackCell(i, j);
+                return `Tracking lineage of (${i},${j})`;
+            }
+
+            case 'untrack': {
+                const tracker = this.getTracker();
+                if (!tracker) return 'Probe not active. Start with --listen';
+                let i, j;
+                if (args[0] && args[0].includes(',')) {
+                    [i, j] = args[0].split(',').map(Number);
+                } else {
+                    i = this.app.disasmPane.cellI;
+                    j = this.app.disasmPane.cellJ;
+                }
+                tracker.untrackCell(i, j);
+                return `Stopped tracking (${i},${j})`;
+            }
+
+            case 'diff': {
+                const tracker = this.getTracker();
+                if (!tracker) return 'Probe not active. Start with --listen';
+                if (!args[0] || !args[1]) return 'Usage: diff i1,j1 i2,j2';
+                const [i1, j1] = args[0].split(',').map(Number);
+                const [i2, j2] = args[1].split(',').map(Number);
+                const result = tracker.diffCells(i1, j1, i2, j2);
+                if (result.identical) return `(${i1},${j1}) and (${i2},${j2}) are identical (sim=${result.similarity})`;
+                return `(${i1},${j1}) vs (${i2},${j2}): ${result.numChanges} bytes differ, sim=${result.similarity}`;
+            }
+
+            case 'census': {
+                const tracker = this.getTracker();
+                if (!tracker) return 'Probe not active. Start with --listen';
+                const c = tracker.computeCensus();
+                const topEntries = Object.entries(c.top).slice(0, 8);
+                let out = `Cells: ${c.totalCells}, Active: ${c.active}, Unique: ${c.uniqueFingerprints}`;
+                if (topEntries.length > 0) {
+                    out += '\nTop fingerprints:';
+                    for (const [hash, count] of topEntries) {
+                        out += `\n  ${hash}: ${count}`;
+                    }
+                }
+                const tagEntries = Object.entries(c.tags);
+                if (tagEntries.length > 0) {
+                    out += '\nTags: ' + tagEntries.map(([t, n]) => `${t}(${n})`).join(' ');
+                }
+                return out;
+            }
+
             case 'help': case '?':
                 return HELP_TEXT;
 
             default:
                 return `Unknown command: ${cmd}. Type "help" for commands.`;
         }
+    }
+
+    getTracker() {
+        return this.app.probeServer?.tracker || null;
     }
 
     // Handle async commands (assembly, file loading)
@@ -303,4 +434,15 @@ const HELP_TEXT = `Debugger commands:
 
   origin            Show current origin and orientation
   info              Show board status
+
+Probe (requires --listen):
+  fp [I,J]          MinHash fingerprint of cell
+  tag [I,J] NAME    Tag cell with a name
+  untag [I,J] NAME  Remove tag
+  tags [NAME]       List tags on cell or find by tag
+  track [I,J]       Track cell lineage (copy detection)
+  untrack [I,J]     Stop tracking
+  diff I,J I,J      Diff two cells
+  census            Board-wide fingerprint census
+
   help              Show this help`;

@@ -208,4 +208,26 @@ cells s and d are swapped (1024 bytes each). Otherwise, nothing happens (control
 The interrupt disable flag is ignored by BRK; memory is always committed (never reverted).
 A bad (unrecognized) opcode is handled like BRK 0: nothing happens, control returns to the scheduler.
 
+| Operand `b` | Operation |
+|--------------|-----------|
+| 0 | Does nothing (yields control to scheduler) |
+| 1–244 | Swap cells: src = floor(b/49), dest = b%49. Sources are cells 0–4 (origin + 4 cardinal), destinations are cells 0–48 (full neighborhood). Self-swaps (src=dest) update move times but do not copy data. |
+| 245–252 | Noisy copy: origin cell is copied to cell (b − 244), i.e. cells 1–8 (cardinal + diagonal neighbors), subject to the hierarchical noise model (see below). |
+| 253–255 | Reserved; currently does nothing |
+
+A bad (unrecognized) opcode is handled like BRK 0: nothing happens, control returns to the scheduler.
+The interrupt disable flag is ignored by BRK; memory is always committed (never reverted).
+
+#### Noisy copy model
+
+The noisy copy (operands 245–252) copies the 1024-byte origin cell to a destination cell. Each bit is determined by a hierarchical coin-flip model with six board-level probability parameters (set at board construction): pCellMask, pCellNoise, pByteMask, pByteNoise, pBitMask, pBitNoise.
+
+At each level (cell → byte → bit), two coins are flipped:
+
+1. **Cell level.** Flip pCellMask: if heads, entire cell untouched (copy aborted). Else flip pCellNoise: if heads, fill cell with random bytes.
+2. **Byte level** (each of 1024 bytes). Flip pByteMask: if heads, byte untouched. Else flip pByteNoise: if heads, byte replaced with random.
+3. **Bit level** (each of 8 bits). Flip pBitMask: if heads, dest bit untouched. Else flip pBitNoise: if heads, bit is random {0,1}. If tails, bit = source bit (faithful copy).
+
+Coarser levels override finer levels. Defaults: pBitNoise = 0.001, all others 0 (~8 mutated bits per cell copy).
+
 See [tex/6502life.pdf](tex/6502life.pdf) for the full specification.

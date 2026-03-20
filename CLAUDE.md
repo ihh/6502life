@@ -9,7 +9,8 @@ A virtual 256x256 grid of interconnected 6502 CPUs simulating cellular automata.
 - `app/` — React+Vite web dashboard for running and inspecting the board
 - `cli/` — Command-line tools for assembling, running, inspecting, and visualizing the board
 - `6502life-test-app/` — Legacy prototype UI (broken, superseded by `app/`)
-- `tex/` — LaTeX documentation
+- `tex/` — LaTeX documentation (run `make` in tex/ to build PDF)
+- `doc/` — Built PDFs and tutorials
 
 ## How to Run
 
@@ -76,11 +77,86 @@ node cli/bin/terminal.js --size 16 --randomize
 node cli/bin/terminal.js --asm program.asm --cell 0,0
 node cli/bin/terminal.js --preset counter --cell 0,0
 
+# With probe socket for external CLI tools:
+node cli/bin/terminal.js --size 16 --preset copier --cell 0,0 --listen
+
 # Four-pane layout: memory map, disassembler, command prompt, board minimap
 # Tab to switch focus between panes
 # Type "help" in the command pane for debugger commands
-# Presets: counter, nop, copier, overwriter, tumbler, spreader, painter, knight
+# Presets: counter, nop, copier, overwriter, tumbler, spreader, painter, knight, crawler
 ```
+
+### CLI Probe (connects to running debugger)
+```bash
+# Requires terminal.js running with --listen
+node cli/bin/probe.js status                    # board status
+node cli/bin/probe.js fingerprint 0,0           # MinHash cell fingerprint
+node cli/bin/probe.js scan                      # board-wide fingerprint table
+node cli/bin/probe.js diff 0,0 1,0              # byte-level diff
+node cli/bin/probe.js tag 0,0 origin            # tag a cell
+node cli/bin/probe.js track 0,0                 # stream lineage events
+node cli/bin/probe.js census --interval 500     # periodic census stream
+node cli/bin/probe.js subscribe writes          # raw write event stream
+```
+
+### Disassembler
+```bash
+# From state file
+node cli/bin/disasm.js --state state.json --cell 0,0 --lines 32
+
+# From hex
+node cli/bin/disasm.js --hex "A9 01 8D 10 00"
+
+# Diff two cells
+node cli/bin/disasm.js --state state.json --cell 0,0 --cell 1,0 --diff
+```
+
+### Replay (deterministic, with event logging)
+```bash
+# Run 5000 interrupts, log all events
+node cli/bin/replay.js --state snap.json --interrupts 5000 --log events.jsonl --save snap2.json
+
+# Track a cell during replay
+node cli/bin/replay.js --size 16 --asm copier.asm --cell 0,0 --interrupts 1000 --track 0,0 --log lineage.jsonl
+
+# Periodic census during replay
+node cli/bin/replay.js --state snap.json --interrupts 500 --census 100 --log census.jsonl
+```
+
+### Inject (patch cells in saved state)
+```bash
+# Load preset into cell
+node cli/bin/inject.js --state board.json --preset spreader --cell 4,4 --save board.json
+
+# Multiple injections
+node cli/bin/inject.js --size 16 --randomize --cell 0,0 --asm a.asm --cell 15,15 --preset copier --save board.json
+
+# Poke individual bytes
+node cli/bin/inject.js --state board.json --cell 3,3 --poke F0=40 --save board.json
+```
+
+### Heatmap (terminal-rendered)
+```bash
+node cli/bin/heatmap.js --state state.json --metric writes
+node cli/bin/heatmap.js --state state.json --metric entropy
+node cli/bin/heatmap.js --state state.json --metric moves --json
+```
+
+### Phylo (tree from lineage log)
+```bash
+# ASCII tree
+node cli/bin/phylo.js --log lineage.jsonl --format ascii
+
+# Newick format (for phylogenetic tools)
+node cli/bin/phylo.js --log lineage.jsonl --format newick > tree.nwk
+
+# DOT format (for Graphviz)
+node cli/bin/phylo.js --log lineage.jsonl --format dot | dot -Tsvg > tree.svg
+```
+
+### Tutorial
+See `doc/tutorial-tracking-replicators.md` for a walkthrough of writing,
+loading, and tracking self-replicating programs.
 
 ## Key Architecture
 
@@ -124,7 +200,7 @@ Colors encode cell activity using HSV with exponential decay of write/move recen
 - **Oriented registers** at 0xF0-0xF9: top 6 bits are rotated with the orientation
 - **Register save area** at 0xF9-0xFF: PCHI, PCLO, P, A, X, Y, S
 - **RNG** at 0xFC-0xFF: 4 bytes of pseudorandom numbers, refreshed each interrupt
-- **BRK operands**: the byte `b` immediately after the BRK opcode encodes src=floor(b/49) from cells 0-4, dest=b%49 from cells 0-48; swaps 1024-byte cells if src!=dest and 1<=b<245. Bad opcodes handled as BRK 0.
+- **BRK operands**: byte `b` after BRK opcode: 0=noop, 1–244=swap cells (src=floor(b/49), dest=b%49), 245–252=noisy copy origin→cell(b−244), 253–255=reserved. Bad opcodes handled as BRK 0.
 - **Interrupt flag (I)**: when set, writes are reverted on timer interrupt (atomic mode)
 - **Display name** at 0x3E0-0x3FF: 32 bytes of ASCII. Parsed by the web app as
   `[cssColor]:[iconifyIconName]` (e.g. `orange:bee`, `red:sword`). If no colon present,
