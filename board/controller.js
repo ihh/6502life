@@ -5,12 +5,20 @@ import { VANILLA_OPCODES } from "@sfotty-pie/opcodes";
 
 // board controller
 class BoardController {
-    constructor (memory) {
+    constructor (memory, noiseParams) {
         this.memory = memory || new BoardMemory();
         this.totalCycles = 0;
         this.lastMoveTime = this.newCellArray(()=>0);
         this.lastWriteTime = this.newCellArray(()=>0);
         this.lastWriteTimeForByte = this.newCellArray(()=>this.newCellByteArray(()=>0));
+        this.noiseParams = Object.assign({
+            pBitMask: 0,
+            pBitNoise: 0.001,
+            pByteMask: 0,
+            pByteNoise: 0,
+            pCellMask: 0,
+            pCellNoise: 0,
+        }, noiseParams);
         this.newSfotty();
         this.readRegisters();
         this.writeRng();
@@ -36,7 +44,8 @@ class BoardController {
                  X: this.sfotty.X,
                  Y: this.sfotty.Y,
                  P: this.sfotty.P,
-                 PC: this.sfotty.PC };
+                 PC: this.sfotty.PC,
+                 noiseParams: Object.assign({}, this.noiseParams) };
     }
 
     set state(s) {
@@ -47,6 +56,8 @@ class BoardController {
         this.sfotty.Y = s.Y;
         this.sfotty.P = s.P;
         this.sfotty.PC = s.PC;
+        if (s.noiseParams)
+            Object.assign(this.noiseParams, s.noiseParams);
     }
 
     newCellArray(initializer) {
@@ -115,6 +126,52 @@ class BoardController {
         }
     }
 
+    copyCellWithNoise (dest) {
+        const mt = this.memory.mt;
+        const np = this.noiseParams;
+        // Cell-level: mask (skip copy entirely) or noise (fill with random)
+        if (np.pCellMask > 0 && mt.real() < np.pCellMask)
+            return;
+        if (np.pCellNoise > 0 && mt.real() < np.pCellNoise) {
+            const destAddr = dest * this.memory.M;
+            for (let b = 0; b < this.memory.M; ++b) {
+                this.memory.write (destAddr + b, mt.int() & 0xFF);
+            }
+            return;
+        }
+        const srcAddr = 0;  // origin cell
+        const destAddr = dest * this.memory.M;
+        for (let b = 0; b < this.memory.M; ++b) {
+            // Byte-level: mask (skip byte) or noise (random byte)
+            if (np.pByteMask > 0 && mt.real() < np.pByteMask)
+                continue;
+            if (np.pByteNoise > 0 && mt.real() < np.pByteNoise) {
+                this.memory.write (destAddr + b, mt.int() & 0xFF);
+                continue;
+            }
+            // Bit-level noise
+            const srcByte = this.memory.read (srcAddr + b);
+            if (np.pBitMask === 0 && np.pBitNoise === 0) {
+                this.memory.write (destAddr + b, srcByte);
+            } else {
+                const dstByte = this.memory.read (destAddr + b);
+                const rndByte = mt.int() & 0xFF;
+                let maskBits = 0, noiseBits = 0;
+                for (let bit = 0; bit < 8; ++bit) {
+                    if (np.pBitMask > 0 && mt.real() < np.pBitMask)
+                        maskBits |= (1 << bit);
+                    if (np.pBitNoise > 0 && mt.real() < np.pBitNoise)
+                        noiseBits |= (1 << bit);
+                }
+                // masked bits keep dest, unmasked+noised bits get random, rest get source
+                const result = (dstByte & maskBits)
+                             | (rndByte & noiseBits & ~maskBits)
+                             | (srcByte & ~noiseBits & ~maskBits);
+                this.memory.write (destAddr + b, result & 0xFF);
+            }
+        }
+    }
+
     // NB this randomize() function avoids updating the BoardMemory's RNG
     randomize(rng) {
         rng = rng || (() => Math.random() * 2**32);
@@ -139,8 +196,10 @@ class BoardController {
             const isBadOpcode = !this.isValidOpcode[nextOpcode];
             const isSoftwareInterrupt = isBRK || isBadOpcode;
             let elapsedCycles = 0;
+            let brkOperand = 0;
             if (isSoftwareInterrupt) {
                 elapsedCycles = 7;  // software interrupt (BRK) takes 7 cycles
+                if (isBRK) brkOperand = this.nextOperandByte();
                 this.sfotty.PC = (this.sfotty.PC + 2) % 0x10000;
             } else {
                 this.sfotty.run();
@@ -163,15 +222,22 @@ class BoardController {
                     // Since the filesystem is all in RAM, we 
                     this.commitWrites();  // does nothing to board, allows this controller object to update its last-modified times
                     if (isBRK) {
-                        // BRK: software interrupt triggering fast cell swap
-                        // Operand encodes src=floor(A/49) from cells 0-4, dest=A%49 from cells 0-48
-                        // Swaps 1024-byte cells if src!=dest and 1<=A<245; otherwise yields to scheduler
-                        const operand = this.nextOperandByte();
+                        // BRK: operand b encodes src=floor(b/49) dest=b%49 for cell swap (1-244),
+                        // or noisy copy origin→cell (b-244) for b=245-252
+                        const operand = brkOperand;
                         const nDestCells = this.memory.Nsquared;  // 49
                         const nSrcCells = 5;
-                        if (operand > 0 && operand < nSrcCells * nDestCells)
+                        if (operand > 0 && operand < nSrcCells * nDestCells) {
+                            // Operand 1..244: swap cells (src = floor(op/49), dest = op%49)
                             this.commitMove (Math.floor(operand / nDestCells),
                                              operand % nDestCells);
+                        } else if (operand >= 245 && operand <= 252) {
+                            // Operand 245..252: noisy copy origin → cell (operand - 244)
+                            const dest = operand - 244;
+                            this.copyCellWithNoise (dest);
+                            this.lastMoveTime[0] = this.totalCycles;
+                            this.lastMoveTime[dest] = this.totalCycles;
+                        }
                     }
                     this.memory.resetUndoHistory();
                 }

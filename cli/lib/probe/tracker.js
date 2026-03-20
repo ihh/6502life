@@ -91,7 +91,7 @@ export class Tracker {
                 const { i, j } = writes[0];
                 this.emit('writes', {
                     channel: 'writes',
-                    time: this.memory.totalCycles,
+                    time: this.controller.totalCycles,
                     interrupt: this.interruptCount,
                     src: [this.memory.iOrig, this.memory.jOrig],
                     dst: [i, j],
@@ -113,7 +113,7 @@ export class Tracker {
                     this.emit('watch', {
                         channel: 'watch',
                         id: wp.id,
-                        time: this.memory.totalCycles,
+                        time: this.controller.totalCycles,
                         interrupt: this.interruptCount,
                         cell: wp.cell,
                         src: [this.memory.iOrig, this.memory.jOrig],
@@ -154,7 +154,7 @@ export class Tracker {
                     if (sim >= this.similarityThreshold) {
                         this.emit('lineage', {
                             channel: 'lineage',
-                            time: this.memory.totalCycles,
+                            time: this.controller.totalCycles,
                             interrupt: this.interruptCount,
                             event: 'copied_to',
                             src: [trackedI, trackedJ],
@@ -195,7 +195,7 @@ export class Tracker {
                     id: hit.id,
                     type: hit.type,
                     interrupt: this.interruptCount,
-                    time: this.memory.totalCycles,
+                    time: this.controller.totalCycles,
                 });
             }
         }
@@ -208,7 +208,7 @@ export class Tracker {
         // For now emit a simplified event
         this.emit('moves', {
             channel: 'moves',
-            time: this.memory.totalCycles,
+            time: this.controller.totalCycles,
             interrupt: this.interruptCount,
             src: srcNeighIdx,
             dst: dstNeighIdx,
@@ -384,7 +384,7 @@ export class Tracker {
 
         return {
             channel: 'census',
-            time: this.memory.totalCycles,
+            time: this.controller.totalCycles,
             interrupt: this.interruptCount,
             totalCells: B * B,
             active,

@@ -83,11 +83,7 @@ BRK
         desc: 'Alternates between moving forward and turning (tumble-roll)',
         source: `; Tumbler: swap with North neighbor, then rotate oriented registers
 ; This creates movement across the board
-; Step 1: swap self with North (cell 1)
-LDA #$01   ; cell index 1 = North
-TAX
-LDY #$01   ; swap with self? No - BRK operand = X + 49*Y
-; BRK 1 swaps cells X and Y
+; Step 1: swap origin with cell 1 / North (operand $01)
 BRK
 .byte $01
 ; After BRK, scheduler moves us. When we get control again:
@@ -186,26 +182,20 @@ BRK
         source: `; Crawler: swaps self with cell 1 (forward neighbor) every interrupt
 ; Orientation is random each time the cell is scheduled, so the
 ; direction of "forward" changes randomly → visible random walk
-; Phase 0: copy own code page to forward neighbor (so it persists)
+; Phase 0: noisy copy origin to forward neighbor (so code persists)
 ; Phase 1: swap entire cell with forward neighbor (actually moves)
 ; Phase counter at $10, toggled each interrupt
 LDA $10
 EOR #$01
 STA $10
 BNE @swap
-; Phase 0: copy page 0 → cell 1 page 0 (BRK 3)
-LDX #$01
-DEX          ; X=0 (our page)
-LDY #$04    ; cell 1 page 0 = page index 4
+; Phase 0: noisy copy origin → cell 1 (BRK $F5)
 BRK
-.byte $03   ; copy page X→Y, yield
+.byte $F5   ; noisy copy to cell 1, yield
 @swap:
-; Phase 1: swap cell 0 and cell 1 (BRK 1)
-LDX #$01
-DEX          ; X=0 (self)
-LDY #$01    ; cell 1 (forward)
+; Phase 1: swap cell 0 and cell 1 (BRK $01 = swap origin with cell 1)
 BRK
-.byte $01   ; swap cells X,Y, yield`,
+.byte $01   ; swap cells, yield`,
     },
 
     knight: {
@@ -213,25 +203,22 @@ BRK
         desc: 'Swaps with cells in an L-shaped pattern like a chess knight',
         source: `; Knight: swap with cells at (2,1), (1,2), etc. - L-shaped moves
 ; Cell 14 = NE^2 = (2,1), Cell 13 = N^2E = (1,2)
+; Operand = src*49 + dest; src=0 (origin), so operand = dest
 ; Alternate between these two
 LDA $10     ; load move counter
 AND #$01    ; alternate
 BNE @move2
-; Move 1: swap with cell 14
-LDX #$0E    ; cell 14
-LDY #$01    ; swap with cell 0
+; Move 1: swap origin with cell 14 (operand $0E)
 BRK
-.byte $01
+.byte $0E
 @move2:
-; Move 2: swap with cell 13
-LDX #$0D    ; cell 13
-LDY #$01
+; Move 2: swap origin with cell 13 (operand $0D)
 BRK
-.byte $01
+.byte $0D
 @done:
 INC $10     ; increment counter
 BRK
-.byte $01`,
+.byte $01   ; swap origin with cell 1 (North)`,
     },
 };
 

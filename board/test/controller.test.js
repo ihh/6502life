@@ -212,6 +212,172 @@ describe('BoardController', () => {
         });
     });
 
+    describe('noiseParams', () => {
+        it('uses default noise params', () => {
+            const ctrl = new BoardController();
+            expect(ctrl.noiseParams.pBitMask).toBe(0);
+            expect(ctrl.noiseParams.pBitNoise).toBe(0.001);
+            expect(ctrl.noiseParams.pByteMask).toBe(0);
+            expect(ctrl.noiseParams.pByteNoise).toBe(0);
+            expect(ctrl.noiseParams.pCellMask).toBe(0);
+            expect(ctrl.noiseParams.pCellNoise).toBe(0);
+        });
+
+        it('accepts custom noise params', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0.5 });
+            expect(ctrl.noiseParams.pBitNoise).toBe(0.5);
+            expect(ctrl.noiseParams.pBitMask).toBe(0); // default preserved
+        });
+
+        it('serializes and deserializes noise params', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0.1, pCellMask: 0.05 });
+            const saved = ctrl.state;
+            const ctrl2 = new BoardController();
+            ctrl2.state = saved;
+            expect(ctrl2.noiseParams.pBitNoise).toBe(0.1);
+            expect(ctrl2.noiseParams.pCellMask).toBe(0.05);
+        });
+    });
+
+    describe('copyCellWithNoise', () => {
+        it('copies origin to destination with zero noise', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0, pBitMask: 0 });
+            const mem = ctrl.memory;
+            mem.orientation = 0;
+            mem.iOrig = 0;
+            mem.jOrig = 0;
+            mem.resetUndoHistory();
+
+            // Write known pattern to origin cell (cell 0)
+            for (let b = 0; b < mem.M; b++) {
+                mem.write(b, b & 0xFF);
+            }
+
+            // Cell 1 starts at address 0x400 in the memory map
+            ctrl.copyCellWithNoise(1);
+
+            // Verify destination matches source
+            for (let b = 0; b < mem.M; b++) {
+                expect(mem.read(0x400 + b)).toBe(b & 0xFF);
+            }
+        });
+
+        it('pCellMask=1 prevents any copy', () => {
+            const ctrl = new BoardController(undefined, {
+                pBitNoise: 0, pCellMask: 1, pCellNoise: 0
+            });
+            const mem = ctrl.memory;
+            mem.orientation = 0;
+            mem.iOrig = 0;
+            mem.jOrig = 0;
+            mem.resetUndoHistory();
+
+            // Write pattern to origin
+            for (let b = 0; b < 256; b++) mem.write(b, 0xAA);
+            // Write different pattern to destination
+            for (let b = 0; b < 256; b++) mem.write(0x400 + b, 0xBB);
+
+            ctrl.copyCellWithNoise(1);
+
+            // Destination should be unchanged
+            expect(mem.read(0x410)).toBe(0xBB);
+        });
+
+        it('pBitNoise=1 makes copy very noisy (differs from source)', () => {
+            const ctrl = new BoardController(undefined, {
+                pBitMask: 0, pBitNoise: 1
+            });
+            const mem = ctrl.memory;
+            mem.orientation = 0;
+            mem.iOrig = 0;
+            mem.jOrig = 0;
+            mem.resetUndoHistory();
+
+            // Write all zeros to origin
+            for (let b = 0; b < mem.M; b++) mem.write(b, 0x00);
+
+            ctrl.copyCellWithNoise(1);
+
+            // With pBitNoise=1, every bit is random — expect some non-zero bytes
+            let nonZero = 0;
+            for (let b = 0; b < mem.M; b++) {
+                if (mem.read(0x400 + b) !== 0) nonZero++;
+            }
+            expect(nonZero).toBeGreaterThan(100);
+        });
+
+        it('pBitMask=1 keeps all destination bits untouched', () => {
+            const ctrl = new BoardController(undefined, {
+                pBitMask: 1, pBitNoise: 0
+            });
+            const mem = ctrl.memory;
+            mem.orientation = 0;
+            mem.iOrig = 0;
+            mem.jOrig = 0;
+            mem.resetUndoHistory();
+
+            // Write pattern to origin
+            for (let b = 0; b < 256; b++) mem.write(b, 0xAA);
+            // Write different pattern to destination
+            for (let b = 0; b < 256; b++) mem.write(0x400 + b, 0xBB);
+
+            ctrl.copyCellWithNoise(1);
+
+            // Destination should be unchanged (all bits masked)
+            expect(mem.read(0x410)).toBe(0xBB);
+        });
+
+        it('BRK operand 245 triggers noisy copy to cell 1', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0, pBitMask: 0 });
+            const mem = ctrl.memory;
+            mem.orientation = 0;
+            mem.iOrig = 0;
+            mem.jOrig = 0;
+            mem.nextCycles = 100000;
+
+            // Write a known byte at origin cell (0,0) byte 0x200
+            const srcByteIdx = mem.ijbToByteIndex(0, 0, 0x200);
+            mem.setByteWithoutUndo(srcByteIdx, 0x42);
+
+            // Write BRK with operand 245 at origin byte 0
+            const byteIdx = mem.ijbToByteIndex(0, 0, 0);
+            mem.setByteWithoutUndo(byteIdx, 0x00);     // BRK
+            mem.setByteWithoutUndo(byteIdx + 1, 245);   // operand 245 = copy to cell 1
+
+            ctrl.sfotty.PC = 0;
+            ctrl.sfotty.setP(0);
+            ctrl.sfotty.S = 0xFF;
+            mem.resetUndoHistory();
+
+            ctrl.runToNextInterrupt();
+
+            // Cell 1 = North = (0,+1) with orientation 0, origin (0,0)
+            // Read from storage directly since memory map has been resampled
+            const destByteIdx = mem.ijbToByteIndex(0, 1, 0x200);
+            expect(mem.getByte(destByteIdx)).toBe(0x42);
+        });
+
+        it('BRK operand 253+ is reserved (no-op)', () => {
+            const ctrl = new BoardController();
+            const mem = ctrl.memory;
+            mem.orientation = 0;
+            mem.iOrig = 0;
+            mem.jOrig = 0;
+            mem.nextCycles = 100000;
+
+            const byteIdx = mem.ijbToByteIndex(0, 0, 0);
+            mem.setByteWithoutUndo(byteIdx, 0x00);     // BRK
+            mem.setByteWithoutUndo(byteIdx + 1, 253);   // reserved
+
+            ctrl.sfotty.PC = 0;
+            ctrl.sfotty.setP(0);
+            mem.resetUndoHistory();
+
+            const result = ctrl.runToNextInterrupt();
+            expect(result.cpuCycles).toBe(7);
+        });
+    });
+
     describe('swapCells / swapPages', () => {
         it('swapPages swaps 256-byte blocks', () => {
             const ctrl = new BoardController();

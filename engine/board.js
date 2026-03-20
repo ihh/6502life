@@ -2,9 +2,9 @@ import { BoardMemory } from '../board/memory.js';
 import { BoardController } from '../board/controller.js';
 import { BoardVisualizer } from '../board/visualizer.js';
 
-export function createBoard(size = 32, seed = 42) {
+export function createBoard(size = 32, seed = 42, noiseParams) {
     const memory = new BoardMemory(seed, size);
-    const controller = new BoardController(memory);
+    const controller = new BoardController(memory, noiseParams);
     const visualizer = new BoardVisualizer(controller);
     return { memory, controller, visualizer };
 }
