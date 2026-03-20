@@ -125,10 +125,97 @@ Added two fixes to the assembler wrapper (`engine/assembler.js`):
   original spreader (27 vs 512 byte-copies per replication). Uses `BMI @start`
   for the loop-back (always taken since DEY past 0 sets N flag).
 
+## 2026-03-20: Tree reconstruction accuracy
+
+### Setup
+- BRK spreader on 8x8 board, 5M interrupts, seed 42
+- True tree: last-copy genealogy (most recent BRK copy to each cell)
+- Reconstructed tree: UPGMA from pairwise bit-level Hamming/JC distance
+
+### Results
+
+**Tree reconstruction is poor.** Spearman rank correlation between true
+genealogical depth and estimated JC distance: **ρ = -0.11** (essentially
+no correlation).
+
+The reason: most "mutations" don't come from the noisy-copy channel
+(`copyCellWithNoise` with ε=0.001). They come from cross-contamination
+— random cells writing into each other's code regions via LDA/STA during
+normal execution. This noise is NOT phylogenetically informative; it's
+independent of the genealogy. The JC distance model assumes all differences
+arise from the copy channel, so it gives wrong distances.
+
+**Robinson-Foulds distance**: 0.66 (normalized), meaning ~2/3 of
+bipartitions disagree between the true and reconstructed trees.
+
+### Conclusion
+The JC distance formula works correctly for the noisy-copy channel, but
+the noisy-copy channel is NOT the dominant source of sequence divergence
+in this system. To get phylogenetically useful distances, we'd need to
+either:
+1. Suppress cross-contamination (e.g. use the I flag for atomic writes)
+2. Restrict the fingerprint range to only the bytes that the spreader copies
+3. Increase the noisy-copy noise rate so it dominates cross-contamination
+
+## 2026-03-20: Coalescent analysis
+
+### Last-copy genealogy structure
+- 15,937 total BRK copies in 5M interrupts
+- Copy rate per interrupt: 0.0032 (0.32%)
+- Copies per cell per generation: 0.20
+- The genealogy is shallow: median pairwise MRCA depth = 3 copy generations
+- Maximum depth = 10
+
+### Moran model N_e estimate
+Under a Moran model (one replacement per event):
+- Replacements per generation (64 interrupts): 0.20
+- Moran N_e ≈ N²/(2·replacements/gen) = **10,040**
+
+This is ~157× the census size (N=64), reflecting the very low replacement
+rate. Most interrupts do NOT result in a copy event (the BRK spreader
+only fires when a cell containing the spreader code is scheduled AND its
+RNG-derived operand has been correctly patched).
+
+### Coalescent shape
+The top MRCA nodes are NOT equally used. Cell (7,1) is the MRCA of 69
+pairs — disproportionately many. This suggests non-neutral dynamics:
+some cells are more productive than others, possibly due to:
+- Position effects (cells near the original are reached first)
+- Stochastic variation in scheduling frequency
+- The wrapping topology of the board
+
+## 2026-03-20: Competition experiment
+
+### Setup
+- 8x8 board, BRK spreader at (0,0), mini-spreader at (4,4)
+- Census by fingerprinting (comparing first 50 bytes to reference)
+
+### Results
+
+| Interrupts | BRK | Mini | Other |
+|:---:|:---:|:---:|:---:|
+| 0 | 1 | 1 | 62 |
+| 100k | 4 | 1 | 59 |
+| 500k | 0 | 3 | 61 |
+| 1M | 0 | 0 | 64 |
+
+**Both spreaders go extinct by 1M interrupts.** Neither can maintain itself
+against the background noise of random cells overwriting each other. The
+"other" category dominates — random execution of garbage code in the 62
+uninfected cells generates enough writes to overwrite the spreader code.
+
+### Interpretation
+The board is a hostile environment. The spreader's replication rate (~0.3%
+of interrupts) is too low relative to the destruction rate from random
+overwrites. On a 256x256 board this would be even worse. Possible fixes:
+- Use the I flag (atomic mode) to protect writes
+- Higher copy rate (the mini-spreader is faster per copy but doesn't copy
+  the full cell, leaving most of its memory vulnerable)
+- Start with more initial copies to reach the exponential-growth threshold
+
 ### Next steps
-- Fit the 2-component binomial mixture to diagnose the copy-vs-contamination
-  fraction
-- Consider narrowing the fingerprint range to just the copied region for the
-  mini-spreader
-- Investigate whether the mini-spreader propagates successfully (it only
-  copies 27 bytes to page 0, no page 2 template)
+- Try the I flag for atomic replication
+- Investigate the background destruction rate quantitatively
+- Larger board experiments
+- Try restricting the JC distance to only the copied bytes and re-evaluate
+  tree accuracy
