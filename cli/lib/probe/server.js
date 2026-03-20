@@ -324,6 +324,44 @@ export class ProbeServer {
                 break;
             }
 
+            // --- Breakpoints ---
+            case 'break': {
+                const bp = msg;
+                let id;
+                if (bp.on === 'write') {
+                    const [i, j] = parseCell(bp.cell);
+                    id = this.tracker.addBreakpoint('write', { cell: [i, j] });
+                } else if (bp.on === 'census') {
+                    id = this.tracker.addBreakpoint('census', {
+                        minCopies: bp.minCopies,
+                        minUnique: bp.minUnique,
+                    });
+                } else if (bp.on === 'interrupt') {
+                    id = this.tracker.addBreakpoint('interrupt', { count: bp.count });
+                } else {
+                    reply({ type: 'error', error: 'Unknown breakpoint type. Use: write, census, interrupt' });
+                    break;
+                }
+                reply({ type: 'ok', breakpointId: id });
+                break;
+            }
+
+            case 'delbreak': {
+                this.tracker.removeBreakpoint(msg.id);
+                reply({ type: 'ok' });
+                break;
+            }
+
+            case 'breaks': {
+                reply({
+                    type: 'breaks',
+                    breakpoints: this.tracker.breakpoints.map(bp => ({
+                        id: bp.id, type: bp.type, condition: bp.condition,
+                    })),
+                });
+                break;
+            }
+
             // --- Config ---
             case 'config': {
                 if (msg.similarityThreshold !== undefined) {
@@ -378,6 +416,12 @@ export class ProbeServer {
 
         // Notify tracker
         this.tracker.onInterrupt(capturedHistory, wasAtomic);
+
+        // Check if a breakpoint was hit — pause simulation
+        if (this.tracker.breakpointHit) {
+            this.app.running = false;
+            this.tracker.breakpointHit = null;
+        }
     }
 
     // Called from the app's tick loop when running

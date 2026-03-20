@@ -348,6 +348,54 @@ async function runCommand() {
                 break;
             }
 
+            case 'break': {
+                const on = commandArgs[1];
+                if (on === 'write') {
+                    const cell = commandArgs[2];
+                    if (!cell) { console.error('Usage: break write <i,j>'); process.exit(1); }
+                    const r = await send({ type: 'break', on: 'write', cell });
+                    // Subscribe to breakpoint events
+                    await send({ type: 'subscribe', channel: 'breakpoint' });
+                    console.log(JSON.stringify(r));
+                    streaming = true;
+                } else if (on === 'census') {
+                    const expr = commandArgs[2];
+                    if (!expr) { console.error('Usage: break census "copies>N" or "unique>N"'); process.exit(1); }
+                    const msg = { type: 'break', on: 'census' };
+                    if (expr.startsWith('copies>')) msg.minCopies = parseInt(expr.slice(7));
+                    else if (expr.startsWith('unique>')) msg.minUnique = parseInt(expr.slice(7));
+                    const r = await send(msg);
+                    await send({ type: 'subscribe', channel: 'breakpoint' });
+                    console.log(JSON.stringify(r));
+                    streaming = true;
+                } else if (on === 'interrupt') {
+                    const count = parseInt(commandArgs[2]);
+                    const r = await send({ type: 'break', on: 'interrupt', count });
+                    await send({ type: 'subscribe', channel: 'breakpoint' });
+                    console.log(JSON.stringify(r));
+                    streaming = true;
+                } else {
+                    console.error('Usage: break <write|census|interrupt> <args>');
+                    process.exit(1);
+                }
+                break;
+            }
+
+            case 'delbreak': {
+                const id = parseInt(commandArgs[1]);
+                const r = await send({ type: 'delbreak', id });
+                console.log(JSON.stringify(r, null, 2));
+                socket.end();
+                break;
+            }
+
+            case 'breaks': {
+                const r = await send({ type: 'breaks' });
+                console.log(JSON.stringify(r, null, 2));
+                socket.end();
+                break;
+            }
+
             case 'config': {
                 const msg = { type: 'config' };
                 const sim = getFlagValue(commandArgs, '--similarity');
@@ -426,6 +474,13 @@ Watchpoints:
 Events:
   subscribe CHANNEL            Stream raw events (writes|moves|lineage|watch|census)
   census [--interval N]        One-shot or periodic board census
+
+Breakpoints:
+  break write I,J                Pause when cell is written
+  break census "copies>N"        Pause when any fingerprint has N+ copies
+  break interrupt N              Pause at interrupt count N
+  delbreak ID                    Remove breakpoint
+  breaks                         List active breakpoints
 
 Config:
   config [--similarity N] [--range S,E]  Get/set tracker config

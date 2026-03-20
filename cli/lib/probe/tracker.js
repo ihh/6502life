@@ -35,6 +35,11 @@ export class Tracker {
         // Watchpoints: array of {cell:[i,j], offset, length, id}
         this.watchpoints = [];
         this.nextWatchId = 1;
+
+        // Breakpoints: array of {type, condition, id}
+        this.breakpoints = [];
+        this.nextBreakpointId = 1;
+        this.breakpointHit = null; // set to the breakpoint when triggered
     }
 
     // --- Subscription ---
@@ -179,6 +184,21 @@ export class Tracker {
             const census = this.computeCensus();
             this.emit('census', census);
         }
+
+        // Breakpoints
+        if (this.breakpoints.length > 0) {
+            const hit = this.checkBreakpoints(writesByCell);
+            if (hit) {
+                this.breakpointHit = hit;
+                this.emit('breakpoint', {
+                    channel: 'breakpoint',
+                    id: hit.id,
+                    type: hit.type,
+                    interrupt: this.interruptCount,
+                    time: this.memory.totalCycles,
+                });
+            }
+        }
     }
 
     onMove(srcNeighIdx, dstNeighIdx) {
@@ -239,6 +259,49 @@ export class Tracker {
 
     removeWatch(id) {
         this.watchpoints = this.watchpoints.filter(w => w.id !== id);
+    }
+
+    // --- Breakpoints ---
+
+    addBreakpoint(type, condition) {
+        const id = this.nextBreakpointId++;
+        this.breakpoints.push({ type, condition, id });
+        return id;
+    }
+
+    removeBreakpoint(id) {
+        this.breakpoints = this.breakpoints.filter(bp => bp.id !== id);
+    }
+
+    checkBreakpoints(writesByCell) {
+        for (const bp of this.breakpoints) {
+            if (bp.type === 'write') {
+                // Break when a specific cell is written
+                const targetIdx = this.memory.ijToCellIndex(bp.condition.cell[0], bp.condition.cell[1]);
+                if (writesByCell.has(targetIdx)) {
+                    return bp;
+                }
+            } else if (bp.type === 'census') {
+                // Break on census condition (e.g., copies > N)
+                // Only check periodically (every 100 interrupts) to avoid performance hit
+                if (this.interruptCount % 100 === 0) {
+                    const census = this.computeCensus();
+                    const topValues = Object.values(census.top);
+                    if (bp.condition.minCopies && topValues.some(v => v >= bp.condition.minCopies)) {
+                        return bp;
+                    }
+                    if (bp.condition.minUnique && census.uniqueFingerprints >= bp.condition.minUnique) {
+                        return bp;
+                    }
+                }
+            } else if (bp.type === 'interrupt') {
+                // Break at interrupt count
+                if (this.interruptCount >= bp.condition.count) {
+                    return bp;
+                }
+            }
+        }
+        return null;
     }
 
     // --- Fingerprinting ---

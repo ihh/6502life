@@ -99,6 +99,61 @@ node cli/bin/probe.js census --interval 500     # periodic census stream
 node cli/bin/probe.js subscribe writes          # raw write event stream
 ```
 
+### Disassembler
+```bash
+# From state file
+node cli/bin/disasm.js --state state.json --cell 0,0 --lines 32
+
+# From hex
+node cli/bin/disasm.js --hex "A9 01 8D 10 00"
+
+# Diff two cells
+node cli/bin/disasm.js --state state.json --cell 0,0 --cell 1,0 --diff
+```
+
+### Replay (deterministic, with event logging)
+```bash
+# Run 5000 interrupts, log all events
+node cli/bin/replay.js --state snap.json --interrupts 5000 --log events.jsonl --save snap2.json
+
+# Track a cell during replay
+node cli/bin/replay.js --size 16 --asm copier.asm --cell 0,0 --interrupts 1000 --track 0,0 --log lineage.jsonl
+
+# Periodic census during replay
+node cli/bin/replay.js --state snap.json --interrupts 500 --census 100 --log census.jsonl
+```
+
+### Inject (patch cells in saved state)
+```bash
+# Load preset into cell
+node cli/bin/inject.js --state board.json --preset spreader --cell 4,4 --save board.json
+
+# Multiple injections
+node cli/bin/inject.js --size 16 --randomize --cell 0,0 --asm a.asm --cell 15,15 --preset copier --save board.json
+
+# Poke individual bytes
+node cli/bin/inject.js --state board.json --cell 3,3 --poke F0=40 --save board.json
+```
+
+### Heatmap (terminal-rendered)
+```bash
+node cli/bin/heatmap.js --state state.json --metric writes
+node cli/bin/heatmap.js --state state.json --metric entropy
+node cli/bin/heatmap.js --state state.json --metric moves --json
+```
+
+### Phylo (tree from lineage log)
+```bash
+# ASCII tree
+node cli/bin/phylo.js --log lineage.jsonl --format ascii
+
+# Newick format (for phylogenetic tools)
+node cli/bin/phylo.js --log lineage.jsonl --format newick > tree.nwk
+
+# DOT format (for Graphviz)
+node cli/bin/phylo.js --log lineage.jsonl --format dot | dot -Tsvg > tree.svg
+```
+
 ### Tutorial
 See `doc/tutorial-tracking-replicators.md` for a walkthrough of writing,
 loading, and tracking self-replicating programs.
