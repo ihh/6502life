@@ -1,280 +1,32 @@
 // Preset 6502 programs for the cellular automata board
-// All programs avoid 0x00 bytes in the instruction stream (BRK trap)
+// Loaded from .asm files in the presets/ directory
 
-export const PRESETS = {
-    counter: {
-        name: 'Counter',
-        desc: 'Increments accumulator and stores to $10',
-        source: `; Counter: increments A and stores to $10
-TXA
-@loop:
-CLC
-ADC #$01
-STA $10
-BNE @loop`,
-    },
+import { readFileSync, readdirSync } from 'fs';
+import { join, basename } from 'path';
+import { fileURLToPath } from 'url';
 
-    nop: {
-        name: 'NOP Sled',
-        desc: 'Infinite loop of NOPs',
-        source: `; NOP sled
-@loop:
-NOP
-NOP
-NOP
-NOP
-NOP
-NOP
-NOP
-NOP
-BNE @loop
-BEQ @loop`,
-    },
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const PRESETS_DIR = join(__dirname, '..', '..', '..', 'presets');
 
-    copier: {
-        name: 'Self-Copier',
-        desc: 'Copies own code to neighbor cell (East, cell 2)',
-        source: `; Copy own code from page 2 (template) to cell 2 (East neighbor)
-; Cell 2 starts at address $0800 in the memory map
-; Loop 1: template (page 2) -> target page 0 (execution copy)
-; Loop 2: template (page 2) -> target page 2 (template copy)
-LDY #$01
-@loop_p0:
-LDA $0201,Y
-STA $0801,Y
-INY
-BNE @loop_p0
-@loop_p1:
-LDA $0201,Y
-STA $0A01,Y
-INY
-BNE @loop_p1
-; Done, yield to scheduler
-BRK
-.byte $01`,
-    },
+// Parse the first line of an .asm file for name and description.
+// Expected format: "; Name: description"
+function parseHeader(source) {
+    const first = source.split('\n')[0];
+    const m = first.match(/^;\s*(.+?):\s*(.+)$/);
+    if (m) return { name: m[1].trim(), desc: m[2].trim() };
+    return { name: '', desc: '' };
+}
 
-    overwriter: {
-        name: 'Overwriter',
-        desc: 'Writes a pattern to all 4 cardinal neighbor cells',
-        source: `; Write NOP sled to cardinal neighbors (N=1, E=2, S=3, W=4)
-; Each cell is at cellIndex * $0400
-; N=$0400, E=$0800, S=$0C00, W=$1000
-; Write EA (NOP) to first 240 bytes of each
-LDX #$01
-@outer:
-LDY #$EF
-LDA #$EA
-@inner:
-; Compute target page = X * 4
-; Store NOP at target + Y offset
-STA $0401,Y
-DEY
-BNE @inner
-STA $0401,Y
-INX
-CPX #$05
-BNE @outer
-BRK
-.byte $01`,
-    },
+// Load all .asm files from the presets directory
+const PRESETS = {};
+for (const file of readdirSync(PRESETS_DIR).filter(f => f.endsWith('.asm')).sort()) {
+    const key = basename(file, '.asm');
+    const source = readFileSync(join(PRESETS_DIR, file), 'utf-8');
+    const { name, desc } = parseHeader(source);
+    PRESETS[key] = { name, desc, source };
+}
 
-    tumbler: {
-        name: 'Tumbler',
-        desc: 'Alternates between moving forward and turning (tumble-roll)',
-        source: `; Tumbler: swap with North neighbor, then rotate oriented registers
-; This creates movement across the board
-; Step 1: swap origin with cell 1 / North (operand $01)
-BRK
-.byte $01
-; After BRK, scheduler moves us. When we get control again:
-; Modify oriented register at $F0 to rotate our "forward" direction
-LDA $F0
-CLC
-ADC #$04   ; rotate by adding to top bits (each unit = ~5.6 degrees)
-STA $F0
-; Loop
-BRK
-.byte $01`,
-    },
-
-    spreader: {
-        name: 'Spreader',
-        desc: 'Copies self to a random cardinal neighbor using RNG',
-        source: `; Random spreader: copies self to a random cardinal neighbor
-; Uses RNG byte at $FC to select N/E/S/W (cells 1-4)
-; Target cell page 0 high byte: cell 1=$04, 2=$08, 3=$0C, 4=$10
-; Self-modifying code patches the STA high bytes in the copy loops
-; Reads from page 2 (template); writes to target page 0 + page 2
-LDA $FC
-AND #$03
-CLC
-ADC #$01        ; A = 1..4
-ASL
-ASL             ; A = 4,8,12,16 = high byte of target page 0
-STA $17         ; patch high byte of STA at @st0
-CLC
-ADC #$02        ; high byte of target page 2
-STA $20         ; patch high byte of STA at @st1
-; Copy template -> target page 0 (execution copy)
-LDY #$01
-@lp0:
-LDA $0201,Y    ; read self page 2 (template)
-@st0:
-STA $0401,Y    ; target page 0 (high byte is patched)
-INY
-BNE @lp0
-; Copy template -> target page 2 (template copy for further spreading)
-@lp1:
-LDA $0201,Y    ; read self page 2 (template)
-@st1:
-STA $0601,Y    ; target page 2 (high byte is patched)
-INY
-BNE @lp1
-; Yield to scheduler
-BRK
-.byte $01`,
-    },
-
-    painter: {
-        name: 'Painter',
-        desc: 'Fills the RGB bitmap area (0x380-0x3BF) with a pattern',
-        source: `; Painter: create a pattern in the 16x16 RGB bitmap
-; R channel at $380 (32 bytes), G at $3A0, B at $3C0
-LDX #$1F
-LDA #$FF
-@fill_r:
-STA $0380,X
-DEX
-BPL @fill_r
-; Green: alternating
-LDX #$1F
-@fill_g:
-TXA
-STA $03A0,X
-DEX
-BPL @fill_g
-; Blue: inverse
-LDX #$1F
-@fill_b:
-TXA
-EOR #$FF
-STA $03C0,X
-DEX
-BPL @fill_b
-; Set name to "painter"
-LDA #$70   ; 'p'
-STA $03E1
-LDA #$61   ; 'a'
-STA $03E2
-LDA #$69   ; 'i'
-STA $03E3
-LDA #$6E   ; 'n'
-STA $03E4
-LDA #$74   ; 't'
-STA $03E5
-; Yield
-BRK
-.byte $01`,
-    },
-
-    crawler: {
-        name: 'Crawler',
-        desc: 'Random-walks across the board by swapping with forward neighbor',
-        source: `; Crawler: swaps self with cell 1 (forward neighbor) every interrupt
-; Orientation is random each time the cell is scheduled, so the
-; direction of "forward" changes randomly → visible random walk
-; Phase 0: noisy copy origin to forward neighbor (so code persists)
-; Phase 1: swap entire cell with forward neighbor (actually moves)
-; Phase counter at $10, toggled each interrupt
-LDA $10
-EOR #$01
-STA $10
-BNE @swap
-; Phase 0: noisy copy origin → cell 1 (BRK $F5)
-BRK
-.byte $F5   ; noisy copy to cell 1, yield
-@swap:
-; Phase 1: swap cell 0 and cell 1 (BRK $01 = swap origin with cell 1)
-BRK
-.byte $01   ; swap cells, yield`,
-    },
-
-    'brk-spreader': {
-        name: 'BRK Spreader',
-        desc: 'Copies self to a random cardinal neighbor using BRK noisy-copy',
-        source: `; BRK Spreader: uses BRK noisy-copy (operands $F5-$F8) to replicate
-; Much simpler than the byte-by-byte spreader since BRK handles the whole copy
-; RNG at $FC gives a random byte; mask to 0-3, add $F5 for cells 1-4
-; Self-modifying code patches the BRK operand before executing it
-@start:
-LDA $FC         ; random byte from RNG
-AND #$03        ; 0-3
-CLC
-ADC #$F5        ; $F5-$F8 = noisy copy to cells 1-4
-STA $0A         ; patch the BRK operand at offset $0A
-BRK
-.byte $F5       ; placeholder operand, patched by STA above
-BNE @start      ; loop (branch if Z clear)
-BEQ @start      ; loop (branch if Z set)`,
-    },
-
-    'mini-spreader': {
-        name: 'Mini Spreader',
-        desc: 'Minimal self-replicator: copies only its own code + PC save area',
-        source: `; Mini Spreader: minimal self-replicating program
-; Lives at offset $E0, just before the register save area ($F9-$FF).
-; Copies $E0-$FA (27 bytes) from own page 0 to a random neighbor's page 0.
-; No page 2 template needed — reads directly from live code.
-;
-; This is the minimum viable replicator: code + the PC bytes ($F9:$FA)
-; that point to it. The controller saves/restores PC from $F9:$FA, so
-; copying these bytes makes the target execute from $E0 next scheduling.
-;
-; Total: 25 bytes of code ($E0-$F8), 27 byte-copies per replication.
-; Compare: original spreader copies 512 bytes per replication.
-.org $00E0
-@start:
-LDA $FC           ; RNG byte
-AND #$03          ; 0-3
-CLC
-ADC #$01          ; 1-4 (cardinal neighbor)
-ASL
-ASL               ; target page 0 high byte: $04/$08/$0C/$10
-STA @st+2         ; patch STA high byte in copy loop
-LDY #$1A          ; copy 27 bytes (Y: $1A down to $00)
-@lp:
-LDA $E0,Y         ; read own code at $E0+Y
-@st:
-STA $04E0,Y       ; write to target (high byte patched above)
-DEY
-BPL @lp           ; Y=$00..$1A inclusive
-BMI @start        ; always taken: DEY past 0 sets N flag`,
-    },
-
-    knight: {
-        name: 'Knight',
-        desc: 'Swaps with cells in an L-shaped pattern like a chess knight',
-        source: `; Knight: swap with cells at (2,1), (1,2), etc. - L-shaped moves
-; Cell 14 = NE^2 = (2,1), Cell 13 = N^2E = (1,2)
-; Operand = src*49 + dest; src=0 (origin), so operand = dest
-; Alternate between these two
-LDA $10     ; load move counter
-AND #$01    ; alternate
-BNE @move2
-; Move 1: swap origin with cell 14 (operand $0E)
-BRK
-.byte $0E
-@move2:
-; Move 2: swap origin with cell 13 (operand $0D)
-BRK
-.byte $0D
-@done:
-INC $10     ; increment counter
-BRK
-.byte $01   ; swap origin with cell 1 (North)`,
-    },
-};
+export { PRESETS };
 
 export function listPresets() {
     return Object.entries(PRESETS).map(([key, p]) => ({ key, name: p.name, desc: p.desc }));
