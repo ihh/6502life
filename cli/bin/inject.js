@@ -13,7 +13,7 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { parseArgs, getFlag, getIntFlag, getCellFlag } from '../lib/args.js';
 import { createBoard, zeroAllCells, writeCellBytes, zeroCellMemory } from '../../engine/board.js';
-import { assemble } from '../../engine/assembler.js';
+import { assemble, assembleMulti, applyImage } from '../../engine/assembler.js';
 import { getPreset } from '../lib/terminal/presets.js';
 
 const { flags } = parseArgs();
@@ -79,10 +79,18 @@ for (let i = 0; i < argv.length; i++) {
 
     if (arg === '--asm' && argv[i + 1]) {
         const source = readFileSync(argv[i + 1], 'utf-8');
-        const bytes = await assemble(source);
+        const hasDirectives = /^\s*\.(cell|celladdr|addr)\s/im.test(source);
         const [ci, cj] = currentCell;
-        writeCellBytes(controller, ci, cj, 0, bytes);
-        if (!quiet) console.error(`Assembled ${bytes.length} bytes into cell (${ci},${cj}) from ${argv[i + 1]}`);
+        if (hasDirectives) {
+            const image = await assembleMulti(source);
+            applyImage(image, controller.memory, ci, cj);
+            const totalBytes = image.segments.reduce((sum, s) => sum + s.bytes.length, 0);
+            if (!quiet) console.error(`Assembled ${totalBytes} bytes in ${image.segments.length} segment(s) from ${argv[i + 1]} (origin cell ${ci},${cj})`);
+        } else {
+            const bytes = await assemble(source);
+            writeCellBytes(controller, ci, cj, 0, bytes);
+            if (!quiet) console.error(`Assembled ${bytes.length} bytes into cell (${ci},${cj}) from ${argv[i + 1]}`);
+        }
         actions++;
         i++;
         continue;
