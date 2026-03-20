@@ -213,9 +213,141 @@ overwrites. On a 256x256 board this would be even worse. Possible fixes:
   the full cell, leaving most of its memory vulnerable)
 - Start with more initial copies to reach the exponential-growth threshold
 
-### Next steps
-- Try the I flag for atomic replication
-- Investigate the background destruction rate quantitatively
-- Larger board experiments
-- Try restricting the JC distance to only the copied bytes and re-evaluate
-  tree accuracy
+## 2026-03-20: Systematic viability experiments
+
+### Experiment 1: Viability under default noise (ε=0.001)
+
+| Preset | Size | Copies | Swaps | @250k | @500k | @1M | @2M |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| spreader | 38 | 4,997 | 104,933 | 1 | 2 | 0 | 0 |
+| brk-spreader | 15 | 9,376 | 278,744 | 63 | 58 | 0 | 0 |
+| brk-spreader-2x | 26 | 43,367 | 107,194 | 0 | 0 | 0 | 0 |
+| brk-spreader-3x | 37 | 9,135 | 288,237 | 64 | 3 | 0 | 0 |
+| mini-spreader | 24 | 13,508 | 178,403 | 64 | 64 | 64 | 3 |
+| mini-spreader-sei | 27 | 14,895 | 297,482 | 64 | 64 | 64 | 0 |
+| directional | 10 | 779,640 | 28,986 | 0 | 0 | 0 | 0 |
+| crawler | 12 | 13,239 | 169,688 | 64 | 64 | 64 | 0 |
+
+**Key finding**: Every spreader goes extinct under default noise. The
+mini-spreader (LDA/STA copy, no BRK noise) survives longest because its
+copies are perfect (no noise channel involved). BRK-based spreaders destroy
+themselves — each noisy copy corrupts the spreader code.
+
+The mini-spreader shows up as "64 alive" because its copies spread via
+LDA/STA (perfect fidelity), and the random BRK copies from garbage
+execution happen to not corrupt the critical 27-byte region fast enough.
+But by 2M interrupts, background noise catches up.
+
+### Experiment 2: Effect of noise parameters (BRK-spreader-2x)
+
+| pBitNoise | @250k | @500k | @1M | @2M | Copies |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 0 | 64 | 64 | 64 | 64 | 135,134 |
+| 0.001 | 0 | 0 | 0 | 0 | 1,320,470 |
+| 0.01 | 0 | 0 | 0 | 0 | 1,103,943 |
+| 0.05 | 0 | 0 | 0 | 0 | 952 |
+
+**Critical result**: With zero noise, the BRK-spreader-2x sustains itself
+perfectly. ANY nonzero pBitNoise kills it. The noisy-copy channel itself is
+the lethal factor — it corrupts the spreader code.
+
+At ε=0.05, only 952 copies total — the noise is so high that copies are
+mostly garbage, and the spreader code is destroyed almost immediately.
+
+### Experiment 3: Noise threshold (BRK-spreader-2x)
+
+| pBitNoise | @250k | @500k | @1M | @2M |
+|:---:|:---:|:---:|:---:|:---:|
+| 0 | 64 | 64 | 64 | 64 |
+| 0.0001 | 64 | 0 | 0 | 0 |
+| 0.0002 | 64 | 46 | 0 | 0 |
+| 0.0005 | 0 | 0 | 0 | 0 |
+| 0.001 | 0 | 0 | 0 | 0 |
+
+The extinction threshold is between ε=0 and ε=0.0001. Even one bit
+error per 10,000 bits per copy event is enough to eventually destroy
+the 26-byte spreader code. This is Eigen's error catastrophe: the
+genome (26 bytes = 208 bits) × error rate (0.0001/bit) gives
+~0.02 errors per copy, and ~50 copies are needed to fill the board.
+The accumulated errors exceed the code's tolerance.
+
+### Experiment 4: Board size (BRK-spreader-2x, zero noise)
+
+| Board | Cells | @250k | @500k | @1M | @2M | Copies |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| 8×8 | 64 | 64 | 64 | 64 | 64 | 133,614 |
+| 16×16 | 256 | 256 | 256 | 256 | 256 | 117,126 |
+| 32×32 | 1,024 | 44 | 313 | 672 | 781 | 22,410 |
+
+32×32 doesn't fully colonize by 2M interrupts because the scheduling
+rate per cell drops (each cell is scheduled 1/1024 of the time).
+
+### Experiment 5: All variants at zero noise
+
+| Preset | Copies | @250k | @500k | @1M | @2M |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| spreader | 161 | 1 | 1 | 0 | 0 |
+| brk-spreader | 744 | 64 | 61 | 59 | 50 |
+| brk-spreader-2x | 134,820 | 64 | 64 | 64 | 64 |
+| brk-spreader-3x | 41,008 | 64 | 64 | 64 | 0 |
+| mini-spreader | 190 | 0 | 0 | 0 | 0 |
+| mini-spreader-sei | 247 | 1 | 1 | 1 | 0 |
+| directional | 1,162,758 | 64 | 64 | 64 | 64 |
+| crawler | 219 | 64 | 64 | 64 | 64 |
+
+**Surprising results at zero noise**:
+- **spreader** (LDA/STA, page 2 template) STILL goes extinct! Even without
+  copy noise, the background destruction from random cells overwrites the
+  code. The LDA/STA spreader takes many interrupts to complete its 512-byte
+  copy, and gets destroyed before finishing.
+- **mini-spreader** ALSO fails at zero noise. Its LDA/STA copies are
+  perfect, but the BRK $01 swap after copying moves the original away,
+  and the exposed copy gets destroyed.
+- **brk-spreader-2x** and **directional** are the winners: high copy rate
+  (134k and 1.16M copies) means they replicate faster than destruction.
+- **crawler** survives by copying AND moving — it escapes destruction.
+- **brk-spreader-3x** eventually dies (0 at 2M) despite 41k copies,
+  possibly because its larger code size (37 bytes) is more vulnerable.
+
+### Key insight: Eigen's error catastrophe applies
+
+The viability of a self-replicator depends on the balance between:
+1. **Replication rate**: copies per unit time
+2. **Destruction rate**: background noise corrupting the code
+3. **Genome size**: more code = more vulnerable to errors
+4. **Copy fidelity**: noisy copies accumulate errors
+
+The BRK noisy-copy channel (operands $F5-$F8) is simultaneously the
+replication mechanism and the primary source of errors. Even at ε=0.0001
+(0.01% per bit), a 26-byte genome accumulates ~0.02 errors per copy.
+Over 50+ copies needed to fill the board, lethal mutations are inevitable.
+
+The most successful strategy is **high replication rate with minimal
+genome size** (directional-spreader at 10 bytes) or **zero noise with
+high copy rate** (BRK-spreader-2x).
+
+### Experiment 6: Tree reconstruction at zero noise
+
+At zero noise, all copies are perfect, so all cells are nearly identical
+(24 unique fingerprints out of 64 cells). The Spearman ρ between true
+genealogical depth and p_bit is only 0.09 — with no copy noise, there's
+no phylogenetic signal to reconstruct from. The sequence differences come
+entirely from cross-contamination, which is independent of the genealogy.
+
+### Conclusion for phylogenetic modeling
+
+The current system is in a regime where **cross-contamination dominates
+copy noise** as the source of sequence divergence. This makes standard
+phylogenetic methods inapplicable because the "mutations" are not
+tree-structured. To use this system as a model of evolution, we need:
+
+1. **Higher copy noise** (but this kills the spreader — error catastrophe)
+2. **Suppressed cross-contamination** (e.g. read-only memory regions)
+3. **Error correction** in the spreader code (checksums, redundancy)
+4. **A fundamentally different architecture** where the replication
+   mechanism is separated from the mutable genome
+
+This mirrors real biology: genomes encode both the replication machinery
+AND the heritable information, but cells have elaborate error correction
+(DNA repair, proofreading) to maintain fidelity. Without that, evolution
+cannot sustain complex genomes — which is exactly Eigen's error threshold.
