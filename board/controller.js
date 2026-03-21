@@ -70,6 +70,17 @@ class BoardController {
 
     newSfotty() {
         this.sfotty = new Sfotty(this.memory);
+        // Suppress Sfotty's "The 6502 CPU crashed" console.error.
+        // In 6502life, undocumented opcodes are expected (random cell content)
+        // and handled by the controller as BRK 0. Sfotty's decode() prints
+        // this message before we can intercept it, so we patch decode.
+        const origDecode = this.sfotty.decode.bind(this.sfotty);
+        this.sfotty.decode = () => {
+            const saved = console.error;
+            console.error = () => {};
+            origDecode();
+            console.error = saved;
+        };
     }
 
     nextOpcode() {
