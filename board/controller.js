@@ -88,61 +88,78 @@ class BoardController {
     }
 
     writeRegisters() {
-        this.memory.write (this.regAddrPCHI, (this.sfotty.PC >> 8) & 0xFF);
-        this.memory.write (this.regAddrPCLO, this.sfotty.PC & 0xFF);
-        this.memory.write (this.regAddrP, this.sfotty.P);
-        this.memory.write (this.regAddrA, this.sfotty.A);
-        this.memory.write (this.regAddrX, this.sfotty.X);
-        this.memory.write (this.regAddrY, this.sfotty.Y);
-        this.memory.write (this.regAddrS, this.sfotty.S);
+        // Write directly to storage, bypassing address translation.
+        // Register offsets are in the origin cell (neighborhood cell 0).
+        const base = this.memory.neighborCellStorageBase(0);
+        const s = this.memory.storage;
+        s[base + this.regAddrPCHI] = (this.sfotty.PC >> 8) & 0xFF;
+        s[base + this.regAddrPCLO] = this.sfotty.PC & 0xFF;
+        s[base + this.regAddrP] = this.sfotty.P;
+        s[base + this.regAddrA] = this.sfotty.A;
+        s[base + this.regAddrX] = this.sfotty.X;
+        s[base + this.regAddrY] = this.sfotty.Y;
+        s[base + this.regAddrS] = this.sfotty.S;
     }
 
     readRegisters() {
-        this.sfotty.PC = (this.memory.read (this.regAddrPCHI) << 8) | this.memory.read (this.regAddrPCLO);
-        this.sfotty.P = this.memory.read (this.regAddrP);
-        this.sfotty.A = this.memory.read (this.regAddrA);
-        this.sfotty.X = this.memory.read (this.regAddrX);
-        this.sfotty.Y = this.memory.read (this.regAddrY);
-        this.sfotty.S = this.memory.read (this.regAddrS);
+        const base = this.memory.neighborCellStorageBase(0);
+        const s = this.memory.storage;
+        this.sfotty.PC = (s[base + this.regAddrPCHI] << 8) | s[base + this.regAddrPCLO];
+        this.sfotty.P = s[base + this.regAddrP];
+        this.sfotty.A = s[base + this.regAddrA];
+        this.sfotty.X = s[base + this.regAddrX];
+        this.sfotty.Y = s[base + this.regAddrY];
+        this.sfotty.S = s[base + this.regAddrS];
     }
 
     writeRng() {
-        this.writeDword (this.rngAddr, this.memory.nextRnd);
+        const base = this.memory.neighborCellStorageBase(0);
+        const s = this.memory.storage;
+        const rnd = this.memory.nextRnd;
+        s[base + this.rngAddr] = (rnd >> 24) & 0xFF;
+        s[base + this.rngAddr + 1] = (rnd >> 16) & 0xFF;
+        s[base + this.rngAddr + 2] = (rnd >> 8) & 0xFF;
+        s[base + this.rngAddr + 3] = rnd & 0xFF;
     }
 
     swapCells (i, j) {
-        for (let k = 0; k < 4; ++k)
-            this.swapPages (i*4 + k, j*4 + k)
-    }
-
-    swapPages (i, j) {
-        const iAddr = i * 256, jAddr = j * 256;
-        for (let b = 0; b < 256; ++b) {
-            const iOld = this.memory.read(iAddr+b), jOld = this.memory.read(jAddr+b);
-            this.memory.write (iAddr+b, jOld);
-            this.memory.write (jAddr+b, iOld);
+        // Compute storage bases once, then swap directly on storage[]
+        // bypassing address translation entirely.
+        const mem = this.memory;
+        const iBase = mem.neighborCellStorageBase(i);
+        const jBase = mem.neighborCellStorageBase(j);
+        const storage = mem.storage;
+        const M = mem.M;
+        for (let b = 0; b < M; ++b) {
+            const tmp = storage[iBase + b];
+            storage[iBase + b] = storage[jBase + b];
+            storage[jBase + b] = tmp;
         }
     }
 
     copyCellWithNoise (dest) {
-        const mt = this.memory.mt;
+        const mem = this.memory;
+        const mt = mem.mt;
         const eps = this.noiseParams.pBitNoise;
-        const srcAddr = 0;  // origin cell
-        const destAddr = dest * this.memory.M;
-        for (let b = 0; b < this.memory.M; ++b) {
-            const srcByte = this.memory.read (srcAddr + b);
-            if (eps === 0) {
-                this.memory.write (destAddr + b, srcByte);
-            } else {
+        const storage = mem.storage;
+        const srcBase = mem.neighborCellStorageBase(0);  // origin cell
+        const dstBase = mem.neighborCellStorageBase(dest);
+        const M = mem.M;
+        if (eps === 0) {
+            // Perfect copy — direct storage memcpy
+            for (let b = 0; b < M; ++b) {
+                storage[dstBase + b] = storage[srcBase + b];
+            }
+        } else {
+            for (let b = 0; b < M; ++b) {
+                const srcByte = storage[srcBase + b];
                 const rndByte = mt.int() & 0xFF;
                 let noiseBits = 0;
                 for (let bit = 0; bit < 8; ++bit) {
                     if (mt.real() < eps)
                         noiseBits |= (1 << bit);
                 }
-                // noised bits get random value, rest get source
-                const result = (rndByte & noiseBits) | (srcByte & ~noiseBits);
-                this.memory.write (destAddr + b, result & 0xFF);
+                storage[dstBase + b] = (rndByte & noiseBits) | (srcByte & ~noiseBits);
             }
         }
     }

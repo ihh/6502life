@@ -110,6 +110,17 @@ class BoardMemory {
         this.mt.mti = s.mti;
     }    
 
+    // Convert a neighborhood cell index (0-48) to a storage byte offset.
+    // This is the base index into storage[] for that cell's first byte.
+    // Precomputes the full address translation (spiral lookup, rotation,
+    // coordinate wrapping) so callers can access storage[] directly.
+    neighborCellStorageBase (neighIdx) {
+        const [x, y] = spiralSortedCellVec[this.unrotate(neighIdx)];
+        const i = this.wrapCoord (this.iOrig + x);
+        const j = this.wrapCoord (this.jOrig + y);
+        return this.M * this.ijToCellIndex(i, j);
+    }
+
     // Accessors
     getByte (idx) { return this.storage[idx]; }
     setByteWithoutUndo (idx, val) { this.storage[idx] = val & 0xFF; }

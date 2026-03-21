@@ -47,8 +47,8 @@ describe('replay (tracker integration)', () => {
         const events = [];
         tracker.subscribe('writes', (e) => events.push(e));
 
-        // Run a few interrupts
-        for (let i = 0; i < 5; i++) {
+        // Run enough interrupts that cell (0,0) gets scheduled at least once
+        for (let i = 0; i < 50; i++) {
             stepWithTracking(controller, tracker);
         }
 

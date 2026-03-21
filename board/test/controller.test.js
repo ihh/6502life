@@ -328,25 +328,6 @@ describe('BoardController', () => {
     });
 
     describe('swapCells / swapPages', () => {
-        it('swapPages swaps 256-byte blocks', () => {
-            const ctrl = new BoardController();
-            const mem = ctrl.memory;
-            mem.orientation = 0;
-            mem.iOrig = 0;
-            mem.jOrig = 0;
-            mem.resetUndoHistory();
-
-            for (let b = 0; b < 256; b++) {
-                mem.write(b, 0xAA);
-                mem.write(0x400 + b, 0xBB);
-            }
-
-            ctrl.swapPages(0, 4);
-
-            expect(mem.read(0x0010)).toBe(0xBB);
-            expect(mem.read(0x0410)).toBe(0xAA);
-        });
-
         it('swapCells swaps all 4 pages of two cells', () => {
             const ctrl = new BoardController();
             const mem = ctrl.memory;
