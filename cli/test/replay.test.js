@@ -27,6 +27,11 @@ describe('replay (tracker integration)', () => {
             origUndoWrites();
         };
 
+        // Reset sfotty internal state before each interrupt to prevent
+        // stale crashed/cycleCounter state from a previous cell's execution.
+        controller.sfotty.crashed = false;
+        controller.sfotty.cycleCounter = 0;
+        controller.sfotty.operations = [() => controller.sfotty.decode()];
         controller.runToNextInterrupt();
 
         controller.commitWrites = origCommitWrites;
@@ -48,7 +53,7 @@ describe('replay (tracker integration)', () => {
         tracker.subscribe('writes', (e) => events.push(e));
 
         // Run enough interrupts that cell (0,0) gets scheduled at least once
-        for (let i = 0; i < 50; i++) {
+        for (let i = 0; i < 200; i++) {
             stepWithTracking(controller, tracker);
         }
 

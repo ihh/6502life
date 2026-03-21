@@ -2,12 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { createBoard, zeroAllCells, readCellRegisters, readCellMemory, writeCellBytes } from '../board.js';
 import { assemble, assembleTo } from '../assembler.js';
 
-// IMPORTANT: The controller checks the opcode at PC on every cycle.
-// During multi-cycle instructions, PC may temporarily point to operand bytes.
-// If an operand byte is 0x00, the controller treats it as BRK.
-// All test code must avoid 0x00 bytes in the instruction stream.
-// This also means JMP to addresses $00xx won't work (high byte is 0x00).
-// Use BNE (branch) instead of JMP for loops, and avoid LDA #$00.
+// The controller now only checks opcodes at instruction boundaries
+// (when sfotty.cycleCounter === 0), so operand bytes are no longer
+// misidentified as opcodes. Zero bytes in operands are safe.
 
 describe('deterministic simulation', () => {
     it('counter: increments accumulator and stores to memory', async () => {
@@ -15,7 +12,12 @@ describe('deterministic simulation', () => {
         zeroAllCells(controller);
 
         // TXA avoids the 0x00 operand that LDA #$00 would have.
+        // The controller checks the byte at PC when cycleCounter === 0,
+        // which catches the first operand byte of each instruction.
+        // If that byte is 0x00, it's treated as BRK.
         // BNE avoids the 0x00 high-byte that JMP $00xx would have.
+        // Use a small cycle budget so the timer interrupt fires mid-loop
+        // (before A wraps back to 0 on the 256th iteration).
         const source = [
             'TXA',           // A = X (0), 1 byte, no operand
             '@loop:',
@@ -31,7 +33,7 @@ describe('deterministic simulation', () => {
         mem.iOrig = 0;
         mem.jOrig = 0;
         mem.orientation = 0;
-        mem.nextCycles = 10000;
+        mem.nextCycles = 1000;
 
         controller.sfotty.PC = 0;
         controller.sfotty.A = 0;

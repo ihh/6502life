@@ -133,7 +133,10 @@ $y=-3$ & 47 & 41 & 33 & 27 & 32 & 40 & 46
 \item The last four bytes of zero page are overwritten with pseudorandom numbers.
 \item CPU registers are restored from the last seven bytes of zero page.
 \end{itemize}
-\item A BRK software interrupt is handled similarly, with key differences:
+\item A BRK software interrupt costs 7 CPU cycles, matching the real NMOS 6502
+  (2 to fetch opcode + operand, 3 to push PC and P to stack, 2 to read the
+  IRQ vector). Undocumented opcodes are treated as BRK~0 at the same 7-cycle
+  cost. Key differences from timer interrupts:
   \begin{itemize}
     \item The I flag is ignored: writes always commit after BRK (the ``NMI'' is unconditional).
     \item The operand byte $b$ (the byte following BRK) is examined \emph{before} registers are saved. Copy and swap operations (below) use the cell's pre-interrupt state. This means a BRK copy produces a child that inherits the \emph{previous} scheduling's saved registers, not the post-BRK state.

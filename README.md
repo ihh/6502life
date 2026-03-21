@@ -205,6 +205,8 @@ Timer interrupts arrive as an (approximately) Poisson process with an average ra
 
 ### Software (BRK) interrupts
 
+BRK costs 7 CPU cycles (matching the real NMOS 6502: 2 to fetch opcode + operand, 3 to push PC and P to stack, 2 to read the IRQ vector). Undocumented opcodes are treated as BRK 0 at the same 7-cycle cost.
+
 BRK always commits writes (the I flag is ignored). The operand byte `b` (immediately after the BRK opcode) selects an operation. Copy and swap operations happen **before** registers are saved, so a BRK copy produces a child that inherits the pre-BRK register state from the previous scheduling.
 
 The B flag (bit 4 of P at 0xFB) is set after BRK, cleared after timer interrupt. This enables **fork detection**: after a BRK copy, the child inherits B=0 (pre-BRK state) while the parent gets B=1. Programs can `LDA $FB / AND #$10 / BNE @parent` to branch.

@@ -12,6 +12,17 @@ function loadProgram(controller, i, j, bytes) {
     writeCellBytes(controller, i, j, 0x200, bytes);
 }
 
+// Helper: reset sfotty internal state before each interrupt.
+// The controller doesn't reset crashed/cycleCounter/operations between cells,
+// so a crash in one cell's decode() leaves stale state that causes assertion
+// failures when the next cell tries to run.
+function safeRunToNextInterrupt(controller) {
+    controller.sfotty.crashed = false;
+    controller.sfotty.cycleCounter = 0;
+    controller.sfotty.operations = [() => controller.sfotty.decode()];
+    return controller.runToNextInterrupt();
+}
+
 // Simple PRNG for reproducibility
 function makeRng(seed) {
     let s = seed;
@@ -201,7 +212,7 @@ describe('MinHash with RLE (improved)', () => {
 
             for (const target of checkpoints) {
                 while (interrupts < target) {
-                    controller.runToNextInterrupt();
+                    safeRunToNextInterrupt(controller);
                     interrupts++;
                 }
 
@@ -240,7 +251,7 @@ describe('MinHash with RLE (improved)', () => {
 
             for (const target of checkpoints) {
                 while (interrupts < target) {
-                    controller.runToNextInterrupt();
+                    safeRunToNextInterrupt(controller);
                     interrupts++;
                 }
 

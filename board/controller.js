@@ -183,22 +183,31 @@ class BoardController {
         let cpuCycles = 0;
         const schedulerCycles = this.memory.nextCycles;
         while (true) {
-            const nextOpcode = this.nextOpcode();
-            const isBRK = nextOpcode == 0;
-            const isBadOpcode = !this.isValidOpcode[nextOpcode];
-            const isSoftwareInterrupt = isBRK || isBadOpcode;
-            let elapsedCycles = 0;
+            // Only check for BRK/bad opcode at instruction boundaries
+            // (cycleCounter === 0), not mid-instruction where PC points
+            // at operand bytes that could be misidentified as bad opcodes.
+            let isSoftwareInterrupt = false;
+            let isBRK = false;
             let brkOperand = 0;
+            let elapsedCycles = 0;
+            if (this.sfotty.cycleCounter === 0) {
+                const nextOpcode = this.nextOpcode();
+                isBRK = nextOpcode == 0;
+                const isBadOpcode = !this.isValidOpcode[nextOpcode];
+                isSoftwareInterrupt = isBRK || isBadOpcode;
+            }
             if (isSoftwareInterrupt) {
-                elapsedCycles = 7;  // software interrupt (BRK) takes 7 cycles
+                // BRK takes 7 cycles on the real NMOS 6502: 2 to fetch
+                // opcode + operand, 3 to push PC and P to stack, 2 to
+                // read the IRQ vector. We use the same 7-cycle cost for
+                // bad (undocumented) opcodes, treating them as BRK 0.
+                elapsedCycles = 7;
                 if (isBRK) brkOperand = this.nextOperandByte();
-                // BRK 0 (noop) resets PC to 0, preventing zero-fill cells from
-                // marching their PC through memory into the RNG region.
-                // All other BRK operands advance PC past the BRK+operand.
                 this.sfotty.PC = (isBRK && brkOperand === 0) ? 0 : (this.sfotty.PC + 2) % 0x10000;
             } else {
+                // Each sfotty.run() call is one CPU cycle.
                 this.sfotty.run();
-                elapsedCycles = this.sfotty.cycleCounter;
+                elapsedCycles = 1;
             }
             cpuCycles += elapsedCycles;
             this.totalCycles += elapsedCycles;

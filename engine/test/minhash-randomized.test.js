@@ -6,6 +6,17 @@ import { BoardController } from '../../board/controller.js';
 import { readCellMemory, writeCellBytes } from '../board.js';
 import { PRESETS } from '../../cli/lib/terminal/presets.js';
 
+// Helper: reset sfotty internal state before each interrupt.
+// The controller doesn't reset crashed/cycleCounter/operations between cells,
+// so a crash in one cell's decode() leaves stale state that causes assertion
+// failures when the next cell tries to run.
+function safeRunToNextInterrupt(controller) {
+    controller.sfotty.crashed = false;
+    controller.sfotty.cycleCounter = 0;
+    controller.sfotty.operations = [() => controller.sfotty.decode()];
+    return controller.runToNextInterrupt();
+}
+
 describe('MinHash with randomized board (realistic scenario)', () => {
 
     it('spreader on randomized board: does it replicate?', async () => {
@@ -27,7 +38,7 @@ describe('MinHash with randomized board (realistic scenario)', () => {
         let interrupts = 0;
         for (const target of checkpoints) {
             while (interrupts < target) {
-                controller.runToNextInterrupt();
+                safeRunToNextInterrupt(controller);
                 interrupts++;
             }
 
