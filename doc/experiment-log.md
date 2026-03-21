@@ -464,3 +464,41 @@ replicator reaches critical mass fast enough to establish dominance.
 The decline after 1M suggests that accumulated copy errors eventually
 corrupt enough copies that the population drops below the critical mass
 threshold, triggering a collapse.
+
+## 2026-03-21: Sfotty CLC/BCC bug — earlier nano results were wrong
+
+### Bug discovered
+
+The organism design agent discovered that CLC/BCC loops don't work
+correctly in Sfotty's cycle-accurate emulation. After CLC, the carry
+flag isn't properly visible to the next BCC instruction due to stale
+internal decoder state. The branch is not taken, and the PC runs off
+into garbage.
+
+This means **all earlier nano results using CLC/BCC were invalid**.
+The "64/64 at 500k" result for nano-2x was from a program that wasn't
+actually looping — it was executing random bytes that happened to
+sometimes trigger BRK copies by chance.
+
+### Fixed presets (BNE/BEQ loops)
+
+Replaced CLC/BCC with BNE/BEQ pairs (adds 1 byte but works correctly).
+Sizes: nano 6 bytes, nano-2x 8 bytes, walking-nano 8 bytes.
+
+### Corrected viability results (ε=1/2048, 8×8)
+
+| Preset | Size | Copies | @500k | @1M | @2M | @3M |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| nano | 6 | 31,488 | 2 | 0 | 0 | 0 |
+| nano-2x | 8 | 27,694 | 61 | 1 | 0 | 0 |
+| walking-nano | 8 | 83,902 | 1 | 64 | 0 | 0 |
+| hardy | 12 | 388,261 | 0 | 0 | 0 | 0 |
+
+**walking-nano** is now the best performer: 64 alive at 1M (vs 0 for
+all others). Its copy+move strategy helps it escape contaminated zones.
+But still extinct by 2M.
+
+All programs still go extinct. The fundamental constraint remains:
+at ε=1/2048, copy noise accumulates faster than replication can
+compensate. A sustainable lineage would require either lower noise
+or error correction.
