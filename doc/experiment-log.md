@@ -403,3 +403,64 @@ Programs need to either:
 3. **Fork-aware**: after BRK copy, child needs to detect it's a fresh copy
    and potentially run initialization/repair code
 4. **Quiescent neighbors**: silence target cells before copying into them
+
+## 2026-03-21: Nano replicator series
+
+### Design rationale
+
+The organism design agent identified that the optimal strategy at ε=1/2048
+is **absolute minimum genome size**. The Eigen error threshold analysis:
+every byte of code increases vulnerability. The battle is reaching >50%
+board coverage, where cross-contamination becomes self-reinforcing
+(replicators contaminate each other with replicator code = harmless).
+
+### New presets
+
+- **nano** (5 bytes): `BRK $F5 / CLC / BCC @start` — absolute minimum
+- **nano-2x** (7 bytes): copies to cell 1 AND cell 2 (forward + right)
+- **walking-nano** (7 bytes): copy forward then swap forward (move+copy)
+
+### Viability results (ε=1/2048, 8×8 board)
+
+| Preset | Size | Copies | @250k | @500k | @1M | @2M | @3M | @5M |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| nano | 5 | 23,721 | 4 | 6 | 1 | 0 | 0 | 0 |
+| **nano-2x** | **7** | **51,128** | **64** | **64** | **47** | 1 | 4 | 0 |
+| walking-nano | 7 | 152,632 | 5 | 0 | 2 | 7 | 0 | 0 |
+| hardy | 12 | 1,367,148 | 0 | 0 | 0 | 0 | 0 | 0 |
+| spore | 6 | 138,747 | 10 | 8 | 0 | 0 | 0 | 0 |
+| directional | 10 | 2,515,011 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+**nano-2x is the breakthrough.** First program to sustain near-complete
+board coverage (64/64) through 500k interrupts at ε=1/2048. Still 47/64
+at 1M. All other variants go extinct much earlier.
+
+### Why nano-2x wins
+
+1. **Small genome** (7 bytes = 56 bits): only 2.7% chance of a copy error
+   per BRK copy in the code region.
+2. **Two-direction coverage**: copies to both forward and right on
+   alternating schedulings. Since orientation is randomized, this gives
+   broader spatial coverage than single-direction nano.
+3. **CLC/BCC loop** instead of BNE/BEQ: unconditional branch via CLC+BCC
+   is only 3 bytes, while BNE+BEQ is 4 bytes. Every byte saved matters.
+4. **No swap**: unlike walking-nano, nano-2x stays put. This means the
+   original cell keeps producing copies without being moved away.
+
+### Why larger programs fail
+
+Hardy (12 bytes, 1.37M copies) and directional-spreader (10 bytes, 2.5M
+copies) have MUCH higher copy rates, but their larger genomes make each
+copy more likely to introduce a lethal mutation. The extra replication
+speed can't compensate for the higher error rate.
+
+### Critical mass hypothesis
+
+The agent's insight: once nano-2x reaches >50% board occupation, the
+cross-contamination becomes harmless (replicators contaminating each other
+with replicator code). The 64/64 coverage at 250k confirms this — the
+replicator reaches critical mass fast enough to establish dominance.
+
+The decline after 1M suggests that accumulated copy errors eventually
+corrupt enough copies that the population drops below the critical mass
+threshold, triggering a collapse.
