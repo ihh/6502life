@@ -20,7 +20,6 @@ class BoardController {
         this.newSfotty();
         this.readRegisters();
         this.writeRng();
-        this.sfotty = new Sfotty(this.memory);
         this.isValidOpcode = Array.from({length: 256});
         VANILLA_OPCODES.forEach ((opcode) => this.isValidOpcode[opcode.opcode] = true);
     }
@@ -43,7 +42,10 @@ class BoardController {
                  Y: this.sfotty.Y,
                  P: this.sfotty.P,
                  PC: this.sfotty.PC,
-                 noiseParams: Object.assign({}, this.noiseParams) };
+                 noiseParams: Object.assign({}, this.noiseParams),
+                 totalCycles: this.totalCycles,
+                 lastWriteTime: this.lastWriteTime,
+                 lastMoveTime: this.lastMoveTime };
     }
 
     set state(s) {
@@ -56,6 +58,12 @@ class BoardController {
         this.sfotty.PC = s.PC;
         if (s.noiseParams)
             Object.assign(this.noiseParams, s.noiseParams);
+        if (s.totalCycles !== undefined)
+            this.totalCycles = s.totalCycles;
+        if (s.lastWriteTime)
+            this.lastWriteTime = s.lastWriteTime;
+        if (s.lastMoveTime)
+            this.lastMoveTime = s.lastMoveTime;
     }
 
     newCellArray(initializer) {
