@@ -215,33 +215,26 @@ describe('BoardController', () => {
     describe('noiseParams', () => {
         it('uses default noise params', () => {
             const ctrl = new BoardController();
-            expect(ctrl.noiseParams.pBitMask).toBe(0);
-            expect(ctrl.noiseParams.pBitNoise).toBe(0.001);
-            expect(ctrl.noiseParams.pByteMask).toBe(0);
-            expect(ctrl.noiseParams.pByteNoise).toBe(0);
-            expect(ctrl.noiseParams.pCellMask).toBe(0);
-            expect(ctrl.noiseParams.pCellNoise).toBe(0);
+            expect(ctrl.noiseParams.pBitNoise).toBeCloseTo(1 / 2048);
         });
 
         it('accepts custom noise params', () => {
             const ctrl = new BoardController(undefined, { pBitNoise: 0.5 });
             expect(ctrl.noiseParams.pBitNoise).toBe(0.5);
-            expect(ctrl.noiseParams.pBitMask).toBe(0); // default preserved
         });
 
         it('serializes and deserializes noise params', () => {
-            const ctrl = new BoardController(undefined, { pBitNoise: 0.1, pCellMask: 0.05 });
+            const ctrl = new BoardController(undefined, { pBitNoise: 0.1 });
             const saved = ctrl.state;
             const ctrl2 = new BoardController();
             ctrl2.state = saved;
             expect(ctrl2.noiseParams.pBitNoise).toBe(0.1);
-            expect(ctrl2.noiseParams.pCellMask).toBe(0.05);
         });
     });
 
     describe('copyCellWithNoise', () => {
         it('copies origin to destination with zero noise', () => {
-            const ctrl = new BoardController(undefined, { pBitNoise: 0, pBitMask: 0 });
+            const ctrl = new BoardController(undefined, { pBitNoise: 0 });
             const mem = ctrl.memory;
             mem.orientation = 0;
             mem.iOrig = 0;
@@ -262,31 +255,8 @@ describe('BoardController', () => {
             }
         });
 
-        it('pCellMask=1 prevents any copy', () => {
-            const ctrl = new BoardController(undefined, {
-                pBitNoise: 0, pCellMask: 1, pCellNoise: 0
-            });
-            const mem = ctrl.memory;
-            mem.orientation = 0;
-            mem.iOrig = 0;
-            mem.jOrig = 0;
-            mem.resetUndoHistory();
-
-            // Write pattern to origin
-            for (let b = 0; b < 256; b++) mem.write(b, 0xAA);
-            // Write different pattern to destination
-            for (let b = 0; b < 256; b++) mem.write(0x400 + b, 0xBB);
-
-            ctrl.copyCellWithNoise(1);
-
-            // Destination should be unchanged
-            expect(mem.read(0x410)).toBe(0xBB);
-        });
-
         it('pBitNoise=1 makes copy very noisy (differs from source)', () => {
-            const ctrl = new BoardController(undefined, {
-                pBitMask: 0, pBitNoise: 1
-            });
+            const ctrl = new BoardController(undefined, { pBitNoise: 1 });
             const mem = ctrl.memory;
             mem.orientation = 0;
             mem.iOrig = 0;
@@ -306,29 +276,8 @@ describe('BoardController', () => {
             expect(nonZero).toBeGreaterThan(100);
         });
 
-        it('pBitMask=1 keeps all destination bits untouched', () => {
-            const ctrl = new BoardController(undefined, {
-                pBitMask: 1, pBitNoise: 0
-            });
-            const mem = ctrl.memory;
-            mem.orientation = 0;
-            mem.iOrig = 0;
-            mem.jOrig = 0;
-            mem.resetUndoHistory();
-
-            // Write pattern to origin
-            for (let b = 0; b < 256; b++) mem.write(b, 0xAA);
-            // Write different pattern to destination
-            for (let b = 0; b < 256; b++) mem.write(0x400 + b, 0xBB);
-
-            ctrl.copyCellWithNoise(1);
-
-            // Destination should be unchanged (all bits masked)
-            expect(mem.read(0x410)).toBe(0xBB);
-        });
-
         it('BRK operand 245 triggers noisy copy to cell 1', () => {
-            const ctrl = new BoardController(undefined, { pBitNoise: 0, pBitMask: 0 });
+            const ctrl = new BoardController(undefined, { pBitNoise: 0 });
             const mem = ctrl.memory;
             mem.orientation = 0;
             mem.iOrig = 0;

@@ -12,12 +12,7 @@ class BoardController {
         this.lastWriteTime = this.newCellArray(()=>0);
         this.lastWriteTimeForByte = this.newCellArray(()=>this.newCellByteArray(()=>0));
         this.noiseParams = Object.assign({
-            pBitMask: 0,
-            pBitNoise: 0.001,
-            pByteMask: 0,
-            pByteNoise: 0,
-            pCellMask: 0,
-            pCellNoise: 0,
+            pBitNoise: 1 / 2048,  // ~1 bit error per 256-byte page copied
         }, noiseParams);
         // Hook for BRK copy/swap events. Called with (type, src, dest) where
         // type is 'swap' or 'copy', src/dest are neighborhood cell indices.
@@ -131,45 +126,22 @@ class BoardController {
 
     copyCellWithNoise (dest) {
         const mt = this.memory.mt;
-        const np = this.noiseParams;
-        // Cell-level: mask (skip copy entirely) or noise (fill with random)
-        if (np.pCellMask > 0 && mt.real() < np.pCellMask)
-            return;
-        if (np.pCellNoise > 0 && mt.real() < np.pCellNoise) {
-            const destAddr = dest * this.memory.M;
-            for (let b = 0; b < this.memory.M; ++b) {
-                this.memory.write (destAddr + b, mt.int() & 0xFF);
-            }
-            return;
-        }
+        const eps = this.noiseParams.pBitNoise;
         const srcAddr = 0;  // origin cell
         const destAddr = dest * this.memory.M;
         for (let b = 0; b < this.memory.M; ++b) {
-            // Byte-level: mask (skip byte) or noise (random byte)
-            if (np.pByteMask > 0 && mt.real() < np.pByteMask)
-                continue;
-            if (np.pByteNoise > 0 && mt.real() < np.pByteNoise) {
-                this.memory.write (destAddr + b, mt.int() & 0xFF);
-                continue;
-            }
-            // Bit-level noise
             const srcByte = this.memory.read (srcAddr + b);
-            if (np.pBitMask === 0 && np.pBitNoise === 0) {
+            if (eps === 0) {
                 this.memory.write (destAddr + b, srcByte);
             } else {
-                const dstByte = this.memory.read (destAddr + b);
                 const rndByte = mt.int() & 0xFF;
-                let maskBits = 0, noiseBits = 0;
+                let noiseBits = 0;
                 for (let bit = 0; bit < 8; ++bit) {
-                    if (np.pBitMask > 0 && mt.real() < np.pBitMask)
-                        maskBits |= (1 << bit);
-                    if (np.pBitNoise > 0 && mt.real() < np.pBitNoise)
+                    if (mt.real() < eps)
                         noiseBits |= (1 << bit);
                 }
-                // masked bits keep dest, unmasked+noised bits get random, rest get source
-                const result = (dstByte & maskBits)
-                             | (rndByte & noiseBits & ~maskBits)
-                             | (srcByte & ~noiseBits & ~maskBits);
+                // noised bits get random value, rest get source
+                const result = (rndByte & noiseBits) | (srcByte & ~noiseBits);
                 this.memory.write (destAddr + b, result & 0xFF);
             }
         }
