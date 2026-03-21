@@ -145,13 +145,14 @@ $y=-3$ & 47 & 41 & 33 & 27 & 32 & 40 & 46
 
       \begin{tabular}{l|p{.65\textwidth}}
         Operand $b$ & Operation \\ \hline
-        0 & Does nothing (yields control to scheduler) \\
+        0 & Resets PC to 0x0000. Yields to scheduler. \\
         $1 \leq b < 245$ & Swap cells: source $= \lfloor b/49 \rfloor$ (cells 0--4),
           destination $= b \bmod 49$ (cells 0--48).
-          Self-swaps (src $=$ dest) update move times but do not copy data. \\
+          Self-swaps (src $=$ dest) update move times but do not copy data.
+          Yields to scheduler. \\
         $245 \leq b \leq 252$ & Noisy copy: origin cell is copied to cell $b - 244$ (cells 1--8),
-          subject to the hierarchical noise model (see below). \\
-        $253$--$255$ & Reserved; currently does nothing.
+          subject to the noise model (see below). Yields to scheduler. \\
+        $253$--$255$ & Reserved (no operation). Yields to scheduler.
       \end{tabular}
 
       \subsubsection*{Noisy copy model}
