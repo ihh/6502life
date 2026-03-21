@@ -52,11 +52,14 @@ MVP strategy from `doc/gridcoin-architecture.md`. Work on a fork branch
 
 ### Social mining prep
 
-Even though Bluetooth is deferred, design the boundary interface now:
+Even though social play is deferred, design the boundary interface now:
 - `getBoundary(edge)`: returns the cells along one edge of the board
 - `setBoundary(edge, data)`: writes neighbor data from another board
 - Edge identification: based on real-world locations at time of connection
   (when available), else random assignment
+- **Transport**: WebRTC via PeerJS (not Bluetooth — Web Bluetooth only
+  supports Central role, can't do phone-to-phone discovery, no iOS support).
+  See doc/phone-client-research.md for details.
 - **Location proximity**: if a simple, cryptographically-secure way exists
   to prove real-world proximity without revealing locations (zero-knowledge
   proximity proof), note it. Not essential for MVP.
