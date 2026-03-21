@@ -404,6 +404,36 @@ Programs need to either:
    and potentially run initialization/repair code
 4. **Quiescent neighbors**: silence target cells before copying into them
 
+## 2026-03-21: Triplicator breakthrough — self-repair works
+
+### BRK-first design
+
+Put BRK $F5 at byte 0 so every scheduling starts with a copy.
+Repair code runs after the BRK (parent continues at byte 2).
+This guarantees the copy always fires.
+
+### Results (post-Sfotty-fix, BRK $00 reset, copy-before-save)
+
+| ε | @100k | @500k | @2M | Copies |
+|:---:|:---:|:---:|:---:|:---:|
+| 0 | 64/64 | 64/64 | 64/64 | 703,942 |
+| 1/8192 | 64/64 | 0 | 0 | 1,192,646 |
+| 1/2048 | 64/64 | 0 | 0 | 1,149,235 |
+
+**At ε=0: the triplicator sustains 64/64 indefinitely.** First self-
+repairing replicator to achieve persistent full board coverage.
+
+**At nonzero noise: fills the board (64/64 at 100k) but can't sustain.**
+The 1-byte-per-scheduling repair rate (~2% of code per scheduling) is
+close to but slightly below the error accumulation rate.
+
+### Sfotty bug fix was critical
+
+The mid-instruction opcode check bug was silently killing every program
+that used absolute,Y addressing (the operand bytes $00, $02, $03 etc.
+were misidentified as undocumented opcodes). With the fix, the triplicator
+and all complex programs work correctly for the first time.
+
 ## 2026-03-21: Nano replicator series
 
 ### Design rationale
