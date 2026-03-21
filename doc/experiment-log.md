@@ -351,3 +351,55 @@ This mirrors real biology: genomes encode both the replication machinery
 AND the heritable information, but cells have elaborate error correction
 (DNA repair, proofreading) to maintain fidelity. Without that, evolution
 cannot sustain complex genomes — which is exactly Eigen's error threshold.
+
+## 2026-03-20: Noise model simplification
+
+Removed byte noise, cell noise, and all mask parameters. The noisy copy
+channel now has a single parameter: `pBitNoise` (default 1/2048 ≈ 1 bit
+error per 256-byte page, or ~4 errors per 1024-byte cell copy).
+
+Distance model simplified to pure binary Jukes-Cantor:
+T = log(1 - 2p̂) / log(1 - ε).
+
+## 2026-03-20: Diagnosing extinction — copy noise vs cross-contamination
+
+### Critical experiment: zero-filled board
+
+Ran hardy on a zero-filled board (all cells hit BRK $00 = noop, yield
+immediately — zero cross-contamination) vs a randomized board.
+
+| Board type | @100k alive | @500k alive | Copies at 500k |
+|:---|:---:|:---:|:---:|
+| Zero-fill | 4 | 0 | 67,972 |
+| Randomized | 64 | 0 | 139,272 |
+
+**Copy noise alone is lethal.** Even with zero cross-contamination, hardy
+goes extinct by 500k interrupts. The 64k BRK copies at ~4 errors each
+accumulate ~256k bit errors, corrupting all copies of the 12-byte program.
+
+The randomized board paradoxically shows MORE alive cells early (64 at 100k)
+because random execution sometimes produces BRK $F5-$F8 by chance, creating
+accidental copies. But these are uncorrelated with the hardy code and don't
+persist.
+
+### All variants at ε=1/2048 (8×8 board)
+
+| Preset | Size | @100k | @500k | @1M | @2M | @3M | @5M |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| spore | 6 | 4 | 4 | 26 | 0 | 0 | 0 |
+| hardy | 12 | 64 | 0 | 0 | 0 | 0 | 0 |
+| brk-spreader | 15 | 3 | 10 | 0 | 0 | 0 | 0 |
+| directional | 10 | 64 | 0 | 0 | 0 | 0 | 0 |
+| crawler | 12 | 2 | 1 | 4 | 21 | 0 | 0 |
+
+All extinct by 5M. Crawler survives longest (21 alive at 2M) due to its
+move-around strategy — it escapes corrupted regions.
+
+### Implication for program design
+
+Programs need to either:
+1. **Tolerate errors**: redundancy, error correction, flexible entry points
+2. **SEI protection**: run with I flag set to revert timer-interrupted writes
+3. **Fork-aware**: after BRK copy, child needs to detect it's a fresh copy
+   and potentially run initialization/repair code
+4. **Quiescent neighbors**: silence target cells before copying into them
