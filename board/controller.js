@@ -265,10 +265,16 @@ class BoardController {
                     }
                     this.memory.resetUndoHistory();
                 }
-                // Randomize
+                // Randomize: pick next cell, load its state
                 this.memory.sampleNextMove();
                 this.readRegisters();
                 this.writeRng();
+                // Reset Sfotty internal state for the new cell.
+                // crashed: a previous cell's undocumented opcode sets this
+                // cycleCounter/operations: stale decode state from prior cell
+                this.sfotty.crashed = false;
+                this.sfotty.cycleCounter = 0;
+                this.sfotty.operations = [() => this.sfotty.decode()];
                 break;
             }
         }
