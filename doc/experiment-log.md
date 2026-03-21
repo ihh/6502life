@@ -550,3 +550,46 @@ To achieve sustained replication, we need EITHER:
    contamination, not just SEI)
 3. **Lower effective contamination** (e.g., all cells run NOPs so
    they don't write to neighbors)
+
+## 2026-03-21: Root cause — zero-fill cells are NOT inert
+
+### Discovery
+
+Even at ε=0 (zero copy noise), nano-2x goes extinct. Detailed tracing
+reveals why: zero-filled cells march their PC through memory (BRK $00
+= noop advances PC by 2 each scheduling). After ~125 schedulings, PC
+reaches the RNG area ($FC-$FF) and starts executing random bytes,
+producing random BRK operands including SWAP operations (1-244).
+
+These random swaps shuffle cell contents, eventually moving the
+replicator code away and replacing it with zeros.
+
+### Measurements (ε=0, 8×8, zero-fill board with nano-2x at (0,0))
+- 100k interrupts: 93 copies, 117 swaps, cell (0,0) zeroed out
+- Swaps come from zero-fill cells whose PC has marched into the
+  RNG region ($FC-$FF)
+- Cross-contamination in the code region: ~3 bytes in 10k interrupts
+  (negligible)
+- Swap-based disruption: the dominant extinction mechanism
+
+### Lower noise doesn't help
+
+| ε | half-life | @1M alive | Copies |
+|:---:|:---:|:---:|:---:|
+| 1/8192 | 71 gen | 0 | 313k |
+| 1/16384 | 142 gen | 0 | 2.1M |
+| 1/32768 | 284 gen | 0 | 7.1M |
+| 0 | ∞ | 0 | - |
+
+Even at zero noise, extinction occurs. The error threshold model was
+misleading — it's not accumulated copy errors but swap disruption from
+cells marching into the RNG region.
+
+### Implications
+
+The system needs a way to keep inert cells inert. Options:
+1. **NOP sled in all cells** (prevents PC march, but NOPs are slow)
+2. **BRK $00 should reset PC to $0000** instead of advancing it
+3. **Self-referencing loop at $00**: put `BRK $00` in a loop
+4. **Programs should claim territory**: write BRK-loop code to
+   neighbors before copying, silencing them
