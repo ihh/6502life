@@ -53,7 +53,7 @@ STA $0901,Y          ; cell 2 page 1
 INY
 BNE @loop_p1
 BRK                  ; yield to scheduler
-.byte $01            ; BRK operand (noop swap)
+.byte $01            ; BRK operand: swap origin with cell 1, yield
 ```
 
 This copies 510 bytes (two pages minus byte 0) to the East neighbor.

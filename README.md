@@ -185,49 +185,43 @@ and v<sub>0</sub>=(0,0), v<sub>1</sub>=(0,1), v<sub>2</sub>=(1,0), etc.
 
 The system uses "hardware" interrupts to schedule execution of different cells, and to do housekeeping around switching the currently running cell.
 
-"Software" interrupts (via the 6502 BRK instructioN) can be used by the developer to implement fast memory swaps and copies (though copies incur a random error probability, to penalize viral spreaders and introduce mutations).
+"Software" interrupts (via the 6502 BRK instruction) can be used by the developer to implement fast memory swaps and copies (though copies incur a random bit error probability, introducing mutations).
 
-### Hardware interrupts
+### Interrupt model
 
-Hardware interrupts arrive as an (approximately) Poisson process with an average rate of 1 per 4,096 cycles.
-  An interrupt is handled as follows:
+Pre-emptive scheduling is conceptually an IRQ (maskable by SEI) followed by an NMI (unmaskable context switch). Memory writeback happens between the two if the I flag allows it. Setting I (via SEI) makes writes atomic: they commit only on BRK, and are reverted on timer interrupt.
 
-+ The CPU registers are written to the last seven bytes of zero page.
-+ If the interrupt disable flag (I) in the status register P is clear, then the memory-mapped neighborhood of the current origin is copied from RAM to storage (after un-rotating the oriented registers from 0xF0-F9). Otherwise, if I is set, all edits made since the last interrupt are lost (including the registers written to zero page in the previous step). Note that this step requires that either the operating system or the paging hardware must "remember" the current origin and orientation between interrupts, along with the pre-edited state of the memory-mapped neighborhood. This information should not be visible to user-space code.
-+ A new origin cell (i,j) and orientation is randomly sampled. The memory-mapped neighborhood of that cell is copied from long-term storage to RAM, using the sampled orientation. Oriented registers at bytes 0xF0-0xF9 of every 1K block have rotations applied.
-+ The last four bytes of zero page are overwritten with pseudorandom numbers.
+### Hardware (timer) interrupts
+
+Timer interrupts arrive as an (approximately) Poisson process with an average rate of 1 per 4,096 cycles. On a timer interrupt:
+
++ If the interrupt disable flag (I) is set, all writes since the last interrupt are reverted (atomic abort). Otherwise:
++ The B flag (bit 4) is cleared in P.
++ CPU registers are written to the last seven bytes of zero page (0xF9–0xFF).
++ The memory-mapped neighborhood is committed to storage.
++ A new origin cell (i,j) and orientation is randomly sampled. The new cell's neighborhood is loaded.
++ The last four bytes of zero page (0xFC–0xFF) are overwritten with pseudorandom numbers.
 + CPU registers are restored from the last seven bytes of zero page.
-+ The interrupt completes.
 
-### Software interrupts
+### Software (BRK) interrupts
 
-A BRK software interrupt triggers a fast cell swap and returns control to the scheduler.
-The operand byte `b` (the byte in memory immediately after the BRK opcode) encodes a source cell s = floor(b/49) from cells 0-4 (origin + cardinal neighbors)
-and a destination cell d = b mod 49 from cells 0-48 (full neighborhood). If s != d and 1 <= b < 245,
-cells s and d are swapped (1024 bytes each). Otherwise, nothing happens (control still passes to the scheduler).
-The interrupt disable flag is ignored by BRK; memory is always committed (never reverted).
-A bad (unrecognized) opcode is handled like BRK 0: nothing happens, control returns to the scheduler.
+BRK always commits writes (the I flag is ignored). The operand byte `b` (immediately after the BRK opcode) selects an operation. Copy and swap operations happen **before** registers are saved, so a BRK copy produces a child that inherits the pre-BRK register state from the previous scheduling.
+
+The B flag (bit 4 of P at 0xFB) is set after BRK, cleared after timer interrupt. This enables **fork detection**: after a BRK copy, the child inherits B=0 (pre-BRK state) while the parent gets B=1. Programs can `LDA $FB / AND #$10 / BNE @parent` to branch.
 
 | Operand `b` | Operation |
 |--------------|-----------|
-| 0 | Does nothing (yields control to scheduler) |
-| 1–244 | Swap cells: src = floor(b/49), dest = b%49. Sources are cells 0–4 (origin + 4 cardinal), destinations are cells 0–48 (full neighborhood). Self-swaps (src=dest) update move times but do not copy data. |
-| 245–252 | Noisy copy: origin cell is copied to cell (b − 244), i.e. cells 1–8 (cardinal + diagonal neighbors), subject to the hierarchical noise model (see below). |
-| 253–255 | Reserved; currently does nothing |
+| 0 | Resets PC to 0x0000. Yields to scheduler. |
+| 1–244 | Swap cells: src = floor(b/49), dest = b%49. Sources are cells 0–4 (origin + 4 cardinal), destinations are cells 0–48 (full neighborhood). Self-swaps (src=dest) update move times but do not copy data. Yields to scheduler. |
+| 245–252 | Noisy copy: origin cell is copied to cell (b − 244), i.e. cells 1–8, subject to bit noise (see below). Yields to scheduler. |
+| 253–255 | Reserved (no operation). Yields to scheduler. |
 
-A bad (unrecognized) opcode is handled like BRK 0: nothing happens, control returns to the scheduler.
-The interrupt disable flag is ignored by BRK; memory is always committed (never reverted).
+A bad (unrecognized) opcode is handled like BRK 0: PC resets to 0, control returns to the scheduler.
 
 #### Noisy copy model
 
-The noisy copy (operands 245–252) copies the 1024-byte origin cell to a destination cell. Each bit is determined by a hierarchical coin-flip model with six board-level probability parameters (set at board construction): pCellMask, pCellNoise, pByteMask, pByteNoise, pBitMask, pBitNoise.
+The noisy copy (operands 245–252) copies all 1024 bytes of the origin cell to the destination. Each bit is independently randomized (replaced by a fair coin flip) with probability ε (`pBitNoise`), and faithfully copied with probability 1−ε. The default is ε = 1/2048, giving approximately 1 bit error per 256-byte page copied (~4 errors per cell).
 
-At each level (cell → byte → bit), two coins are flipped:
-
-1. **Cell level.** Flip pCellMask: if heads, entire cell untouched (copy aborted). Else flip pCellNoise: if heads, fill cell with random bytes.
-2. **Byte level** (each of 1024 bytes). Flip pByteMask: if heads, byte untouched. Else flip pByteNoise: if heads, byte replaced with random.
-3. **Bit level** (each of 8 bits). Flip pBitMask: if heads, dest bit untouched. Else flip pBitNoise: if heads, bit is random {0,1}. If tails, bit = source bit (faithful copy).
-
-Coarser levels override finer levels. Defaults: pBitNoise = 0.001, all others 0 (~8 mutated bits per cell copy).
+LDA/STA writes (normal 6502 store instructions) are always exact — noise applies only to BRK noisy copies.
 
 See [tex/6502life.pdf](tex/6502life.pdf) for the full specification.
