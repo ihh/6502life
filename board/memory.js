@@ -92,8 +92,11 @@ class BoardMemory {
     get firstLookupTableAddr() { return 0xE000 }
     get lastLookupTableAddr() { return 0xEFFF }
 
-    // Full serialization & deserialization
-    get state() { return { storage: new TextDecoder().decode(this.storage),
+    // Full serialization & deserialization.
+    // Storage is serialized as an array of byte values (not UTF-8 text,
+    // which is lossy for arbitrary binary data — bytes 0x80-0xBF without
+    // valid multi-byte leaders get replaced with U+FFFD on round-trip).
+    get state() { return { storage: Array.from(this.storage),
                             iOrig: this.iOrig,
                             jOrig: this.jOrig,
                             orientation: this.orientation,
@@ -101,14 +104,14 @@ class BoardMemory {
                             mt: this.mt.mt,
                             mti: this.mt.mti } }
     set state(s) {
-        this.storage = new TextEncoder().encode(s.storage);
+        this.storage = new Uint8Array(Array.isArray(s.storage) ? s.storage : new TextEncoder().encode(s.storage));
         this.iOrig = s.iOrig;
         this.jOrig = s.jOrig;
         this.orientation = s.orientation;
         this.nextCycles = s.nextCycles;
         this.mt.mt = s.mt;
         this.mt.mti = s.mti;
-    }    
+    }
 
     // Convert a neighborhood cell index (0-48) to a storage byte offset.
     // This is the base index into storage[] for that cell's first byte.
