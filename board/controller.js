@@ -192,7 +192,10 @@ class BoardController {
             if (isSoftwareInterrupt) {
                 elapsedCycles = 7;  // software interrupt (BRK) takes 7 cycles
                 if (isBRK) brkOperand = this.nextOperandByte();
-                this.sfotty.PC = (this.sfotty.PC + 2) % 0x10000;
+                // BRK 0 (noop) resets PC to 0, preventing zero-fill cells from
+                // marching their PC through memory into the RNG region.
+                // All other BRK operands advance PC past the BRK+operand.
+                this.sfotty.PC = (isBRK && brkOperand === 0) ? 0 : (this.sfotty.PC + 2) % 0x10000;
             } else {
                 this.sfotty.run();
                 elapsedCycles = this.sfotty.cycleCounter;
@@ -207,31 +210,48 @@ class BoardController {
                 // If the implementation was sideways RAM, there would be a bulk copy operation here.
                 // Since we have it all in memory, we actually preserve an undo history at the BoardMemory level,
                 // and call its built-in undo here.
-                if (isTimerInterrupt && this.sfotty.I)  // was this a masked interrupt?
-                    this.memory.undoWrites();
-                else {  // this was not a masked interrupt
-                    // Notionally, this is where we write everything back to the filesystem, or discard the update.
-                    // Since the filesystem is all in RAM, we 
-                    this.commitWrites();  // does nothing to board, allows this controller object to update its last-modified times
+                // Interrupt model:
+                // Pre-emptive scheduling is conceptually IRQ (maskable by SEI)
+                // followed by NMI (unmaskable context switch). Memory writeback
+                // happens between the IRQ and NMI if the I flag allows it.
+                if (isTimerInterrupt && this.sfotty.I)  // masked interrupt (I set)?
+                    this.memory.undoWrites();            // revert all writes (atomic abort)
+                else {
                     if (isBRK) {
-                        // BRK: operand b encodes src=floor(b/49) dest=b%49 for cell swap (1-244),
-                        // or noisy copy origin→cell (b-244) for b=245-252
+                        // BRK copy/swap happens BEFORE registers are saved,
+                        // so the child inherits the pre-BRK register state
+                        // stored at $F9-$FF from the previous scheduling.
                         const operand = brkOperand;
                         const nDestCells = this.memory.Nsquared;  // 49
                         const nSrcCells = 5;
                         if (operand > 0 && operand < nSrcCells * nDestCells) {
-                            // Operand 1..244: swap cells (src = floor(op/49), dest = op%49)
                             const src = Math.floor(operand / nDestCells);
                             const dest = operand % nDestCells;
                             this.commitMove (src, dest);
                             if (this.onBrkEvent) this.onBrkEvent('swap', src, dest);
                         } else if (operand >= 245 && operand <= 252) {
-                            // Operand 245..252: noisy copy origin → cell (operand - 244)
                             const dest = operand - 244;
                             this.copyCellWithNoise (dest);
                             this.lastMoveTime[0] = this.totalCycles;
                             this.lastMoveTime[dest] = this.totalCycles;
                             if (this.onBrkEvent) this.onBrkEvent('copy', 0, dest);
+                        }
+                    }
+                    this.commitWrites();
+                    // B flag (bit 4 of P at $FB): set for BRK, clear for timer.
+                    // Follows 6502 convention: BRK/PHP set B; IRQ/NMI clear B.
+                    // Written directly to storage after commitWrites/writeRegisters,
+                    // because Sfotty doesn't track B as a real CPU flag.
+                    // This enables fork detection: after BRK copy, the child
+                    // inherits B=clear (pre-BRK state), while the parent gets
+                    // B=set (written here after the copy).
+                    {
+                        const base = this.memory.neighborCellStorageBase(0);
+                        const pAddr = base + this.regAddrP;
+                        if (isSoftwareInterrupt) {
+                            this.memory.storage[pAddr] |= 0x10;   // set B
+                        } else {
+                            this.memory.storage[pAddr] &= ~0x10;  // clear B
                         }
                     }
                     this.memory.resetUndoHistory();

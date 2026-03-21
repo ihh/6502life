@@ -200,8 +200,9 @@ Colors encode cell activity using HSV with exponential decay of write/move recen
 - **Oriented registers** at 0xF0-0xF9: top 6 bits are rotated with the orientation
 - **Register save area** at 0xF9-0xFF: PCHI, PCLO, P, A, X, Y, S
 - **RNG** at 0xFC-0xFF: 4 bytes of pseudorandom numbers, refreshed each interrupt
-- **BRK operands**: byte `b` after BRK opcode: 0=noop, 1–244=swap cells (src=floor(b/49), dest=b%49), 245–252=noisy copy origin→cell(b−244), 253–255=reserved. Bad opcodes handled as BRK 0.
-- **Interrupt flag (I)**: when set, writes are reverted on timer interrupt (atomic mode)
+- **BRK operands**: byte `b` after BRK opcode: 0=reset PC to 0 (noop+yield), 1–244=swap cells (src=floor(b/49), dest=b%49), 245–252=noisy copy origin→cell(b−244), 253–255=reserved. Bad opcodes handled as BRK 0. Copy/swap happens BEFORE registers are saved, so the child inherits the pre-BRK register state.
+- **Interrupt model**: Pre-emptive scheduling is conceptually an IRQ (maskable by SEI) followed by an NMI (unmaskable context switch). Memory writeback happens between the IRQ and NMI if the I flag allows it. Setting I (SEI) makes writes atomic: they commit only on BRK (software interrupt), and are reverted on timer interrupt.
+- **B flag** (bit 4 of P at $FB): set after BRK (software interrupt), cleared after timer interrupt. Follows 6502 convention (BRK/PHP set B; IRQ/NMI clear B). Enables fork detection: after BRK copy, the child inherits B=clear (pre-BRK state), while the parent gets B=set. Programs can read $FB and test bit 4 to detect whether they are a fresh copy or the original.
 - **Display name** at 0x3E0-0x3FF: 32 bytes of ASCII. Parsed by the web app as
   `[cssColor]:[iconifyIconName]` (e.g. `orange:bee`, `red:sword`). If no colon present,
   the name is treated as an Iconify icon in the `game-icons` set. The web app renders these

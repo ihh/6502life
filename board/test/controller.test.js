@@ -327,6 +327,107 @@ describe('BoardController', () => {
         });
     });
 
+    describe('B flag and fork detection', () => {
+        it('sets B flag (bit 4 of P) after BRK', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0 });
+            const mem = ctrl.memory;
+            mem.iOrig = 0;
+            mem.jOrig = 0;
+            mem.orientation = 0;
+            mem.nextCycles = 100000; // long timer so BRK fires first
+
+            // Write BRK $00 (noop) at origin byte 0
+            const srcBase = mem.neighborCellStorageBase(0);
+            mem.storage[srcBase] = 0x00; // BRK
+            mem.storage[srcBase + 1] = 0x00; // operand 0 (noop)
+
+            // Clear P register (including B flag) before scheduling
+            mem.storage[srcBase + 0xFB] = 0x00; // P = 0
+
+            ctrl.readRegisters();
+            ctrl.runToNextInterrupt();
+
+            // After BRK, B flag should be set in the saved P at $FB
+            const savedP = mem.storage[srcBase + 0xFB];
+            expect(savedP & 0x10).toBe(0x10); // B flag set
+        });
+
+        it('clears B flag after timer interrupt', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0 });
+            const mem = ctrl.memory;
+            mem.iOrig = 0;
+            mem.jOrig = 0;
+            mem.orientation = 0;
+            mem.resetUndoHistory();
+
+            // Write a short NOP sled that will be interrupted by timer
+            const srcBase = mem.neighborCellStorageBase(0);
+            for (let i = 0; i < 16; i++) mem.storage[srcBase + i] = 0xEA; // NOPs
+            // Set PC to 0
+            mem.storage[srcBase + 0xF9] = 0x00;
+            mem.storage[srcBase + 0xFA] = 0x00;
+            // Set B flag in saved P before scheduling
+            mem.storage[srcBase + 0xFB] = 0x10; // P = B set
+            // Ensure I flag is clear so interrupt commits
+            ctrl.sfotty.I = false;
+
+            // Set short timer
+            mem.nextCycles = 3;
+
+            ctrl.readRegisters();
+            ctrl.runToNextInterrupt();
+
+            // After timer interrupt, B flag should be clear
+            // Re-read from the same cell (sampleNextMove may have changed iOrig)
+            const savedP = mem.storage[srcBase + 0xFB];
+            expect(savedP & 0x10).toBe(0x00); // B flag clear
+        });
+
+        it('BRK copy child inherits B=clear, parent gets B=set', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0 });
+            const mem = ctrl.memory;
+            mem.iOrig = 0;
+            mem.jOrig = 0;
+            mem.orientation = 0;
+            mem.nextCycles = 100000;
+
+            // Program: clear B in $FB, then BRK $F5 (copy to cell 1)
+            // LDA #$00 / STA $FB / BRK / .byte $F5
+            const srcBase = mem.neighborCellStorageBase(0);
+            mem.storage[srcBase + 0] = 0xA9; // LDA #$00
+            mem.storage[srcBase + 1] = 0x00; // ... wait, $00 is BRK!
+
+            // Use: LDA $FB / AND #$EF / STA $FB / BRK / .byte $F5
+            mem.storage[srcBase + 0] = 0xA5; // LDA $FB
+            mem.storage[srcBase + 1] = 0xFB;
+            mem.storage[srcBase + 2] = 0x29; // AND #$EF (clear bit 4)
+            mem.storage[srcBase + 3] = 0xEF;
+            mem.storage[srcBase + 4] = 0x85; // STA $FB
+            mem.storage[srcBase + 5] = 0xFB;
+            mem.storage[srcBase + 6] = 0x00; // BRK
+            mem.storage[srcBase + 7] = 0xF5; // operand: copy to cell 1
+
+            // Set initial P with B set (from a previous BRK)
+            mem.storage[srcBase + 0xFB] = 0x10;
+            // Set PC to $0000
+            mem.storage[srcBase + 0xF9] = 0x00;
+            mem.storage[srcBase + 0xFA] = 0x00;
+
+            mem.resetUndoHistory();
+            ctrl.readRegisters();
+            ctrl.runToNextInterrupt();
+
+            // Parent: $FB should have B set (controller sets it after BRK)
+            const parentP = mem.storage[srcBase + 0xFB];
+            expect(parentP & 0x10).toBe(0x10);
+
+            // Child (cell 1): $FB should have B clear (copied before B was set)
+            const dstBase = mem.neighborCellStorageBase(1);
+            const childP = mem.storage[dstBase + 0xFB];
+            expect(childP & 0x10).toBe(0x00);
+        });
+    });
+
     describe('swapCells / swapPages', () => {
         it('swapCells swaps all 4 pages of two cells', () => {
             const ctrl = new BoardController();
