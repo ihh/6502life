@@ -233,6 +233,79 @@ describe('BoardController', () => {
         });
     });
 
+    describe('pBrkFailure', () => {
+        it('defaults to 0', () => {
+            const ctrl = new BoardController();
+            expect(ctrl.noiseParams.pBrkFailure).toBe(0);
+        });
+
+        it('pBrkFailure=1 prevents all BRK copies', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0, pBrkFailure: 1 });
+            const mem = ctrl.memory;
+            mem.orientation = 0;
+            mem.iOrig = 0;
+            mem.jOrig = 0;
+            mem.nextCycles = 100000;
+
+            // Write a known byte at origin cell byte 0x200
+            const srcByteIdx = mem.ijbToByteIndex(0, 0, 0x200);
+            mem.setByteWithoutUndo(srcByteIdx, 0x42);
+
+            // Write BRK $F5 (copy to cell 1) at origin byte 0
+            const byteIdx = mem.ijbToByteIndex(0, 0, 0);
+            mem.setByteWithoutUndo(byteIdx, 0x00);     // BRK
+            mem.setByteWithoutUndo(byteIdx + 1, 245);   // operand 245 = copy to cell 1
+
+            ctrl.sfotty.PC = 0;
+            ctrl.sfotty.setP(0);
+            ctrl.sfotty.S = 0xFF;
+            mem.resetUndoHistory();
+
+            // Clear dest cell byte 0x200 to verify it stays 0
+            const destByteIdx = mem.ijbToByteIndex(0, 1, 0x200);
+            mem.setByteWithoutUndo(destByteIdx, 0x00);
+
+            ctrl.runToNextInterrupt();
+
+            // Copy should have failed — dest should still be 0
+            expect(mem.getByte(destByteIdx)).toBe(0x00);
+        });
+
+        it('pBrkFailure=0 allows BRK copies normally', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0, pBrkFailure: 0 });
+            const mem = ctrl.memory;
+            mem.orientation = 0;
+            mem.iOrig = 0;
+            mem.jOrig = 0;
+            mem.nextCycles = 100000;
+
+            const srcByteIdx = mem.ijbToByteIndex(0, 0, 0x200);
+            mem.setByteWithoutUndo(srcByteIdx, 0x42);
+
+            const byteIdx = mem.ijbToByteIndex(0, 0, 0);
+            mem.setByteWithoutUndo(byteIdx, 0x00);     // BRK
+            mem.setByteWithoutUndo(byteIdx + 1, 245);   // copy to cell 1
+
+            ctrl.sfotty.PC = 0;
+            ctrl.sfotty.setP(0);
+            ctrl.sfotty.S = 0xFF;
+            mem.resetUndoHistory();
+
+            ctrl.runToNextInterrupt();
+
+            const destByteIdx = mem.ijbToByteIndex(0, 1, 0x200);
+            expect(mem.getByte(destByteIdx)).toBe(0x42);
+        });
+
+        it('serializes and deserializes pBrkFailure', () => {
+            const ctrl = new BoardController(undefined, { pBrkFailure: 0.25 });
+            const saved = ctrl.state;
+            const ctrl2 = new BoardController();
+            ctrl2.state = saved;
+            expect(ctrl2.noiseParams.pBrkFailure).toBe(0.25);
+        });
+    });
+
     describe('copyCellWithNoise', () => {
         it('copies origin to destination with zero noise', () => {
             const ctrl = new BoardController(undefined, { pBitNoise: 0 });

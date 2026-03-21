@@ -13,6 +13,7 @@ class BoardController {
         this.lastWriteTimeForByte = this.newCellArray(()=>this.newCellByteArray(()=>0));
         this.noiseParams = Object.assign({
             pBitNoise: 1 / 2048,  // ~1 bit error per 256-byte page copied
+            pBrkFailure: 0,       // probability BRK copy/swap silently fails (no effect, no noise)
         }, noiseParams);
         // Hook for BRK copy/swap events. Called with (type, src, dest) where
         // type is 'swap' or 'copy', src/dest are neighborhood cell indices.
@@ -252,17 +253,24 @@ class BoardController {
                         const operand = brkOperand;
                         const nDestCells = this.memory.Nsquared;  // 49
                         const nSrcCells = 5;
-                        if (operand > 0 && operand < nSrcCells * nDestCells) {
-                            const src = Math.floor(operand / nDestCells);
-                            const dest = operand % nDestCells;
-                            this.commitMove (src, dest);
-                            if (this.onBrkEvent) this.onBrkEvent('swap', src, dest);
-                        } else if (operand >= 245 && operand <= 252) {
-                            const dest = operand - 244;
-                            this.copyCellWithNoise (dest);
-                            this.lastMoveTime[0] = this.totalCycles;
-                            this.lastMoveTime[dest] = this.totalCycles;
-                            if (this.onBrkEvent) this.onBrkEvent('copy', 0, dest);
+                        // pBrkFailure: probability the copy/swap silently fails
+                        // (no effect, no noise). Creates selective pressure for
+                        // multi-copy strategies and error correction.
+                        const brkFails = this.noiseParams.pBrkFailure > 0
+                            && this.memory.mt.real() < this.noiseParams.pBrkFailure;
+                        if (!brkFails) {
+                            if (operand > 0 && operand < nSrcCells * nDestCells) {
+                                const src = Math.floor(operand / nDestCells);
+                                const dest = operand % nDestCells;
+                                this.commitMove (src, dest);
+                                if (this.onBrkEvent) this.onBrkEvent('swap', src, dest);
+                            } else if (operand >= 245 && operand <= 252) {
+                                const dest = operand - 244;
+                                this.copyCellWithNoise (dest);
+                                this.lastMoveTime[0] = this.totalCycles;
+                                this.lastMoveTime[dest] = this.totalCycles;
+                                if (this.onBrkEvent) this.onBrkEvent('copy', 0, dest);
+                            }
                         }
                     }
                     this.commitWrites();
