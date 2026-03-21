@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#e8b030" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="manifest.json" />
+    <title>6502coin</title>
+    <style>
+      /* Inline critical styles so first paint is dark */
+      body { background: #0a0a0f; color: #c8c8d0; margin: 0; }
+      .loading { text-align: center; margin-top: 40vh; font-family: monospace; color: #666; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div class="loading">Initializing 6502coin...</div>
+    </div>
+    <script type="module" src="main.js"></script>
+  </body>
+</html>

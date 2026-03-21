@@ -1,0 +1,140 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: #0a0a0f;
+  color: #c8c8d0;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  padding: 12px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+header {
+  text-align: center;
+  margin-bottom: 12px;
+  width: 100%;
+  max-width: 480px;
+}
+
+header h1 {
+  font-size: 1.4rem;
+  color: #e8b030;
+  letter-spacing: 2px;
+  margin-bottom: 4px;
+}
+
+header .pubkey {
+  font-size: 0.6rem;
+  color: #555;
+  word-break: break-all;
+}
+
+#grid-canvas {
+  border: 1px solid #222;
+  border-radius: 4px;
+  image-rendering: pixelated;
+  max-width: 100%;
+  height: auto;
+  touch-action: none;
+}
+
+.status-bar {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  font-size: 0.85rem;
+  width: 100%;
+  max-width: 480px;
+}
+
+.status-bar .stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.status-bar .stat .label {
+  font-size: 0.6rem;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.status-bar .stat .value {
+  font-size: 1.2rem;
+  color: #e8b030;
+  font-weight: bold;
+}
+
+.controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 12px;
+  width: 100%;
+  max-width: 480px;
+}
+
+.controls button {
+  background: #1a1a2e;
+  color: #c8c8d0;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 6px 14px;
+  font-family: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.controls button:hover {
+  background: #2a2a4e;
+}
+
+.controls button:active,
+.controls button.active {
+  background: #3a2a1e;
+  border-color: #e8b030;
+  color: #e8b030;
+}
+
+.controls select {
+  background: #1a1a2e;
+  color: #c8c8d0;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.controls input[type="range"] {
+  width: 100px;
+  accent-color: #e8b030;
+}
+
+.controls .speed-label {
+  font-size: 0.7rem;
+  color: #666;
+  min-width: 50px;
+  text-align: right;
+}
+
+.loading {
+  color: #666;
+  font-size: 1rem;
+  margin-top: 40vh;
+}

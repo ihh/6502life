@@ -1,0 +1,17 @@
+{
+  "name": "6502coin",
+  "short_name": "6502coin",
+  "description": "Mine coins by evolving 6502 cellular automata",
+  "start_url": "/coin/",
+  "display": "standalone",
+  "background_color": "#0a0a0f",
+  "theme_color": "#e8b030",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230a0a0f'/%3E%3Ctext x='32' y='44' text-anchor='middle' font-size='32' fill='%23e8b030'%3E6%3C/text%3E%3C/svg%3E",
+      "sizes": "64x64",
+      "type": "image/svg+xml"
+    }
+  ]
+}
