@@ -502,3 +502,51 @@ All programs still go extinct. The fundamental constraint remains:
 at ε=1/2048, copy noise accumulates faster than replication can
 compensate. A sustainable lineage would require either lower noise
 or error correction.
+
+## 2026-03-21: SEI exact-copy vs BRK noisy-copy
+
+### Hypothesis
+LDA/STA copies have zero noise. SEI protects partial copies from
+timer-interrupt reversion. So mini-spreader-sei should survive
+indefinitely since its copies are perfect.
+
+### Result: SEI exact-copy still goes extinct
+
+| Preset | Size | @500k | @1M | @2M | @5M | @10M |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| mini-spreader-sei | 27 | 1 | 0 | 0 | 0 | 0 |
+| nano-2x (BRK) | 8 | 59 | 64 | 0 | 0 | 0 |
+| walking-nano (BRK) | 8 | 2 | 0 | 0 | 0 | 0 |
+
+### Analysis
+
+**SEI cannot protect against cross-contamination.** It only protects
+YOUR writes during YOUR scheduling. Other cells' writes to your code
+region happen during THEIR scheduling, unaffected by your I flag.
+
+The mini-spreader-sei's 27-byte genome is a large target for cross-
+contamination. Its LDA/STA copy loop takes ~243 cycles (27 bytes ×
+~9 cycles each), and the copy only commits on BRK. If the code at
+$E0-$FA is corrupted before the cell gets scheduled, the LDA/STA
+loop reads corrupted bytes and propagates the corruption.
+
+**The paradox**: perfect copy fidelity is useless if you can't keep
+your own code intact between schedulings. The only defense is
+**replication speed** — spread faster than corruption can destroy you.
+BRK noisy-copy (atomic full-cell copy in 7 cycles) wins over LDA/STA
+(243 cycles) despite having nonzero noise.
+
+### Key insight
+
+Cross-contamination, not copy noise, is the dominant extinction force.
+The game is about **occupation fraction**: once a replicator occupies
+>50% of cells, most "contamination" comes from copies of itself
+(harmless). Below 50%, contamination from garbage cells destroys
+the replicator.
+
+To achieve sustained replication, we need EITHER:
+1. **Faster replication** (BRK atomic copy) to reach 50% occupation
+2. **Protected memory** (a system-level mechanism to prevent cross-
+   contamination, not just SEI)
+3. **Lower effective contamination** (e.g., all cells run NOPs so
+   they don't write to neighbors)

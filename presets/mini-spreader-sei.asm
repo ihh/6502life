@@ -1,27 +1,27 @@
-; Mini Spreader SEI: Atomic mini-spreader using SEI to protect writes
-; Sets the interrupt flag before copying, so if a timer interrupt fires
-; mid-copy, all writes are reverted (no partial copies). The copy only
-; commits when BRK fires (software interrupt ignores I flag).
+; Mini Spreader SEI: atomic exact-copy replicator
+; SEI protects writes from timer-interrupt reversion.
+; LDA/STA copy has zero noise — perfect fidelity.
+; BRK commits writes (ignores I flag) and yields.
 ;
-; Lives at $E0, copies $E0-$FA (27 bytes) from own page 0 to a random
-; neighbor. Uses BRK $01 to yield (commits the atomic write batch).
+; Lives at $E0, copies $E0-$FA (27 bytes: code + PC save area).
+; 25 bytes of code, 27 bytes copied per replication.
 .org $00E0
 @start:
-SEI               ; protect writes — timer interrupt will revert them
+SEI               ; atomic mode — timer interrupt reverts writes
 LDA $FC           ; RNG byte
 AND #$03          ; 0-3
 CLC
 ADC #$01          ; 1-4
 ASL
-ASL               ; target page 0 high byte
-STA @st+2         ; patch STA high byte
-LDY #$1A          ; copy 27 bytes
+ASL               ; target page 0 high byte: $04/$08/$0C/$10
+STA @st+2         ; patch STA high byte in copy loop
+LDY #$1A          ; copy 27 bytes (Y: $1A down to $00)
 @lp:
-LDA $E0,Y         ; read own code
+LDA $E0,Y         ; read own code (exact, no noise)
 @st:
-STA $04E0,Y       ; write to target
+STA $04E0,Y       ; write to target (high byte patched)
 DEY
-BPL @lp
-BRK               ; yield — commits writes (BRK ignores I flag)
-.byte $01         ; swap with cell 1 to move around
-BMI @start        ; always taken after DEY past 0
+BPL @lp           ; Y=$00..$1A inclusive
+BRK               ; commit atomic writes + yield
+.byte $01         ; swap with cell 1 (move around)
+BMI @start        ; always taken: DEY past 0 sets N
