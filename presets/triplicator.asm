@@ -1,32 +1,38 @@
 ; Triplicator: self-repairing replicator with triple modular redundancy
-; 3 copies at pages 0, 2, 3. Repairs ONE byte per scheduling then copies.
-; majority(a,b,c) = (a&b)|(b&c)|(a&c) corrects single-copy errors.
-; Repair index at $3E, temp at $3F.
-@top:
-; Decrement repair index, wrap 0->$2F
-DEC $3E
+; 3 backup copies at $0101+Y, $0201+Y, $0301+Y.
+; All encoded addresses have nonzero bytes — no parasitic BRK traps.
+; Page 0 writes use (indirect),Y via pointer at $42:$43.
+; Repairs ONE byte per scheduling via majority vote, then BRK copies.
+; majority(a,b,c) = (a&b)|(b&c)|(a&c).
+; Repair index at $40, temp at $41, page0 pointer at $42:$43 = $0001.
+; Repair range: code bytes $01-$3F (63 bytes). Byte $00 is NOT repaired
+; but it's just DEC $40 ($C6) which is self-evident.
+@start:
+DEC $40
 BPL @go
-LDA #$2F
-STA $3E
+LDA #$3E           ; wrap: repair range $01-$3F
+STA $40
 @go:
-LDY $3E
-; majority vote for byte Y across pages 0, 2, 3
-LDA $0200,Y        ; b
-AND $0300,Y        ; b&c
-STA $3F
-LDA $00,Y          ; a
-AND $0200,Y        ; a&b
-ORA $3F            ; (b&c)|(a&b)
-STA $3F
-LDA $00,Y          ; a
-AND $0300,Y        ; a&c
-ORA $3F            ; majority
-; write back to all 3 copies
-STA $00,Y
-STA $0200,Y
-STA $0300,Y
+LDY $40
+; majority vote across 3 backup copies
+LDA $0101,Y
+AND $0201,Y
+STA $41            ; (a&b)
+LDA $0201,Y
+AND $0301,Y
+ORA $41            ; (a&b)|(b&c)
+STA $41
+LDA $0101,Y
+AND $0301,Y
+ORA $41            ; majority
+; write to all 3 backups
+STA $0101,Y
+STA $0201,Y
+STA $0301,Y
+; write to page 0 via (indirect),Y: ($42),Y where $42:$43 = $0001
+STA ($42),Y
 ; copy to forward neighbor
 BRK
 .byte $F5
-BNE @top
-BEQ @top
+BNE @start
+BEQ @start
