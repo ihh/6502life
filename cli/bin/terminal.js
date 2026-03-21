@@ -20,8 +20,12 @@ const presetName = getFlag(flags, 'preset');
 const [cellI, cellJ] = getCellFlag(flags, 'cell', 0, 0);
 const randomize = 'randomize' in flags;
 const listenFlag = getFlag(flags, 'listen');
+const scriptFile = getFlag(flags, 'script');
+const dumpFile = getFlag(flags, 'dump');
+const epsilon = getFlag(flags, 'epsilon');
 
-const { controller, visualizer } = createBoard(size, seed);
+const noiseParams = epsilon !== undefined ? { pBitNoise: parseFloat(epsilon) } : undefined;
+const { controller, visualizer } = createBoard(size, seed, noiseParams);
 
 // Load state if provided
 if (stateFile) {
@@ -74,6 +78,20 @@ const app = new TerminalApp(controller, visualizer);
 app.memoryPane.setCenter(cellI, cellJ);
 app.disasmPane.setCell(cellI, cellJ);
 app.minimapPane.setHighlight(cellI, cellJ);
+
+// Script mode: run commands from file, dump to stdout, exit
+if (scriptFile) {
+    const scriptContent = readFileSync(scriptFile, 'utf-8');
+    const scriptLines = scriptContent.split('\n');
+    await app.startScript(scriptLines);
+    // If --dump is also specified, write dump to that file
+    if (dumpFile) {
+        const { writeFileSync } = await import('fs');
+        const dumpText = app.executor.generateDump();
+        writeFileSync(dumpFile, dumpText);
+    }
+    process.exit(0);
+}
 
 // Start probe socket server if --listen
 if ('listen' in flags) {

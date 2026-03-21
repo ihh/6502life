@@ -29,11 +29,16 @@ function loadTriplicator(controller, i, j, bytes) {
     writeCellBytes(controller, i, j, 0x300, bytes);    // page 3
 }
 
-function loadTriplicatorAll(controller, bytes) {
+function loadTriplicatorAll(controller, bytes, extraBytes) {
     const B = controller.memory.B;
     for (let i = 0; i < B; i++) {
         for (let j = 0; j < B; j++) {
             loadTriplicator(controller, i, j, bytes);
+            if (extraBytes) {
+                for (const [offset, data] of extraBytes) {
+                    writeCellBytes(controller, i, j, offset, data);
+                }
+            }
         }
     }
 }
@@ -51,7 +56,7 @@ function countAliveFunc(controller) {
     return alive;
 }
 
-// Count cells matching reference at 80% byte threshold
+// Count cells matching reference at given byte threshold
 function countAliveMatch(controller, refBytes, threshold) {
     const B = controller.memory.B;
     let alive = 0;
@@ -74,14 +79,13 @@ function runInterrupts(controller, n) {
     }
 }
 
-// For evolvable: read the N byte from each cell's offset $42
+// Read N byte from each functional cell
 function getNDistribution(controller) {
     const B = controller.memory.B;
     const dist = {};
     for (let i = 0; i < B; i++) {
         for (let j = 0; j < B; j++) {
             const mem = readCellMemory(controller, i, j);
-            // Only count functional cells
             if (mem[0] === 0x00 && mem[1] >= 0xF5 && mem[1] <= 0xFC) {
                 const n = mem[0x42];
                 dist[n] = (dist[n] || 0) + 1;
@@ -119,10 +123,10 @@ async function experiment1() {
         const varResults = [];
         for (const eps of epsilons) {
             const label = `1/${Math.round(1/eps)}`;
+            const t0 = Date.now();
             origConsoleError(`  eps=${label}...`);
 
             const controller = initController(size, seed, eps);
-            // Seed all cells with triplicator (full board)
             loadTriplicatorAll(controller, bytes);
 
             let prevCp = 0;
@@ -133,8 +137,10 @@ async function experiment1() {
                 const funcAlive = countAliveFunc(controller);
                 const match80 = countAliveMatch(controller, bytes, 0.8);
                 snapshots.push({ cp, funcAlive, match80 });
-                origConsoleError(`    ${(cp/1000).toFixed(0)}k: func=${funcAlive}, 80%=${match80}`);
             }
+            const last = snapshots[snapshots.length - 1];
+            const dt = ((Date.now() - t0) / 1000).toFixed(1);
+            origConsoleError(`    -> 5M: func=${last.funcAlive}, 80%=${last.match80} (${dt}s)`);
             varResults.push({ eps, label, snapshots });
         }
         results.push({ name: variant.name, codeSize: bytes.length, varResults });
@@ -152,12 +158,7 @@ async function experiment2() {
     const bytes = await assemble(src);
     origConsoleError(`Evolvable triplicator: ${bytes.length}B`);
 
-    // Byte $42 is where N is stored. In the assembled binary, what offset
-    // does that correspond to? The code is 58 bytes (0x00-0x39).
-    // Byte $42 is outside the code, we need to set it manually.
-    // The assembler only produces code bytes; $42 is data we poke separately.
-
-    const epsilons = [1/8192, 1/16384, 1/32768, 1/65536];
+    const epsilons = [1/16384, 1/32768, 1/65536, 1/131072];
     const initialNs = [5, 10, 20];
     const checkpoints = [500_000, 1_000_000, 2_000_000, 5_000_000];
     const size = 8;
@@ -168,24 +169,16 @@ async function experiment2() {
     for (const eps of epsilons) {
         const label = `1/${Math.round(1/eps)}`;
         for (const initN of initialNs) {
-            origConsoleError(`\n  eps=${label}, initial N=${initN}...`);
+            const t0 = Date.now();
+            origConsoleError(`  eps=${label}, N=${initN}...`);
 
             const controller = initController(size, seed, eps);
-            const B = controller.memory.B;
 
-            // Load evolvable triplicator into all cells, set N byte
-            for (let i = 0; i < B; i++) {
-                for (let j = 0; j < B; j++) {
-                    // Write code to pages 0, 2, 3
-                    writeCellBytes(controller, i, j, 0, bytes);
-                    writeCellBytes(controller, i, j, 0x200, bytes);
-                    writeCellBytes(controller, i, j, 0x300, bytes);
-                    // Set N byte at $42 in all 3 pages
-                    writeCellBytes(controller, i, j, 0x42, new Uint8Array([initN]));
-                    writeCellBytes(controller, i, j, 0x242, new Uint8Array([initN]));
-                    writeCellBytes(controller, i, j, 0x342, new Uint8Array([initN]));
-                }
-            }
+            // Extra bytes: N at $42 in all 3 pages
+            const nByte = new Uint8Array([initN]);
+            loadTriplicatorAll(controller, bytes, [
+                [0x42, nByte], [0x242, nByte], [0x342, nByte],
+            ]);
 
             let prevCp = 0;
             const snapshots = [];
@@ -194,23 +187,22 @@ async function experiment2() {
                 prevCp = cp;
                 const funcAlive = countAliveFunc(controller);
                 const nDist = getNDistribution(controller);
-                // Compute mean N among alive cells
                 let totalN = 0, count = 0;
                 for (const [n, c] of Object.entries(nDist)) {
                     totalN += parseInt(n) * c;
                     count += c;
                 }
                 const meanN = count > 0 ? (totalN / count).toFixed(1) : 'N/A';
-                // Top 3 N values
                 const topN = Object.entries(nDist)
                     .sort((a, b) => b[1] - a[1])
                     .slice(0, 5)
                     .map(([n, c]) => `${n}:${c}`)
                     .join(' ');
-
-                origConsoleError(`    ${(cp/1000).toFixed(0)}k: alive=${funcAlive}, meanN=${meanN}, dist=[${topN}]`);
-                snapshots.push({ cp, funcAlive, meanN, nDist: {...nDist}, topN });
+                snapshots.push({ cp, funcAlive, meanN, topN });
             }
+            const last = snapshots[snapshots.length - 1];
+            const dt = ((Date.now() - t0) / 1000).toFixed(1);
+            origConsoleError(`    -> 5M: alive=${last.funcAlive}, meanN=${last.meanN} (${dt}s)`);
             results.push({ eps, label, initN, snapshots });
         }
     }
@@ -243,6 +235,8 @@ Date: ${new Date().toISOString().slice(0, 10)}
 - Triplicator variants tested with repair LOOP (not duplication)
 - Code size: original 51B, loop variants 56B, evolvable 58B
 - The loop adds only 5 bytes (LDX #N / DEX / BNE) regardless of N
+- Previous "faster repair" experiment failed because it DUPLICATED the repair block,
+  inflating the genome from 51B to 96-366B. The loop approach keeps code compact.
 
 ## Experiment 1: Loop Repair Variants at Various Noise Levels
 
@@ -250,36 +244,46 @@ Date: ${new Date().toISOString().slice(0, 10)}
 
 `;
 
-    for (const v of exp1) {
-        md += `#### ${v.name} (${v.codeSize}B)\n\n`;
-        md += `| Epsilon | 500k | 1M | 2M | 5M |\n`;
-        md += `|---------|------|-----|-----|-----|\n`;
-        for (const r of v.varResults) {
-            const s = r.snapshots;
-            md += `| ${r.label} | ${s[0].funcAlive} | ${s[1].funcAlive} | ${s[2].funcAlive} | ${s[3].funcAlive} |\n`;
+    // Combined table: all variants side by side for each checkpoint
+    for (const cpIdx of [0, 1, 2, 3]) {
+        const cpLabel = ['500k', '1M', '2M', '5M'][cpIdx];
+        md += `#### At ${cpLabel} interrupts\n\n`;
+        md += `| Epsilon |`;
+        for (const v of exp1) md += ` ${v.name} |`;
+        md += `\n|---------|`;
+        for (const _v of exp1) md += `------|`;
+        md += `\n`;
+        for (let ei = 0; ei < exp1[0].varResults.length; ei++) {
+            md += `| ${exp1[0].varResults[ei].label} |`;
+            for (const v of exp1) {
+                md += ` ${v.varResults[ei].snapshots[cpIdx].funcAlive} |`;
+            }
+            md += `\n`;
         }
         md += `\n`;
     }
 
-    md += `### 80% byte-match alive counts\n\n`;
-    for (const v of exp1) {
-        md += `#### ${v.name} (${v.codeSize}B)\n\n`;
-        md += `| Epsilon | 500k | 1M | 2M | 5M |\n`;
-        md += `|---------|------|-----|-----|-----|\n`;
-        for (const r of v.varResults) {
-            const s = r.snapshots;
-            md += `| ${r.label} | ${s[0].match80} | ${s[1].match80} | ${s[2].match80} | ${s[3].match80} |\n`;
+    md += `### 80% byte-match alive counts at 5M interrupts\n\n`;
+    md += `| Epsilon |`;
+    for (const v of exp1) md += ` ${v.name} |`;
+    md += `\n|---------|`;
+    for (const _v of exp1) md += `------|`;
+    md += `\n`;
+    for (let ei = 0; ei < exp1[0].varResults.length; ei++) {
+        md += `| ${exp1[0].varResults[ei].label} |`;
+        for (const v of exp1) {
+            md += ` ${v.varResults[ei].snapshots[3].match80} |`;
         }
         md += `\n`;
     }
 
-    md += `## Experiment 2: Evolvable Repair Rate
+    md += `\n## Experiment 2: Evolvable Repair Rate
 
-The repair count N is stored at byte $42 in the genome. During noisy BRK copies,
+The repair count N is stored at byte \\$42 in the genome. During noisy BRK copies,
 N mutates along with the rest of the code. Natural selection acts on N: cells with
 suboptimal N values die to corruption or waste scheduling cycles.
 
-### Results by initial N and noise level
+### Results
 
 `;
 
@@ -299,69 +303,106 @@ suboptimal N values die to corruption or waste scheduling cycles.
 ### Loop repair vs original
 
 The original triplicator repairs 1 byte per scheduling cycle. With a repair range
-of ~50 bytes, it takes ~50 scheduling cycles to fully repair one copy. At any nonzero
-noise level, corruption accumulates faster than repair.
+of ~50 bytes, it takes ~50 scheduling cycles to fully scan all code. At any nonzero
+noise level, corruption accumulates faster than repair can fix it.
 
-The loop variants repair N bytes per scheduling. This dramatically improves the
+The loop variants repair N bytes per scheduling, dramatically improving the
 repair-to-corruption ratio:
-- At N=5: repairs 5 bytes/scheduling = full scan every ~10 schedulings
-- At N=10: repairs 10 bytes/scheduling = full scan every ~5 schedulings
-- At N=20: repairs 20 bytes/scheduling = full scan every ~3 schedulings
+- At N=5: full code scan every ~11 schedulings
+- At N=10: full code scan every ~6 schedulings
+- At N=20: full code scan every ~3 schedulings
 
-The key insight is that a LOOP adds only 5 bytes to the genome (LDX/DEX/BNE),
+The crucial insight: a LOOP adds only 5 bytes to the genome (LDX #N / DEX / BNE),
 whereas DUPLICATING the repair block adds ~45 bytes per extra copy. Smaller code =
-less to corrupt = more robust.
+less surface area to corrupt = more robust.
 
 ### Cycle budget analysis
 
-Each repair iteration costs ~48 cycles (DEC + BPL + LDY + 3x LDA/AND/ORA/STA).
-The timer mean is ~2800 cycles. The BRK costs 7 cycles. Setup costs ~20 cycles.
-Available budget: (2800 - 27) / 48 = ~57 bytes max.
+Each repair iteration costs ~48 cycles:
+- DEC \\$40 (5), BPL (2-3), LDY \\$40 (3)
+- LDA abs,Y (4), AND abs,Y (4), STA zp (3) = 11 cycles (majority pair 1)
+- LDA zp,Y (4), AND abs,Y (4), ORA zp (3), STA zp (3) = 14 cycles (majority pair 2)
+- LDA zp,Y (4), AND abs,Y (4), ORA zp (3) = 11 cycles (majority pair 3)
+- STA zp,Y (4), STA abs,Y (5), STA abs,Y (5) = 14 cycles (write back)
+- DEX (2), BNE (3) = 5 cycles
+- Total: ~55 cycles per iteration
 
-But the timer is Poisson-distributed, so some schedulings are short. Safe targets:
-- N=5: 5 * 48 + 27 = 267 cycles (< 10% of mean, very safe)
-- N=10: 10 * 48 + 27 = 507 cycles (< 20% of mean, safe)
-- N=20: 20 * 48 + 27 = 987 cycles (< 36% of mean, usually safe)
+The timer mean is ~2800 cycles. BRK = 7 cycles. LDX = 2 cycles.
+Available budget: (2800 - 9) / 55 = ~50 iterations max.
+
+Safe targets (accounting for Poisson variance):
+- N=5: 5 * 55 + 9 = 284 cycles (~10% of mean, very safe)
+- N=10: 10 * 55 + 9 = 559 cycles (~20% of mean, safe)
+- N=20: 20 * 55 + 9 = 1109 cycles (~40% of mean, usually safe)
 
 ### Evolvable N
 
 `;
 
-    // Check if any evolvable runs survived
     const survivors = exp2.filter(r => r.snapshots[r.snapshots.length-1].funcAlive > 0);
     if (survivors.length > 0) {
         md += `Surviving runs show natural selection acting on N:\n\n`;
         for (const s of survivors) {
             const last = s.snapshots[s.snapshots.length-1];
-            md += `- eps=${s.label}, initial N=${s.initN}: ${last.funcAlive} alive at 5M, mean N=${last.meanN}\n`;
+            md += `- eps=${s.label}, initial N=${s.initN}: ${last.funcAlive}/64 alive at 5M, mean N=${last.meanN}, top=[${last.topN}]\n`;
+        }
+        md += `\n`;
+        // Find convergent N value if possible
+        const nValues = survivors.map(s => parseFloat(s.snapshots[s.snapshots.length-1].meanN)).filter(n => !isNaN(n));
+        if (nValues.length > 0) {
+            const avgN = (nValues.reduce((a,b) => a+b, 0) / nValues.length).toFixed(1);
+            md += `Mean N across surviving runs: ${avgN}\n\n`;
+            md += `This suggests natural selection converges toward N ~ ${Math.round(parseFloat(avgN))} as the optimal repair rate.\n`;
         }
     } else {
         md += `No evolvable runs survived to 5M interrupts at the tested noise levels.\n`;
+        md += `This indicates the evolvable variant may need the repair range adjusted to cover byte \\$42,\n`;
+        md += `or the noise levels tested are too high for the 58-byte genome to sustain.\n`;
     }
 
-    md += `\n## Best-performing variant assembly\n\n`;
+    md += `\n## Best-performing variant\n\n`;
 
-    // Find best variant from exp1
+    // Find best variant: highest 80%-match at lowest epsilon
     let bestName = 'original (N=1)';
-    let bestAlive5M = 0;
+    let bestScore = 0;
     let bestFile = 'triplicator.asm';
+    let bestEps = '';
     const variantFiles = ['triplicator.asm', 'triplicator-loop5.asm', 'triplicator-loop10.asm', 'triplicator-loop20.asm'];
     for (let vi = 0; vi < exp1.length; vi++) {
         const v = exp1[vi];
-        // Best = highest alive at lowest epsilon that has survivors
         for (const r of v.varResults) {
-            const alive5M = r.snapshots[3].funcAlive;
-            if (alive5M > bestAlive5M) {
-                bestAlive5M = alive5M;
+            // Score: alive at 5M, weighted by epsilon (higher eps = harder = worth more)
+            const alive5M = r.snapshots[3].match80;
+            const score = alive5M * r.eps * 1e6;  // normalize
+            if (score > bestScore || (score === bestScore && r.snapshots[3].funcAlive > 0)) {
+                bestScore = score;
                 bestName = v.name;
                 bestFile = variantFiles[vi];
+                bestEps = r.label;
+            }
+        }
+        // Also check funcAlive if no 80% matches anywhere
+        if (bestScore === 0) {
+            for (const r of v.varResults) {
+                const alive5M = r.snapshots[3].funcAlive;
+                if (alive5M > 0) {
+                    bestName = v.name;
+                    bestFile = variantFiles[vi];
+                    bestEps = r.label;
+                    bestScore = -1; // sentinel
+                }
             }
         }
     }
 
     const bestSrc = readFile(bestFile);
-    md += `Best performer: **${bestName}** (${bestAlive5M}/64 alive at best noise level)\n\n`;
+    md += `Best performer: **${bestName}** at eps=${bestEps}\n\n`;
     md += '```asm\n' + bestSrc + '```\n';
+
+    md += `\n## Evolvable variant assembly\n\n`;
+    const evolSrc = readFile('triplicator-evolvable.asm');
+    md += '```asm\n' + evolSrc + '```\n';
+    md += `\nN is stored at byte \\$42. To use, poke the initial N value at offsets \\$42, \\$242, \\$342.\n`;
 
     md += `\nTotal runtime: ${elapsed}s\n`;
 

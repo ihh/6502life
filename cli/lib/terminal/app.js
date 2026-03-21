@@ -71,6 +71,65 @@ export class TerminalApp {
         this.tick();
     }
 
+    // Run in headless script mode: execute commands from an array, then exit
+    async startScript(scriptLines) {
+        await initDisassembler();
+
+        // Ensure deterministic CPU state: Sfotty's constructor leaves
+        // registers uninitialized and resetPending=true, which causes
+        // non-deterministic behavior on the first run. Fix by setting
+        // known initial state.
+        const sfotty = this.controller.sfotty;
+        sfotty.resetPending = false;
+        sfotty.cycleCounter = 0;
+        sfotty.operations = [() => sfotty.decode()];
+        // Read registers from the current cell (as the controller does
+        // after sampleNextMove in its constructor) to initialize the CPU
+        // with the register save area values.
+        this.controller.readRegisters();
+
+        // Welcome message (for reproducibility of command pane output)
+        this.commandPane.print('6502life debugger. Type "help" for commands.');
+        this.commandPane.print(`Board: ${this.controller.memory.B}x${this.controller.memory.B}`);
+
+        for (const rawLine of scriptLines) {
+            const line = rawLine.trim();
+            if (!line || line.startsWith('#')) continue; // skip comments and empty lines
+
+            // Handle 'wait N' — step N interrupts silently
+            const waitMatch = line.match(/^wait\s+(\d+)$/i);
+            if (waitMatch) {
+                const n = parseInt(waitMatch[1]);
+                for (let i = 0; i < n; i++) {
+                    this.controller.runToNextInterrupt();
+                    this.totalInterrupts++;
+                }
+                this.memoryPane.invalidatePC();
+                continue;
+            }
+
+            // Handle 'dump' (no args) — dump to stdout
+            if (line === 'dump') {
+                const dumpText = this.executor.generateDump();
+                process.stdout.write(dumpText);
+                continue;
+            }
+
+            // Execute as a normal command
+            this.commandPane.print(`> ${line}`);
+            try {
+                const result = this.executor.execute(line);
+                if (result) this.commandPane.print(result);
+                // Wait for async commands to complete
+                if (result === null) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            } catch (e) {
+                this.commandPane.print(`Error: ${e.message}`);
+            }
+        }
+    }
+
     stop() {
         this.running = false;
         this.quit = true;

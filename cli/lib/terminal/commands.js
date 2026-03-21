@@ -4,10 +4,12 @@
 import { readCellRegisters, readCellMemory, writeCellBytes } from '../../../engine/board.js';
 import { assemble } from '../../../engine/assembler.js';
 import { hexByte, hexWord } from '../../../engine/format.js';
-import { hex, hex16 } from './disassembler.js';
+import { disassembleRangeSync, hex, hex16 } from './disassembler.js';
 import { listPresets, getPreset } from './presets.js';
 import { readFileSync, writeFileSync } from 'fs';
 import { hashHex } from '../probe/fingerprint.js';
+import { byteToAsciiChar, DEFAULT_ASCII_PALETTE } from './sextant.js';
+import { spiralVec, cellToGrid, gridToCell, gridToAddr } from './pane-memory.js';
 
 
 export class CommandExecutor {
@@ -355,12 +357,113 @@ export class CommandExecutor {
                 return out;
             }
 
+            case 'screen-dump': case 'dump': {
+                const dumpText = this.generateDump();
+                if (args[0]) {
+                    writeFileSync(args[0], dumpText);
+                    return `Screen dump saved to ${args[0]}`;
+                }
+                // Store for script mode to pick up
+                this._lastDump = dumpText;
+                return 'Screen dump generated (use "dump <file>" to save to file)';
+            }
+
             case 'help': case '?':
                 return HELP_TEXT;
 
             default:
                 return `Unknown command: ${cmd}. Type "help" for commands.`;
         }
+    }
+
+    // Generate a plain-text screen dump of all four panes
+    generateDump() {
+        const lines = [];
+        const B = this.memory.B;
+        const ci = this.app.disasmPane.cellI;
+        const cj = this.app.disasmPane.cellJ;
+
+        // --- Status line ---
+        lines.push(`=== 6502life screen dump ===`);
+        lines.push(`Board: ${B}x${B}  Interrupts: ${this.app.totalInterrupts}  ${this.app.running ? 'RUNNING' : 'PAUSED'}`);
+        lines.push(`Focus cell: (${ci},${cj})  Speed: ${this.app.speed}`);
+        lines.push('');
+
+        // --- Disassembler pane ---
+        lines.push(`--- DISASM: Cell (${ci},${cj}) ---`);
+        const regs = readCellRegisters(this.controller, ci, cj);
+        lines.push(`A=${hex(regs.A)} X=${hex(regs.X)} Y=${hex(regs.Y)} S=${hex(regs.S)} PC=${hex16(regs.PC)} P=${hex(regs.P)}`);
+        const flags = [];
+        if (regs.P & 0x80) flags.push('N'); else flags.push('n');
+        if (regs.P & 0x40) flags.push('V'); else flags.push('v');
+        flags.push('-');
+        if (regs.P & 0x10) flags.push('B'); else flags.push('b');
+        if (regs.P & 0x08) flags.push('D'); else flags.push('d');
+        if (regs.P & 0x04) flags.push('I'); else flags.push('i');
+        if (regs.P & 0x02) flags.push('Z'); else flags.push('z');
+        if (regs.P & 0x01) flags.push('C'); else flags.push('c');
+        lines.push(`Flags: ${flags.join('')}`);
+
+        // Disassemble 24 lines from PC
+        const readFn = (addr) => this.memory.read(addr);
+        const instrs = disassembleRangeSync(readFn, regs.PC, 24);
+        for (const instr of instrs) {
+            const marker = instr.addr === regs.PC ? '>' : ' ';
+            const addrStr = hex16(instr.addr);
+            const bytesStr = instr.bytes.map(hex).join(' ').padEnd(8);
+            const operand = instr.operand ? ` ${instr.operand}` : '';
+            lines.push(`${marker} $${addrStr}  ${bytesStr}  ${instr.mnemonic}${operand}`);
+        }
+        lines.push('');
+
+        // --- Memory pane: hex dump of center cell ---
+        lines.push(`--- MEMORY: Cell (${ci},${cj}) hex dump ---`);
+        const cellMem = readCellMemory(this.controller, ci, cj);
+        for (let row = 0; row < 32; row++) {
+            const off = row * 32;
+            let hexPart = '';
+            let ascPart = '';
+            for (let col = 0; col < 32; col++) {
+                const b = cellMem[off + col];
+                hexPart += hex(b) + ' ';
+                ascPart += (b >= 0x20 && b < 0x7F) ? String.fromCharCode(b) : '.';
+            }
+            lines.push(`$${hex16(off)}  ${hexPart} ${ascPart}`);
+        }
+        lines.push('');
+
+        // --- Minimap: simple text overview ---
+        lines.push(`--- MINIMAP: ${B}x${B} board activity ---`);
+        // Show which cells have non-zero content
+        const activeCells = [];
+        for (let i = 0; i < B; i++) {
+            for (let j = 0; j < B; j++) {
+                const mem = readCellMemory(this.controller, i, j);
+                let nonZero = 0;
+                for (let b = 0; b < 1024; b++) {
+                    if (mem[b] !== 0) nonZero++;
+                }
+                if (nonZero > 0) {
+                    activeCells.push(`(${i},${j}):${nonZero}`);
+                }
+            }
+        }
+        lines.push(`Active cells: ${activeCells.length}/${B * B}`);
+        if (activeCells.length <= 64) {
+            lines.push(activeCells.join(' '));
+        } else {
+            lines.push(activeCells.slice(0, 32).join(' '));
+            lines.push(`  ... and ${activeCells.length - 32} more`);
+        }
+        lines.push('');
+
+        // --- Command pane output ---
+        lines.push(`--- COMMAND OUTPUT ---`);
+        for (const line of this.app.commandPane.outputLines) {
+            lines.push(line);
+        }
+
+        return lines.join('\n') + '\n';
     }
 
     getTracker() {
@@ -434,6 +537,7 @@ const HELP_TEXT = `Debugger commands:
 
   origin            Show current origin and orientation
   info              Show board status
+  dump [FILE]       Plain-text screen dump (all panes)
 
 Probe (requires --listen):
   fp [I,J]          MinHash fingerprint of cell
