@@ -23,8 +23,11 @@ const listenFlag = getFlag(flags, 'listen');
 const scriptFile = getFlag(flags, 'script');
 const dumpFile = getFlag(flags, 'dump');
 const epsilon = getFlag(flags, 'epsilon');
+const brkFailure = getFlag(flags, 'brk-failure');
 
-const noiseParams = epsilon !== undefined ? { pBitNoise: parseFloat(epsilon) } : undefined;
+const noiseParams = (epsilon !== undefined || brkFailure !== undefined) ? {} : undefined;
+if (epsilon !== undefined) noiseParams.pBitNoise = parseFloat(epsilon);
+if (brkFailure !== undefined) noiseParams.pBrkFailure = parseFloat(brkFailure);
 const { controller, visualizer } = createBoard(size, seed, noiseParams);
 
 // Load state if provided
