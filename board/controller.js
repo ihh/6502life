@@ -5,18 +5,27 @@ import { VANILLA_OPCODES } from "@sfotty-pie/opcodes";
 
 // board controller
 class BoardController {
-    constructor (memory, noiseParams) {
+    constructor (memory, boardParams) {
         this.memory = memory || new BoardMemory();
         this.totalCycles = 0;
         this.lastMoveTime = this.newCellArray(()=>0);
         this.lastWriteTime = this.newCellArray(()=>0);
         this.lastWriteTimeForByte = this.newCellArray(()=>this.newCellByteArray(()=>0));
-        this.noiseParams = Object.assign({
-            pBitNoise: 1 / 2048,  // ~1 bit error per 256-byte page copied
-            pBrkFailure: 0,       // probability BRK copy/swap silently fails (no effect, no noise)
-        }, noiseParams);
-        // Hook for BRK copy/swap events. Called with (type, src, dest) where
-        // type is 'swap' or 'copy', src/dest are neighborhood cell indices.
+        // Board hyperparameters
+        this.boardParams = Object.assign({
+            pBitNoise: 1 / 2048,     // per-bit noise on BRK noisy copy
+            pBrkFailure: 0,          // probability BRK copy/swap silently fails
+            magnetosensing: false,   // write orientation to $FA if true
+            implementsMove: true,    // BRK 1-244 swap operations
+            implementsCopy: true,    // BRK 245-252 noisy copy
+            implementsSync: false,   // BRK 253 sync interrupt request
+            implementsAsync: false,  // BRK 254 async interrupt request
+        }, boardParams);
+        // Backward compatibility: accept noiseParams as alias for boardParams
+        this.noiseParams = this.boardParams;
+        // Per-cell requested interrupt time (for sync/async)
+        this.nextRequestedInterrupt = this.newCellArray(() => Infinity);
+        // Hook for BRK copy/swap events
         this.onBrkEvent = null;
         this.newSfotty();
         this.readRegisters();
@@ -27,7 +36,7 @@ class BoardController {
 
     // Zero-page register store. Where the state of the processor is cached on interrupt
     get rngAddr() { return 0xFC }  // 0xFC..0xFF = random number generator
-    get regAddrPCHI() { return 0xF9 }  // 0xF9 = PC(HI)
+    get regAddrPCHI() { return 0xF9 }  // 0xF9 = PC(HI). Note this is one of the ten registers that rotate with cell orientation, so it can be used to execute code in neighboring cells in spite of the random rotation at each update.
     get regAddrPCLO() { return 0xFA }  // 0xFA = PC(LO)
     get regAddrP() { return 0xFB }  // 0xFB = P
     get regAddrA() { return 0xFC }  // 0xFC = A
@@ -43,10 +52,11 @@ class BoardController {
                  Y: this.sfotty.Y,
                  P: this.sfotty.P,
                  PC: this.sfotty.PC,
-                 noiseParams: Object.assign({}, this.noiseParams),
+                 boardParams: Object.assign({}, this.boardParams),
                  totalCycles: this.totalCycles,
                  lastWriteTime: this.lastWriteTime,
-                 lastMoveTime: this.lastMoveTime };
+                 lastMoveTime: this.lastMoveTime,
+                 nextRequestedInterrupt: this.nextRequestedInterrupt };
     }
 
     set state(s) {
@@ -57,14 +67,18 @@ class BoardController {
         this.sfotty.Y = s.Y;
         this.sfotty.P = s.P;
         this.sfotty.PC = s.PC;
-        if (s.noiseParams)
-            Object.assign(this.noiseParams, s.noiseParams);
+        if (s.boardParams)
+            Object.assign(this.boardParams, s.boardParams);
+        else if (s.noiseParams)
+            Object.assign(this.boardParams, s.noiseParams);
         if (s.totalCycles !== undefined)
             this.totalCycles = s.totalCycles;
         if (s.lastWriteTime)
             this.lastWriteTime = s.lastWriteTime;
         if (s.lastMoveTime)
             this.lastMoveTime = s.lastMoveTime;
+        if (s.nextRequestedInterrupt)
+            this.nextRequestedInterrupt = s.nextRequestedInterrupt;
     }
 
     newCellArray(initializer) {
@@ -256,21 +270,39 @@ class BoardController {
                         // pBrkFailure: probability the copy/swap silently fails
                         // (no effect, no noise). Creates selective pressure for
                         // multi-copy strategies and error correction.
-                        const brkFails = this.noiseParams.pBrkFailure > 0
-                            && this.memory.mt.real() < this.noiseParams.pBrkFailure;
+                        const bp = this.boardParams;
+                        const brkFails = bp.pBrkFailure > 0
+                            && this.memory.mt.real() < bp.pBrkFailure;
                         if (!brkFails) {
-                            if (operand > 0 && operand < nSrcCells * nDestCells) {
+                            if (operand > 0 && operand < nSrcCells * nDestCells && bp.implementsMove) {
                                 const src = Math.floor(operand / nDestCells);
                                 const dest = operand % nDestCells;
                                 this.commitMove (src, dest);
                                 if (this.onBrkEvent) this.onBrkEvent('swap', src, dest);
-                            } else if (operand >= 245 && operand <= 252) {
+                            } else if (operand >= 245 && operand <= 252 && bp.implementsCopy) {
                                 const dest = operand - 244;
                                 this.copyCellWithNoise (dest);
                                 this.lastMoveTime[0] = this.totalCycles;
                                 this.lastMoveTime[dest] = this.totalCycles;
                                 if (this.onBrkEvent) this.onBrkEvent('copy', 0, dest);
+                            } else if (operand === 253 && bp.implementsSync) {
+                                // Sync interrupt request: X,Y = LSB,MSB of period.
+                                // Round down to nearest absolute multiple of period.
+                                const period = this.sfotty.X | (this.sfotty.Y << 8);
+                                if (period > 0) {
+                                    const nextTime = (Math.floor(this.totalCycles / period) + 1) * period;
+                                    const cellIdx = this.memory.ijToCellIndex(this.memory.iOrig, this.memory.jOrig);
+                                    this.nextRequestedInterrupt[cellIdx] = nextTime;
+                                }
+                            } else if (operand === 254 && bp.implementsAsync) {
+                                // Async interrupt request: X,Y = LSB,MSB of delay.
+                                const delay = this.sfotty.X | (this.sfotty.Y << 8);
+                                if (delay > 0) {
+                                    const cellIdx = this.memory.ijToCellIndex(this.memory.iOrig, this.memory.jOrig);
+                                    this.nextRequestedInterrupt[cellIdx] = this.totalCycles + delay;
+                                }
                             }
+                            // Operand 255 or unimplemented: just yield (no operation)
                         }
                     }
                     this.commitWrites();
@@ -292,10 +324,45 @@ class BoardController {
                     }
                     this.memory.resetUndoHistory();
                 }
-                // Randomize: pick next cell, load its state
+                // Randomize: pick next cell, load its state.
+                // sampleNextMove picks a random cell, orientation, and timer.
                 this.memory.sampleNextMove();
+                // Check for pending sync/async interrupt requests.
+                // If any cell has a requested interrupt at or before the
+                // current time, schedule it instead of the random cell.
+                // When multiple cells qualify, pick one randomly (using MT).
+                if (this.boardParams.implementsSync || this.boardParams.implementsAsync) {
+                    const B = this.memory.B;
+                    const now = this.totalCycles;
+                    const candidates = [];
+                    for (let idx = 0; idx < B * B; idx++) {
+                        if (this.nextRequestedInterrupt[idx] <= now) {
+                            candidates.push(idx);
+                        }
+                    }
+                    if (candidates.length > 0) {
+                        // Pick randomly among eligible cells
+                        const pick = candidates[this.memory.mt.int() % candidates.length];
+                        const i = Math.floor(pick / B);
+                        const j = pick % B;
+                        this.memory.iOrig = i;
+                        this.memory.jOrig = j;
+                        // Orientation is still random (from sampleNextMove)
+                        // Clear the pending interrupt
+                        this.nextRequestedInterrupt[pick] = Infinity;
+                    }
+                }
                 this.readRegisters();
                 this.writeRng();
+                // Magnetosensing: write orientation to $FA (PCLO register area)
+                // shifted left 2 bits to match oriented register format.
+                // Programs can read $FA to detect their absolute orientation.
+                {
+                    const base = this.memory.neighborCellStorageBase(0);
+                    this.memory.storage[base + 0xFA] = this.boardParams.magnetosensing
+                        ? (this.memory.orientation << 2)
+                        : 0;
+                }
                 // Reset Sfotty internal state for the new cell.
                 // crashed: a previous cell's undocumented opcode sets this
                 // cycleCounter/operations: stale decode state from prior cell
