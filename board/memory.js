@@ -65,7 +65,7 @@ class BoardMemory {
     // A. Used by OS, 0xF0 - 0xFF.
     // Rotated vectors. These are unmapped/mapped by the memory manager at each random orientation.
     get firstVectorAddr() { return 0x00F0 }
-    get lastVectorAddr() { return 0x00F9 }
+    get lastVectorAddr() { return 0x00F9 }  // note PCHI (0xf9) is a rotating address; its top bits are auto-rotated by the scheduler, allowing execution of code in neighboring cells
 
     // Controller-reserved vectors. Used to store registers between updates, and random numbers during updates
     get firstControllerAddr() { return 0x00FA }
