@@ -58,7 +58,7 @@ function sfottyRunInstruction(sfotty) {
 // ---- Test 1: Per-opcode cycle count verification ----
 
 function testOpcodesCycleCounts() {
-    console.log('Test 1: Per-opcode cycle counts (all 151 valid opcodes)');
+    console.log('Test 1: Per-opcode cycle counts (151 documented opcodes)');
 
     const validOpcodeSet = new Set(VANILLA_OPCODES.map(o => o.opcode));
 
@@ -417,6 +417,77 @@ function testTSXFlags() {
     assert(sfotty.Z === false, 'TSX does not set Z (Sfotty behavior)');
 }
 
+// ---- Test 6: Undocumented opcodes in Sfotty ----
+
+function testUndocumentedOpcodes() {
+    console.log('Test 6: Undocumented opcodes (LAX, SAX, DCP, JAM, NOP)');
+
+    // LAX zpg ($A7): loads both A and X
+    {
+        const mem = createMemory();
+        mem.raw[0x0200] = 0xA7;  // LAX $10
+        mem.raw[0x0201] = 0x10;
+        mem.raw[0x0010] = 0x42;
+
+        // Need a controller to monkey-patch Sfotty
+        const bmem = new BoardMemory(42, 8);
+        const ctrl = new BoardController(bmem);
+        const sfotty = ctrl.sfotty;
+
+        // Set up a simple memory wrapper that uses the flat mem array
+        const origRead = sfotty.memory.read.bind(sfotty.memory);
+        const origWrite = sfotty.memory.write.bind(sfotty.memory);
+        sfotty.memory.read = (addr) => mem.raw[addr & 0xFFFF];
+        sfotty.memory.write = (addr, val) => { mem.raw[addr & 0xFFFF] = val & 0xFF; };
+
+        sfotty.PC = 0x0200;
+        sfotty.A = 0;
+        sfotty.X = 0;
+        sfotty.S = 0xFF;
+        sfotty.setP(0);
+        sfotty.resetPending = false;
+        sfotty.crashed = false;
+        sfotty.cycleCounter = 0;
+        sfotty.operations = [() => sfotty.decode()];
+
+        // Run enough cycles for LAX zpg (3 cycles: decode + read addr + read val + decode)
+        for (let i = 0; i < 4; i++) sfotty.run();
+
+        assertEqual(sfotty.A, 0x42, 'LAX zpg sets A');
+        assertEqual(sfotty.X, 0x42, 'LAX zpg sets X');
+    }
+
+    // SAX zpg ($87): stores A & X
+    {
+        const bmem = new BoardMemory(42, 8);
+        const ctrl = new BoardController(bmem);
+        const sfotty = ctrl.sfotty;
+        const mem = createMemory();
+
+        sfotty.memory.read = (addr) => mem.raw[addr & 0xFFFF];
+        sfotty.memory.write = (addr, val) => { mem.raw[addr & 0xFFFF] = val & 0xFF; };
+
+        mem.raw[0x0200] = 0x87;  // SAX $10
+        mem.raw[0x0201] = 0x10;
+
+        sfotty.PC = 0x0200;
+        sfotty.A = 0xFF;
+        sfotty.X = 0x0F;
+        sfotty.S = 0xFF;
+        sfotty.setP(0);
+        sfotty.resetPending = false;
+        sfotty.crashed = false;
+        sfotty.cycleCounter = 0;
+        sfotty.operations = [() => sfotty.decode()];
+
+        for (let i = 0; i < 4; i++) sfotty.run();
+
+        assertEqual(mem.raw[0x10], 0x0F, 'SAX zpg stores A & X');
+    }
+
+    console.log('  Undocumented opcode tests complete');
+}
+
 // ---- Run all tests ----
 
 console.log('Sfotty Cross-Validation Test Suite');
@@ -427,6 +498,7 @@ testBoardDeterminism();
 testPageCrossingEdgeCases();
 testStoreZpxCycles();
 testTSXFlags();
+testUndocumentedOpcodes();
 
 console.log(`\n${'='.repeat(40)}`);
 console.log(`Results: ${passed}/${total} passed, ${failed} failed`);

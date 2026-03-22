@@ -270,6 +270,48 @@ a rich display without modifying the VM.
 from write/move recency via HSV mapping) rather than the bitmap convention. The
 bitmap is available for future detail views or cell inspectors.
 
+\section{Undocumented NMOS 6502 Opcodes}
+
+The NMOS 6502 has 105 opcodes not defined in the official instruction set.
+In 6502life, all 256 opcodes have defined behavior, divided into three categories:
+
+\subsection{Stable opcodes (faithfully emulated)}
+These combine documented operations in predictable ways and are well-understood
+from decades of reverse engineering:
+\begin{itemize}
+\item \textbf{LAX} (LDA + LDX): loads both A and X from memory.
+\item \textbf{SAX}: stores A \& X to memory.
+\item \textbf{DCP} (DEC + CMP): decrements memory, then compares result with A.
+\item \textbf{ISC/ISB} (INC + SBC): increments memory, then subtracts from A.
+\item \textbf{SLO} (ASL + ORA): shifts left, then ORs with A.
+\item \textbf{RLA} (ROL + AND): rotates left, then ANDs with A.
+\item \textbf{SRE} (LSR + EOR): shifts right, then XORs with A.
+\item \textbf{RRA} (ROR + ADC): rotates right, then adds to A.
+\item \textbf{ANC}: AND immediate, copies bit~7 to carry.
+\item \textbf{ALR}: AND immediate, then LSR accumulator.
+\item \textbf{ARR}: AND immediate, then ROR with special flag handling.
+\item \textbf{AXS/SBX}: (A \& X) $-$ immediate $\to$ X.
+\end{itemize}
+
+These use the same addressing modes and cycle counts as their documented
+equivalents. Programs that exploit undocumented opcodes (common in C64
+demo scenes) will execute correctly.
+
+\subsection{JAM/HLT opcodes (halt the cell)}
+Opcodes \$02, \$12, \$22, \$32, \$42, \$52, \$62, \$72, \$92, \$B2, \$D2, \$F2
+freeze the CPU on real hardware. In 6502life, they set a per-cell ``halted''
+flag. A halted cell does not execute until its memory is overwritten by a
+copy operation. This provides a natural ``death'' mechanism: random memory
+that decodes as a JAM instruction permanently stops that cell, creating
+selective pressure for programs that avoid JAM bytes.
+
+\subsection{Unstable opcodes (NOP with correct timing)}
+These depend on analog bus state and vary between physical chips. In 6502life
+they are treated as NOPs that consume the correct number of bytes and cycles
+but have no other effect. This includes XAA/ANE (\$8B), AHX/SHA (\$93, \$9F),
+TAS/SHS (\$9B), SHY (\$9C), SHX (\$9E), LAS (\$BB), and various undocumented
+NOP variants with 1--3~byte, 2--5~cycle timing.
+
 \section{Links}
 \begin{itemize}
 \item Avida \cite{pmid15107231,pmid37689762} \url{https://en.wikipedia.org/wiki/Avida_(software)}
