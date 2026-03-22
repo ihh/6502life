@@ -227,8 +227,7 @@ impl BoardController {
                 self.memory.sample_next_move();
                 self.read_registers();
                 self.write_rng();
-                self.cpu.crashed = false;
-                self.cpu.cycle_counter = 0;
+                self.cpu.reset_for_new_cell();
 
                 break;
             }
