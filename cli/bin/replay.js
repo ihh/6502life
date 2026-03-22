@@ -21,11 +21,14 @@ const stateFile = getFlag(flags, 'state');
 const saveFile = getFlag(flags, 'save');
 const logFile = getFlag(flags, 'log');
 const asmFile = getFlag(flags, 'asm');
+const presetName = getFlag(flags, 'preset');
 const [cellI, cellJ] = getCellFlag(flags, 'cell', 0, 0);
 const size = getIntFlag(flags, 'size', 8);
 const seed = getIntFlag(flags, 'seed', 42);
 const targetInterrupts = getIntFlag(flags, 'interrupts', 1000);
 const censusInterval = getIntFlag(flags, 'census', 0);
+const epsilon = getFlag(flags, 'epsilon');
+const boardParamsJson = getFlag(flags, 'board-params');
 const randomize = 'randomize' in flags;
 const quiet = 'quiet' in flags;
 
@@ -41,22 +44,39 @@ for (let i = 0; i < process.argv.length; i++) {
     }
 }
 
+// Build board params from flags
+let boardParams = undefined;
+if (epsilon !== undefined || boardParamsJson) {
+    boardParams = {};
+    if (epsilon !== undefined) boardParams.pBitNoise = parseFloat(epsilon);
+    if (boardParamsJson) Object.assign(boardParams, JSON.parse(boardParamsJson));
+}
+
 // Create or load board
 let controller;
 if (stateFile) {
     const state = JSON.parse(readFileSync(stateFile, 'utf-8'));
     const bSize = Math.sqrt(state.memory.storage.length / 1024) | 0;
-    ({ controller } = createBoard(bSize, 1));
+    ({ controller } = createBoard(bSize, 1, boardParams));
     controller.state = state;
 } else {
-    ({ controller } = createBoard(size, seed));
+    ({ controller } = createBoard(size, seed, boardParams));
     if (randomize) controller.randomize();
 }
 
-// Load assembly if provided
+// Load assembly if provided (--asm or --preset)
+let sourceToLoad = null;
 if (asmFile) {
-    const source = readFileSync(asmFile, 'utf-8');
-    const bytes = await assemble(source);
+    sourceToLoad = readFileSync(asmFile, 'utf-8');
+} else if (presetName) {
+    const { getPreset } = await import('../lib/terminal/presets.js');
+    const preset = getPreset(presetName);
+    if (!preset) { console.error(`Unknown preset: ${presetName}`); process.exit(1); }
+    sourceToLoad = preset.source;
+}
+
+if (sourceToLoad) {
+    const bytes = await assemble(sourceToLoad);
     writeCellBytes(controller, cellI, cellJ, 0, bytes);
     writeCellBytes(controller, cellI, cellJ, 0x200, bytes);
     if (!quiet) console.error(`Assembled ${bytes.length} bytes into cell (${cellI},${cellJ})`);

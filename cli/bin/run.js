@@ -17,14 +17,24 @@ const loadFile = getFlag(flags, 'load');
 const asmFile = getFlag(flags, 'asm');
 const presetName = getFlag(flags, 'preset');
 const [cellI, cellJ] = getCellFlag(flags, 'cell', 0, 0);
+const epsilon = getFlag(flags, 'epsilon');
+const boardParamsJson = getFlag(flags, 'board-params');
 const randomize = 'randomize' in flags;
 const saveFile = getFlag(flags, 'save');
 const stateFile = getFlag(flags, 'state');
 const jsonOutput = 'json' in flags;
 const quiet = 'quiet' in flags;
 
+// Build board params from flags
+let boardParams = undefined;
+if (epsilon !== undefined || boardParamsJson) {
+    boardParams = {};
+    if (epsilon !== undefined) boardParams.pBitNoise = parseFloat(epsilon);
+    if (boardParamsJson) Object.assign(boardParams, JSON.parse(boardParamsJson));
+}
+
 // Create board
-const { controller, visualizer } = createBoard(size, seed);
+const { controller, visualizer } = createBoard(size, seed, boardParams);
 
 // Load state if provided
 if (stateFile) {
