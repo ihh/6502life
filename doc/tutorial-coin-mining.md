@@ -295,6 +295,90 @@ node cli/bin/terminal.js --size 16 --asm presets/nano-2x.asm --cell 0,0
 Tab between panes. Type `help` in the command pane for the full command
 list. Watch replication happen in real time.
 
+## Advanced Board Parameters
+
+The simulation supports several board-level parameters that change the
+physics of the world. You can set them individually or all at once.
+
+### Mutation Rate (Epsilon)
+
+The `--epsilon` flag sets the per-bit noise probability for BRK noisy copy
+operations. The default is 1/2048 (~0.000488). Lower values mean more
+faithful copies; higher values mean faster mutation.
+
+```bash
+# Perfect copies (no mutation) -- replicators spread without degradation
+node cli/bin/run.js --size 16 --preset nano-2x --cell 0,0 \
+  --epsilon 0 --interrupts 50000 --save /tmp/perfect.json
+
+# High mutation -- rapid Muller's Ratchet degradation
+node cli/bin/run.js --size 16 --preset triplicator --cell 0,0 \
+  --epsilon 0.01 --interrupts 50000 --save /tmp/noisy.json
+
+# Compare entropy
+node cli/bin/heatmap.js --state /tmp/perfect.json --metric entropy
+node cli/bin/heatmap.js --state /tmp/noisy.json --metric entropy
+```
+
+The `--epsilon` flag works on `run.js`, `replay.js`, and `terminal.js`.
+
+### Board Params (JSON)
+
+The `--board-params` flag accepts a JSON string with any combination of
+board hyperparameters:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `pBitNoise` | float | 1/2048 | Per-bit noise on BRK noisy copy |
+| `pBrkFailure` | float | 0 | Probability BRK copy/swap silently fails |
+| `magnetosensing` | bool | false | Write cell orientation to $FA each interrupt |
+| `implementsMove` | bool | true | Enable BRK 1-244 swap operations |
+| `implementsCopy` | bool | true | Enable BRK 245-252 noisy copy |
+| `implementsSync` | bool | false | Enable BRK 253 sync interrupt request |
+| `implementsAsync` | bool | false | Enable BRK 254 async interrupt request |
+
+```bash
+# Enable magnetosensing and sync interrupts with zero noise
+node cli/bin/run.js --size 16 --preset nano-2x --cell 0,0 \
+  --board-params '{"magnetosensing":true,"implementsSync":true,"pBitNoise":0}' \
+  --interrupts 50000 --save /tmp/magneto.json
+
+# Disable movement but keep copy -- organisms can spread but not move
+node cli/bin/run.js --size 16 --preset spreader --cell 0,0 \
+  --board-params '{"implementsMove":false}' \
+  --interrupts 50000 --save /tmp/nomove.json
+```
+
+Note: if both `--epsilon` and `--board-params` are provided, both are
+applied. The `--board-params` value takes precedence if it also sets
+`pBitNoise`.
+
+### Magnetosensing
+
+When `magnetosensing` is enabled, the board writes each cell's current
+orientation to byte $FA of its zero page before every interrupt. Programs
+can read this byte to learn which direction they are facing.
+
+This opens up new replicator strategies: a program can navigate
+directionally instead of blindly copying in a random orientation.
+Try writing a replicator that reads $FA and decides which neighbor to
+copy to based on its orientation.
+
+### Sync and Async Interrupts
+
+When `implementsSync` is enabled, BRK 253 requests a synchronous
+interrupt: the current cell will be scheduled again immediately on the
+next tick. This lets programs chain multiple operations without being
+preempted.
+
+When `implementsAsync` is enabled, BRK 254 requests an asynchronous
+interrupt after a short random delay. This lets programs schedule
+future work.
+
+These mechanisms enable more sophisticated programs that can coordinate
+multi-step operations -- useful for complex self-repair routines or
+cooperative multi-cell organisms.
+
 ## What Next?
 
 - Try writing your own replicator. Start from the nano template and add
@@ -302,6 +386,8 @@ list. Watch replication happen in real time.
 - Use the `inject.js` tool to set up tournament brackets between presets.
 - Watch the mean-field model predictions and compare them to actual
   simulation outcomes.
+- Experiment with board parameters: try magnetosensing, sync interrupts,
+  or different mutation rates to see how they change evolutionary dynamics.
 - Read `doc/tutorial-tracking-replicators.md` for a deep dive into lineage
   tracking and phylogenetic analysis.
 
