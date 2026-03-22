@@ -49,6 +49,29 @@ function parseArgs(argv) {
 
   for (let i = 2; i < argv.length; i++) {
     switch (argv[i]) {
+      case '--help':
+        console.log(`social-mine.js — Social mining CLI for two boards sharing an edge
+
+Usage:
+  node coin/bin/social-mine.js [options]
+
+Options:
+  --size N             Board size NxN (default: 16)
+  --seed-a N           PRNG seed for board A (default: 42)
+  --seed-b N           PRNG seed for board B (default: 99)
+  --ticks N            Total simulation ticks (default: 10000)
+  --block-interval N   Ticks per block (default: 1000)
+  --share-interval N   Ticks between boundary syncs (default: 100)
+  --edge-a EDGE        A's export edge (default: east)
+  --edge-b EDGE        B's export edge (default: east)
+  --edge EDGE          Set both edges to the same value
+  --out-a FILE         Output session file for A (default: session-a.json)
+  --out-b FILE         Output session file for B (default: session-b.json)
+  --verify             Verify sessions after mining
+  --json               Output result as JSON to stdout
+  --quiet              Suppress progress output
+  --help               Show this help message`);
+        process.exit(0);
       case '--size': args.size = parseInt(argv[++i]); break;
       case '--seed-a': args.seedA = parseInt(argv[++i]); break;
       case '--seed-b': args.seedB = parseInt(argv[++i]); break;

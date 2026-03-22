@@ -33,6 +33,18 @@ function parseArgs(argv) {
   const positional = [];
   for (let i = 2; i < argv.length; i++) {
     switch (argv[i]) {
+      case '--help':
+        console.log(`social-verify.js — Verify a pair of social mining sessions
+
+Usage:
+  node coin/bin/social-verify.js <session-a.json> <session-b.json> [options]
+
+Options:
+  --skip-replay      Skip full replay verification (faster, less thorough)
+  --json             Output result as JSON to stdout
+  --verbose          Print detailed verification steps
+  --help             Show this help message`);
+        process.exit(0);
       case '--skip-replay': args.skipReplay = true; break;
       case '--json': args.json = true; break;
       case '--verbose': args.verbose = true; break;

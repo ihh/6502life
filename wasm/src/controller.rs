@@ -56,6 +56,11 @@ pub struct BoardController {
     pub board_params: BoardParams,
     /// Per-cell requested interrupt time (for sync/async). Infinity = none pending.
     pub next_requested_interrupt: Vec<f64>,
+    /// Per-cell lastWriter: wallet ID of the board that last wrote to this cell.
+    /// NOT in cell memory — programs cannot read or tamper with it.
+    pub last_writer: Vec<String>,
+    /// Board owner wallet ID — callers set this to their wallet ID.
+    pub board_owner: String,
 }
 
 pub struct InterruptResult {
@@ -78,6 +83,8 @@ impl BoardController {
             last_write_time: vec![0u64; num_cells],
             board_params,
             next_requested_interrupt: vec![f64::INFINITY; num_cells],
+            last_writer: vec![String::new(); num_cells],
+            board_owner: String::new(),
         };
         ctrl.read_registers();
         ctrl.write_rng();
@@ -128,12 +135,17 @@ impl BoardController {
         for b in 0..M {
             storage.swap(i_base + b, j_base + b);
         }
+        // Swap lastWriter along with cell content
+        let i_cell = i_base / M;
+        let j_cell = j_base / M;
+        self.last_writer.swap(i_cell, j_cell);
     }
 
     fn copy_cell_with_noise(&mut self, dest: usize) {
         let src_base = self.memory.neighbor_cell_storage_base(0);
         let dst_base = self.memory.neighbor_cell_storage_base(dest);
         let eps = self.board_params.p_bit_noise;
+        let mut perfect = true;
 
         if eps == 0.0 {
             // Perfect copy
@@ -150,9 +162,20 @@ impl BoardController {
                         noise_bits |= 1 << bit;
                     }
                 }
+                if noise_bits != 0 {
+                    perfect = false;
+                }
                 self.memory.storage[dst_base + b] =
                     (rnd_byte & noise_bits) | (src_byte & !noise_bits);
             }
+        }
+        // Update lastWriter: perfect copy preserves provenance, imperfect clears it
+        let src_cell = src_base / M;
+        let dst_cell = dst_base / M;
+        if perfect {
+            self.last_writer[dst_cell] = self.last_writer[src_cell].clone();
+        } else {
+            self.last_writer[dst_cell] = String::new();
         }
     }
 
@@ -174,11 +197,19 @@ impl BoardController {
 
     fn commit_writes(&mut self) {
         let keys = self.memory.undo_history_keys();
+        let mut written_cells = std::collections::HashSet::new();
         for addr in keys {
             let (i, j, b) = self.memory.ijb_from_byte_index(addr);
             let cell_idx = self.memory.ij_to_cell_index(i, j);
             self.last_write_time[cell_idx] = self.total_cycles;
             let _ = b; // per-byte tracking omitted for now (memory savings)
+            written_cells.insert(cell_idx);
+        }
+        // Set lastWriter for any written-to cell to the board owner
+        if !self.board_owner.is_empty() {
+            for cell_idx in written_cells {
+                self.last_writer[cell_idx] = self.board_owner.clone();
+            }
         }
         self.memory.disable_undo_history();
         self.write_registers();

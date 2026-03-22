@@ -18,6 +18,31 @@ import { getPreset } from '../lib/terminal/presets.js';
 
 const { flags } = parseArgs();
 
+if ('help' in flags) {
+    console.log(`inject.js — Patch cells in a saved board state
+
+Usage:
+  node cli/bin/inject.js [--state <file>] [options] --save <file>
+
+Options:
+  --state FILE       Load existing board state (or create fresh with --size)
+  --save FILE        Save modified state to file (required)
+  --size N           Board size NxN for new board (default: 8)
+  --seed N           PRNG seed for new board (default: 42)
+  --cell I,J         Target cell for subsequent actions (default: 0,0)
+  --asm FILE         Assemble and load source file into current cell
+  --preset NAME      Load a preset program into current cell
+  --hex STRING       Load hex bytes into current cell
+  --poke OFF=VAL     Write byte at hex offset into current cell
+  --zero             Zero the current cell before loading
+  --randomize        Fill board with random data before injections
+  --quiet            Suppress progress output
+  --help             Show this help message
+
+Multiple --cell + action pairs can be chained for batch injection.`);
+    process.exit(0);
+}
+
 const stateFile = getFlag(flags, 'state');
 const saveFile = getFlag(flags, 'save');
 const size = getIntFlag(flags, 'size', 8);

@@ -9,6 +9,32 @@ import { formatRegisters, formatHexDump, formatActivity, hexByte } from '../lib/
 
 const { flags } = parseArgs();
 
+if ('help' in flags) {
+    console.log(`run.js — Run a 6502life board simulation
+
+Usage:
+  node cli/bin/run.js [options]
+
+Options:
+  --seed N           PRNG seed (default: 42)
+  --size N           Board size NxN (default: 8)
+  --cycles N         Target scheduler cycles (default: 1000)
+  --interrupts N     Target interrupt count (overrides --cycles)
+  --load FILE        Load binary/hex file into cell
+  --asm FILE         Assemble source file and load into cell
+  --preset NAME      Load a preset program into cell
+  --cell I,J         Target cell for --asm/--load/--preset (default: 0,0)
+  --epsilon N        Bit-noise probability
+  --board-params JSON  Additional board parameters as JSON
+  --randomize        Fill board with random data
+  --save FILE        Save board state to file after running
+  --state FILE       Load board state from file before running
+  --json             Output results as JSON
+  --quiet            Suppress non-JSON output
+  --help             Show this help message`);
+    process.exit(0);
+}
+
 const seed = getIntFlag(flags, 'seed', 42);
 const size = getIntFlag(flags, 'size', 8);
 const targetCycles = getIntFlag(flags, 'cycles', 1000);

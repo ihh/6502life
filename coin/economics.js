@@ -1,14 +1,64 @@
 /**
- * Economics analysis — sketch of how coin value might be computed.
+ * Coin economics — solo mining rate decay, social multiplier, niche bonus.
  *
- * Coins are always minted at a constant rate (1 per unit of verified
- * simulation time). What changes is the exchange value, which depends
- * on session richness: duration, partner diversity, simulation activity.
+ * Solo mining rate decays with a configurable half-life since the last
+ * social pairing. Social sessions apply a flat multiplier. Niche events
+ * (cross-board organism presence) earn a per-event bonus.
  *
- * This module provides a simple scoring function and the interface for
- * a future, more sophisticated valuation model.
+ * All parameters are configurable via a coinParams object, kept separate
+ * from board/engine parameters.
  *
  * @module coin/economics
+ */
+
+/**
+ * Default coin parameters. Override any subset via coinParams.
+ */
+export const DEFAULT_COIN_PARAMS = {
+  /** Hours between solo rate halvings */
+  soloHalfLife: 24,
+  /** Minimum solo mining rate (fraction of max) */
+  minSoloRate: 1 / 128,
+  /** Multiplier applied during social sessions */
+  socialMultiplier: 1.5,
+  /** Bonus coins per Niche event */
+  nicheBonus: 0.69,
+};
+
+/**
+ * Compute the solo mining rate given hours since last social pairing.
+ *
+ * Rate starts at 1.0 and halves every `soloHalfLife` hours (step function,
+ * not continuous decay). Clamped to `minSoloRate` at the bottom.
+ *
+ * @param {number} hoursSinceLastPairing
+ * @param {Object} [params]
+ * @param {number} [params.soloHalfLife=24]
+ * @param {number} [params.minSoloRate=1/128]
+ * @returns {number} rate in (0, 1]
+ */
+export function soloMiningRate(hoursSinceLastPairing, params = {}) {
+  const halfLife = params.soloHalfLife ?? DEFAULT_COIN_PARAMS.soloHalfLife;
+  const minRate = params.minSoloRate ?? DEFAULT_COIN_PARAMS.minSoloRate;
+  const halvings = Math.floor(hoursSinceLastPairing / halfLife);
+  return Math.max(minRate, Math.pow(0.5, halvings));
+}
+
+/**
+ * @typedef {Object} CoinContext
+ * @property {number|null} lastPairingTime - timestamp (ms) of last social session
+ * @property {boolean} isSocial - whether this is a social session
+ * @property {number} nicheEvents - count of Niche events in this session
+ * @property {number} [now] - current timestamp (ms), defaults to Date.now()
+ */
+
+/**
+ * @typedef {Object} CoinResult
+ * @property {number} baseCoins - raw block count
+ * @property {number} soloRate - solo mining rate (1.0 if social or just paired)
+ * @property {number} socialMultiplier - 1.0 for solo, params.socialMultiplier for social
+ * @property {number} nicheBonus - total niche bonus (nicheEvents * params.nicheBonus)
+ * @property {number} totalCoins - baseCoins * soloRate * socialMultiplier + nicheBonus
  */
 
 /**
@@ -24,191 +74,43 @@
  */
 
 /**
- * @typedef {Object} NetworkHistory
- * @property {number} totalSessions - total sessions in the network
- * @property {number} totalSocialSessions - sessions with social mining
- * @property {number} uniquePlayers - distinct public keys seen
- * @property {Map<string, number>} playerSessionCounts - sessions per player pubkey
- * @property {Map<string, Set<string>>} socialGraph - pubkey -> set of partner pubkeys
- */
-
-/**
- * @typedef {Object} CoinValue
- * @property {number} baseValue - raw time-based value (1 per block)
- * @property {number} activityMultiplier - bonus for interesting simulation (1.0-2.0)
- * @property {number} socialMultiplier - bonus for social mining (1.0-1.5)
- * @property {number} networkMultiplier - bonus for well-connected player (1.0-2.0)
- * @property {number} totalValue - baseValue * all multipliers
- * @property {Record<string, number>} breakdown - detailed scoring breakdown
- */
-
-/**
- * Compute a coin value estimate for a session.
- *
- * This is a sketch implementation. The real valuation would emerge from
- * market dynamics (see gridcoin-proposal.md Section 6.2), but this gives
- * a reasonable starting point for comparing sessions.
+ * Compute coin value for a session, incorporating solo decay, social
+ * multiplier, and niche bonus.
  *
  * @param {SessionSummary} session
- * @param {NetworkHistory} [networkHistory] - optional network context
- * @returns {CoinValue}
+ * @param {CoinContext} context
+ * @param {Object} [coinParams] - overrides for DEFAULT_COIN_PARAMS
+ * @returns {CoinResult}
  */
-export function computeCoinValue(session, networkHistory = null) {
-  const breakdown = {};
+export function computeCoinValue(session, context = {}, coinParams = {}) {
+  const params = { ...DEFAULT_COIN_PARAMS, ...coinParams };
 
-  // Base value: 1 per block
-  const baseValue = session.blockCount;
-  breakdown.blocks = session.blockCount;
+  const baseCoins = session.blockCount;
 
-  // Activity multiplier: reward interesting simulations over dead boards
-  const activityMultiplier = computeActivityMultiplier(session, breakdown);
+  // Solo decay: hours since last pairing
+  let soloRate = 1.0;
+  if (!context.isSocial && context.lastPairingTime != null) {
+    const now = context.now ?? Date.now();
+    const hoursSince = (now - context.lastPairingTime) / (1000 * 60 * 60);
+    soloRate = soloMiningRate(hoursSince, params);
+  }
 
-  // Social multiplier: reward social mining
-  const socialMultiplier = computeSocialMultiplier(session, breakdown);
+  // Social multiplier
+  const socialMult = context.isSocial ? params.socialMultiplier : 1.0;
 
-  // Network multiplier: reward well-connected players
-  const networkMultiplier = networkHistory
-    ? computeNetworkMultiplier(session, networkHistory, breakdown)
-    : 1.0;
+  // Niche bonus
+  const nicheEvents = context.nicheEvents ?? 0;
+  const niche = nicheEvents * params.nicheBonus;
 
-  const totalValue = baseValue * activityMultiplier * socialMultiplier * networkMultiplier;
+  const totalCoins = baseCoins * soloRate * socialMult + niche;
 
   return {
-    baseValue,
-    activityMultiplier,
-    socialMultiplier,
-    networkMultiplier,
-    totalValue,
-    breakdown
+    baseCoins,
+    soloRate,
+    socialMultiplier: socialMult,
+    nicheBonus: niche,
+    totalCoins,
   };
-}
-
-/**
- * Score simulation activity/interestingness.
- *
- * Dead boards (all zeros, no changes) get multiplier 1.0.
- * Active boards with diversity get up to 2.0.
- *
- * @param {SessionSummary} session
- * @param {Record<string, number>} breakdown
- * @returns {number} multiplier in [1.0, 2.0]
- */
-function computeActivityMultiplier(session, breakdown) {
-  const summary = session.lastSummary;
-  if (!summary) return 1.0;
-
-  let score = 0;
-
-  // Game of Life: density near 0.5 is more interesting than 0 or 1
-  if (summary.density != null) {
-    // Peaked at 0.3-0.5 (typical GoL equilibrium density)
-    const densityScore = 1 - Math.abs(summary.density - 0.35) * 2;
-    score += Math.max(0, densityScore) * 0.3;
-    breakdown.densityScore = densityScore;
-  }
-
-  // Birth/death activity suggests non-static board
-  if (summary.totalBorn != null && session.totalTicks > 0) {
-    const birthRate = summary.totalBorn / session.totalTicks;
-    // Typical GoL on 32x32 has birth rate ~10-50 per tick
-    const birthScore = Math.min(1, birthRate / 20);
-    score += birthScore * 0.3;
-    breakdown.birthRate = birthRate;
-  }
-
-  // 6502life: copies and swaps indicate replication
-  if (summary.totalCopies != null) {
-    const copyRate = summary.totalCopies / Math.max(1, session.totalTicks);
-    score += Math.min(1, copyRate * 10) * 0.3;
-    breakdown.copyRate = copyRate;
-  }
-
-  // Unique cell hashes indicate diversity
-  if (summary.uniqueHashes != null && summary.activeCells != null) {
-    const diversityRatio = summary.uniqueHashes / Math.max(1, summary.activeCells);
-    score += Math.min(1, diversityRatio) * 0.4;
-    breakdown.diversityRatio = diversityRatio;
-  }
-
-  // Clamp to [1.0, 2.0]
-  return 1.0 + Math.min(1.0, Math.max(0, score));
-}
-
-/**
- * Score social mining.
- *
- * Solo sessions get 1.0. Social sessions get up to 1.5.
- *
- * @param {SessionSummary} session
- * @param {Record<string, number>} breakdown
- * @returns {number} multiplier in [1.0, 1.5]
- */
-function computeSocialMultiplier(session, breakdown) {
-  if (!session.isSocial) {
-    breakdown.socialBonus = 0;
-    return 1.0;
-  }
-
-  // Base social bonus: 1.3x just for having a partner
-  let bonus = 0.3;
-  breakdown.socialBonus = bonus;
-
-  // Duration bonus: longer social sessions are more valuable
-  // (harder to fake sustained proximity)
-  if (session.wallTimeMs > 5 * 60 * 1000) {
-    // >5 minutes
-    bonus += 0.1;
-    breakdown.socialDurationBonus = 0.1;
-  }
-  if (session.wallTimeMs > 30 * 60 * 1000) {
-    // >30 minutes
-    bonus += 0.1;
-    breakdown.socialDurationBonus = 0.2;
-  }
-
-  return 1.0 + Math.min(0.5, bonus);
-}
-
-/**
- * Score network connectivity.
- *
- * Players who mine with many different partners are rewarded,
- * because their organisms have had more opportunity to spread.
- *
- * @param {SessionSummary} session
- * @param {NetworkHistory} networkHistory
- * @param {Record<string, number>} breakdown
- * @returns {number} multiplier in [1.0, 2.0]
- */
-function computeNetworkMultiplier(session, networkHistory, breakdown) {
-  // How many unique partners has this player mined with?
-  const playerKey = session.isSocial ? session.partnerPubkey : null;
-  // We look at the author's connectivity in the social graph
-  // For now, since we don't have the author key in SessionSummary,
-  // use the network-wide stats as a proxy
-
-  let score = 0;
-
-  // Network diversity: more unique players = more valuable network
-  if (networkHistory.uniquePlayers > 1) {
-    const networkScale = Math.log2(networkHistory.uniquePlayers) / 10;
-    score += Math.min(0.5, networkScale);
-    breakdown.networkScale = networkScale;
-  }
-
-  // Social graph density: fraction of possible edges present
-  if (networkHistory.uniquePlayers > 1 && networkHistory.socialGraph) {
-    let totalEdges = 0;
-    for (const partners of networkHistory.socialGraph.values()) {
-      totalEdges += partners.size;
-    }
-    const maxEdges = networkHistory.uniquePlayers * (networkHistory.uniquePlayers - 1);
-    const graphDensity = totalEdges / Math.max(1, maxEdges);
-    score += graphDensity * 0.5;
-    breakdown.graphDensity = graphDensity;
-  }
-
-  return 1.0 + Math.min(1.0, score);
 }
 
 /**

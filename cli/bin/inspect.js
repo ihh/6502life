@@ -7,6 +7,24 @@ import { formatRegisters, formatHexDump, formatActivity } from '../lib/output.js
 
 const { flags } = parseArgs();
 
+if ('help' in flags) {
+    console.log(`inspect.js — Inspect cell state in a saved board
+
+Usage:
+  node cli/bin/inspect.js --state <file> [options]
+
+Options:
+  --state FILE       Board state file to inspect (required)
+  --cell I,J         Cell to inspect (default: 0,0)
+  --registers        Show CPU registers
+  --memory           Show full memory hex dump
+  --activity         Show recently active cells
+  --all              Show registers, memory, and activity
+  --json             Output as JSON
+  --help             Show this help message`);
+    process.exit(0);
+}
+
 const stateFile = getFlag(flags, 'state');
 const [cellI, cellJ] = getCellFlag(flags, 'cell', 0, 0);
 const showRegisters = 'registers' in flags;

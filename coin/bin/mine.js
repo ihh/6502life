@@ -36,6 +36,23 @@ function parseArgs(argv) {
 
   for (let i = 2; i < argv.length; i++) {
     switch (argv[i]) {
+      case '--help':
+        console.log(`mine.js — Solo mining CLI for 6502coin
+
+Usage:
+  node coin/bin/mine.js [options]
+
+Options:
+  --size N             Board size NxN (default: 32)
+  --seed N             PRNG seed (default: 42)
+  --ticks N            Total simulation ticks (default: 100000)
+  --block-interval N   Ticks per block (default: 10000)
+  --out FILE           Output session file (default: session.json)
+  --verify             Verify the session after mining
+  --json               Output result as JSON to stdout
+  --quiet              Suppress progress output
+  --help               Show this help message`);
+        process.exit(0);
       case '--size': args.size = parseInt(argv[++i]); break;
       case '--seed': args.seed = parseInt(argv[++i]); break;
       case '--ticks': args.ticks = parseInt(argv[++i]); break;

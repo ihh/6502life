@@ -15,6 +15,21 @@ import { fgRGB, bgRGB, reset, bold, dim } from '../lib/ansi.js';
 
 const { flags } = parseArgs();
 
+if ('help' in flags) {
+    console.log(`heatmap.js — Terminal-rendered activity heatmap
+
+Usage:
+  node cli/bin/heatmap.js --state <file> [options]
+
+Options:
+  --state FILE       Board state file to visualize (required)
+  --metric TYPE      Metric to display: writes, moves, or entropy (default: writes)
+  --width N          Maximum terminal width in columns (default: terminal width)
+  --json             Output grid values as JSON
+  --help             Show this help message`);
+    process.exit(0);
+}
+
 const stateFile = getFlag(flags, 'state');
 const metric = getFlag(flags, 'metric') || 'writes';
 const maxWidth = getIntFlag(flags, 'width', process.stdout.columns || 80);

@@ -14,6 +14,20 @@ import { parseArgs, getFlag } from '../lib/args.js';
 
 const { flags } = parseArgs();
 
+if ('help' in flags) {
+    console.log(`phylo.js — Reconstruct phylogenetic tree from lineage event log
+
+Usage:
+  node cli/bin/phylo.js --log <file> [--format FORMAT]
+  cat lineage.jsonl | node cli/bin/phylo.js --format ascii
+
+Options:
+  --log FILE         JSONL lineage event log file (default: stdin)
+  --format FORMAT    Output format: ascii, newick, dot, or json (default: ascii)
+  --help             Show this help message`);
+    process.exit(0);
+}
+
 const logFile = getFlag(flags, 'log');
 const format = getFlag(flags, 'format') || 'ascii';
 

@@ -17,6 +17,32 @@ import { Tracker } from '../lib/probe/tracker.js';
 
 const { flags } = parseArgs();
 
+if ('help' in flags) {
+    console.log(`replay.js — Deterministic replay with structured event logging
+
+Usage:
+  node cli/bin/replay.js [options]
+
+Options:
+  --state FILE       Load board state from file
+  --save FILE        Save board state after replay
+  --log FILE         Write events to JSONL file (default: stdout)
+  --asm FILE         Assemble source file and load into cell
+  --preset NAME      Load a preset program into cell
+  --cell I,J         Target cell for --asm/--preset (default: 0,0)
+  --size N           Board size NxN when creating fresh board (default: 8)
+  --seed N           PRNG seed (default: 42)
+  --interrupts N     Number of interrupts to run (default: 1000)
+  --census N         Emit census events every N interrupts (0=off)
+  --track I,J        Track a cell for lineage events (repeatable)
+  --epsilon N        Bit-noise probability
+  --board-params JSON  Additional board parameters as JSON
+  --randomize        Fill board with random data
+  --quiet            Suppress progress output
+  --help             Show this help message`);
+    process.exit(0);
+}
+
 const stateFile = getFlag(flags, 'state');
 const saveFile = getFlag(flags, 'save');
 const logFile = getFlag(flags, 'log');

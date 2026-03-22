@@ -6,7 +6,7 @@
  * Check Board6502Engine.backend after init() to see which is active.
  */
 
-import { createBoard, createBoardAsync, writeCellBytes } from '@engine/board.js';
+import { createBoard, createBoardAsync, writeCellBytes, readCellMemory } from '@engine/board.js';
 import { assemble } from '@engine/assembler.js';
 import { getPreset } from './presets-browser.js';
 
@@ -226,6 +226,79 @@ export class Board6502Engine {
       } else {
         const idx = this.memory.ijbToByteIndex(i, j, action.offset);
         this.memory.setByteWithoutUndo(idx, action.value);
+      }
+    }
+  }
+
+  /**
+   * Read the boundary strip along the given edge.
+   * Each cell = 1024 bytes, so the strip is size * 1024 bytes.
+   * @param {'north'|'south'|'east'|'west'} edge
+   * @returns {Uint8Array}
+   */
+  getBoundary(edge) {
+    const B = this.size;
+    const M = 1024;
+
+    if (this._wasmInner) {
+      const cells = new Uint8Array(B * M);
+      for (let k = 0; k < B; k++) {
+        let i, j;
+        switch (edge) {
+          case 'north': i = k; j = 0; break;
+          case 'south': i = k; j = B - 1; break;
+          case 'west':  i = 0; j = k; break;
+          case 'east':  i = B - 1; j = k; break;
+          default: throw new Error(`Unknown edge: ${edge}`);
+        }
+        const base = (i * B + j) * M;
+        for (let b = 0; b < M; b++) {
+          cells[k * M + b] = this._wasmInner.get_byte(base + b);
+        }
+      }
+      return cells;
+    }
+
+    // Sfotty path
+    const cells = new Uint8Array(B * M);
+    for (let k = 0; k < B; k++) {
+      let i, j;
+      switch (edge) {
+        case 'north': i = k; j = 0; break;
+        case 'south': i = k; j = B - 1; break;
+        case 'west':  i = 0; j = k; break;
+        case 'east':  i = B - 1; j = k; break;
+        default: throw new Error(`Unknown edge: ${edge}`);
+      }
+      const cellData = readCellMemory(this.controller, i, j);
+      cells.set(cellData, k * M);
+    }
+    return cells;
+  }
+
+  /**
+   * Write a boundary strip received from a neighboring board.
+   * @param {'north'|'south'|'east'|'west'} edge
+   * @param {Uint8Array} data
+   */
+  setBoundary(edge, data) {
+    const B = this.size;
+    const M = 1024;
+
+    for (let k = 0; k < B; k++) {
+      let i, j;
+      switch (edge) {
+        case 'north': i = k; j = 0; break;
+        case 'south': i = k; j = B - 1; break;
+        case 'west':  i = 0; j = k; break;
+        case 'east':  i = B - 1; j = k; break;
+        default: throw new Error(`Unknown edge: ${edge}`);
+      }
+      const cellBytes = data.subarray(k * M, (k + 1) * M);
+      if (this._wasmInner) {
+        this._wasmInner.write_cell_bytes(i, j, 0, cellBytes);
+      } else {
+        writeCellBytes(this.controller, i, j, 0, cellBytes);
       }
     }
   }

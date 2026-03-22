@@ -138,3 +138,140 @@ header .pubkey {
   font-size: 1rem;
   margin-top: 40vh;
 }
+
+/* --- Social Play --- */
+
+.social-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 8px;
+  width: 100%;
+  max-width: 480px;
+}
+
+.social-bar .peer-id {
+  font-size: 0.7rem;
+  color: #888;
+  cursor: pointer;
+  padding: 4px 8px;
+  background: #1a1a2e;
+  border: 1px solid #333;
+  border-radius: 4px;
+  transition: border-color 0.15s;
+  user-select: all;
+  -webkit-user-select: all;
+}
+
+.social-bar .peer-id:hover {
+  border-color: #e8b030;
+}
+
+.social-bar .peer-id.copied {
+  border-color: #4a4;
+  color: #4a4;
+}
+
+.social-bar .status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #444;
+  transition: background 0.3s;
+}
+
+.social-bar .status-dot.connected {
+  background: #4a4;
+  box-shadow: 0 0 4px #4a4;
+}
+
+.social-connect {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.social-connect input {
+  background: #1a1a2e;
+  color: #c8c8d0;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-family: inherit;
+  font-size: 0.75rem;
+  width: 140px;
+}
+
+.social-connect input::placeholder {
+  color: #555;
+}
+
+.social-connect button {
+  background: #1a1a2e;
+  color: #c8c8d0;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-family: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.social-connect button:hover {
+  background: #2a2a4e;
+}
+
+.social-connect button:active {
+  background: #3a2a1e;
+  border-color: #e8b030;
+}
+
+.social-info {
+  font-size: 0.7rem;
+  color: #666;
+  text-align: center;
+}
+
+.social-info .partner {
+  color: #4a4;
+}
+
+.social-info .multiplier {
+  color: #e8b030;
+  font-weight: bold;
+}
+
+/* Notification toast */
+.notification-toast {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  background: #1a1a2e;
+  border: 1px solid #e8b030;
+  color: #e8b030;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 0.8rem;
+  opacity: 0;
+  transform: translateY(-10px);
+  transition: opacity 0.3s, transform 0.3s;
+  pointer-events: none;
+  z-index: 1000;
+}
+
+.notification-toast.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.notification-toast.niche {
+  border-color: #d4a;
+  color: #d4a;
+  font-size: 1rem;
+  font-weight: bold;
+}

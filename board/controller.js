@@ -153,6 +153,11 @@ class BoardController {
         this.lastWriteTimeForByte = this.newCellArray(()=>this.newCellByteArray(()=>0));
         // Per-cell halted state (JAM opcode freezes the cell)
         this.halted = this.newCellArray(() => false);
+        // Per-cell lastWriter: wallet ID of the board that last wrote to this cell.
+        // NOT in cell memory — programs cannot read or tamper with it.
+        this.lastWriter = this.newCellArray(() => '');
+        // Board owner wallet ID — callers set this to their wallet ID.
+        this.boardOwner = '';
         // Board hyperparameters
         this.boardParams = Object.assign({
             pBitNoise: 1 / 2048,     // per-bit noise on BRK noisy copy
@@ -197,7 +202,9 @@ class BoardController {
                  lastWriteTime: this.lastWriteTime,
                  lastMoveTime: this.lastMoveTime,
                  nextRequestedInterrupt: this.nextRequestedInterrupt,
-                 halted: this.halted };
+                 halted: this.halted,
+                 lastWriter: this.lastWriter,
+                 boardOwner: this.boardOwner };
     }
 
     set state(s) {
@@ -222,6 +229,10 @@ class BoardController {
             this.nextRequestedInterrupt = s.nextRequestedInterrupt;
         if (s.halted)
             this.halted = s.halted;
+        if (s.lastWriter)
+            this.lastWriter = s.lastWriter;
+        if (s.boardOwner !== undefined)
+            this.boardOwner = s.boardOwner;
     }
 
     newCellArray(initializer) {
@@ -1095,6 +1106,12 @@ class BoardController {
             storage[iBase + b] = storage[jBase + b];
             storage[jBase + b] = tmp;
         }
+        // Swap lastWriter along with cell content
+        const iCellIdx = Math.floor(iBase / M);
+        const jCellIdx = Math.floor(jBase / M);
+        const tmpWriter = this.lastWriter[iCellIdx];
+        this.lastWriter[iCellIdx] = this.lastWriter[jCellIdx];
+        this.lastWriter[jCellIdx] = tmpWriter;
     }
 
     copyCellWithNoise (dest) {
@@ -1105,6 +1122,7 @@ class BoardController {
         const srcBase = mem.neighborCellStorageBase(0);  // origin cell
         const dstBase = mem.neighborCellStorageBase(dest);
         const M = mem.M;
+        let perfect = true;
         if (eps === 0) {
             // Perfect copy — direct storage memcpy
             for (let b = 0; b < M; ++b) {
@@ -1119,8 +1137,17 @@ class BoardController {
                     if (mt.real() < eps)
                         noiseBits |= (1 << bit);
                 }
+                if (noiseBits !== 0) perfect = false;
                 storage[dstBase + b] = (rndByte & noiseBits) | (srcByte & ~noiseBits);
             }
+        }
+        // Update lastWriter: perfect copy preserves provenance, imperfect clears it
+        const srcCellIdx = Math.floor(srcBase / M);
+        const dstCellIdx = Math.floor(dstBase / M);
+        if (perfect) {
+            this.lastWriter[dstCellIdx] = this.lastWriter[srcCellIdx];
+        } else {
+            this.lastWriter[dstCellIdx] = '';
         }
     }
 
@@ -1361,19 +1388,27 @@ class BoardController {
     }
 
     commitWrites() {
+        const writtenCells = new Set();
         Object.keys(this.memory.undoHistory).forEach ((addr) => {
             const [i, j, b] = this.memory.ijbFromByteIndex (parseInt(addr));
             const cellIdx = this.memory.ijToCellIndex (i, j);
             this.lastWriteTime[cellIdx] = this.totalCycles;
             this.lastWriteTimeForByte[cellIdx][b] = this.totalCycles;
+            writtenCells.add(cellIdx);
         })
+        // Set lastWriter for any written-to cell to the board owner
+        if (this.boardOwner) {
+            for (const cellIdx of writtenCells) {
+                this.lastWriter[cellIdx] = this.boardOwner;
+            }
+        }
         this.memory.disableUndoHistory();
         this.writeRegisters();
     }
 
     commitMove (src, dest) {
         if (src != dest)
-            this.swapCells (src, dest);
+            this.swapCells (src, dest);  // swapCells already swaps lastWriter
         this.lastMoveTime[src] = this.totalCycles;
         this.lastMoveTime[dest] = this.totalCycles;
         // swap last write times for src and dest cells

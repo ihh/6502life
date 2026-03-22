@@ -17,6 +17,26 @@ import { hexByte, hexWord } from '../../engine/format.js';
 
 const { flags, positional } = parseArgs();
 
+if ('help' in flags) {
+    console.log(`disasm.js — 6502 disassembler
+
+Usage:
+  node cli/bin/disasm.js --state <file> --cell I,J [options]
+  node cli/bin/disasm.js --hex "A9 01 8D 10 00"
+  echo "A9 01" | node cli/bin/disasm.js
+
+Options:
+  --state FILE       Board state file
+  --cell I,J         Cell to disassemble (repeatable for --diff)
+  --hex STRING       Disassemble hex byte string
+  --lines N          Number of instructions to show (default: 32)
+  --offset ADDR      Start address in hex (default: PC for state, 0 for hex)
+  --diff             Diff disassembly of two cells
+  --json             Output as JSON
+  --help             Show this help message`);
+    process.exit(0);
+}
+
 const stateFile = getFlag(flags, 'state');
 const hexInput = getFlag(flags, 'hex');
 const lines = getIntFlag(flags, 'lines', 32);

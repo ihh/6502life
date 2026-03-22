@@ -48,6 +48,13 @@ export class Session {
     this.config = config;
     this.blockInterval = options.blockInterval ?? 10000;
 
+    /**
+     * Timestamp (ms) of the last social pairing, used for solo mining
+     * rate decay. Null means the player has never paired.
+     * @type {number|null}
+     */
+    this.lastPairingTime = options.lastPairingTime ?? null;
+
     /** @type {import('./engine.js').Input[]} */
     this.inputs = [];
     /** @type {Block[]} */
@@ -69,8 +76,8 @@ export class Session {
    * Apply an input to the engine and record it.
    * @param {import('./engine.js').Input} input
    */
-  applyInput(input) {
-    this.engine.applyInput(input);
+  async applyInput(input) {
+    await this.engine.applyInput(input);
     this.inputs.push(input);
     this._blockInputs.push(input);
   }
@@ -158,6 +165,7 @@ export class Session {
       initialStateHex: this.initialStateHex,
       inputs: this.inputs,
       finalTick: this.engine.clock(),
+      lastPairingTime: this.lastPairingTime,
       blocks: this.blocks.map(b => ({
         index: b.index,
         prevHash: b.prevHash,

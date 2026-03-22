@@ -56,10 +56,10 @@ describe('Session', () => {
     }
   });
 
-  it('records inputs', () => {
+  it('records inputs', async () => {
     const session = makeSession({ blockInterval: 100 });
     session.step(50);
-    session.applyInput({ tick: 50, action: { type: 'set', x: 0, y: 0, value: 1 } });
+    await session.applyInput({ tick: 50, action: { type: 'set', x: 0, y: 0, value: 1 } });
     session.step(150);
 
     const record = session.finalize();
@@ -116,14 +116,14 @@ describe('Session verification', () => {
     }
   });
 
-  it('valid session with inputs passes verification', () => {
+  it('valid session with inputs passes verification', async () => {
     const config = { gameId: 'life', width: 8, height: 8, seed: 99 };
     const engine = new LifeEngine();
     engine.init(config);
     const session = new Session(engine, config, { blockInterval: 50 });
 
     session.step(25);
-    session.applyInput({ tick: 25, action: { type: 'set', x: 3, y: 3, value: 1 } });
+    await session.applyInput({ tick: 25, action: { type: 'set', x: 3, y: 3, value: 1 } });
     session.step(75);
 
     const record = session.finalize();

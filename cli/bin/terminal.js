@@ -11,6 +11,34 @@ import { ProbeServer } from '../lib/probe/server.js';
 
 const { flags } = parseArgs();
 
+if ('help' in flags) {
+    console.log(`terminal.js — Interactive four-pane terminal debugger
+
+Usage:
+  node cli/bin/terminal.js [options]
+
+Options:
+  --seed N           PRNG seed (default: 42)
+  --size N           Board size NxN (default: 8)
+  --state FILE       Load board state from file
+  --asm FILE         Assemble source file and load into cell
+  --load FILE        Load binary/hex file into cell
+  --preset NAME      Load a preset program into cell
+  --cell I,J         Target cell for --asm/--load/--preset (default: 0,0)
+  --randomize        Fill board with random data
+  --listen [PATH]    Start probe socket for external CLI tools
+  --script FILE      Run debugger commands from file and exit
+  --dump FILE        Write dump output to file (with --script)
+  --epsilon N        Bit-noise probability
+  --brk-failure N    BRK failure probability
+  --help             Show this help message
+
+Pane layout: memory map | disassembler | command prompt | board minimap
+Controls: Tab=switch pane, type "help" in command pane for debugger commands
+Presets: counter, nop, copier, overwriter, tumbler, spreader, painter, knight, crawler`);
+    process.exit(0);
+}
+
 const seed = getIntFlag(flags, 'seed', 42);
 const size = getIntFlag(flags, 'size', 8);
 const stateFile = getFlag(flags, 'state');
