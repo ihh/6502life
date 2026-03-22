@@ -1,0 +1,13 @@
+// Game of Life (simplified, async approximation)
+// A live cell dies without neighbors (underpopulation)
+// A live cell with a live neighbor survives and may reproduce
+// Empty cells next to live cells can become alive
+
+// Reproduction: live cell spreads to empty neighbor
+live _ : live live, rate=1.
+
+// Death: isolated live cell dies
+live : dead, rate=0.5.
+
+// Decay: dead cells become empty
+dead : _, rate=2.
