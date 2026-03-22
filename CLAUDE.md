@@ -52,6 +52,16 @@ node cli/bin/run.js --asm counter.asm --cell 0,0 --cycles 5000
 # Run by interrupt count, JSON output
 node cli/bin/run.js --seed 42 --size 16 --interrupts 100 --json
 
+# Load a preset by name
+node cli/bin/run.js --preset nano-2x --cell 0,0 --interrupts 10000
+
+# Set mutation rate (epsilon = per-bit noise probability)
+node cli/bin/run.js --preset nano-2x --cell 0,0 --epsilon 0 --interrupts 10000
+
+# Set any board params via JSON
+node cli/bin/run.js --preset nano-2x --cell 0,0 \
+  --board-params '{"magnetosensing":true,"pBitNoise":0}' --interrupts 10000
+
 # Save/load state
 node cli/bin/run.js --randomize --save state.json
 node cli/bin/run.js --state state.json --cycles 1000
@@ -118,6 +128,13 @@ node cli/bin/replay.js --state snap.json --interrupts 5000 --log events.jsonl --
 
 # Track a cell during replay
 node cli/bin/replay.js --size 16 --asm copier.asm --cell 0,0 --interrupts 1000 --track 0,0 --log lineage.jsonl
+
+# Use a preset (same as run.js)
+node cli/bin/replay.js --size 16 --preset nano-2x --cell 0,0 --interrupts 1000 --log events.jsonl
+
+# With epsilon and board params
+node cli/bin/replay.js --size 16 --preset nano-2x --cell 0,0 --epsilon 0 --interrupts 1000 --log events.jsonl
+node cli/bin/replay.js --state snap.json --board-params '{"magnetosensing":true}' --interrupts 500 --log events.jsonl
 
 # Periodic census during replay
 node cli/bin/replay.js --state snap.json --interrupts 500 --census 100 --log census.jsonl
