@@ -15,6 +15,7 @@ const targetCycles = getIntFlag(flags, 'cycles', 1000);
 const targetInterrupts = getIntFlag(flags, 'interrupts', undefined);
 const loadFile = getFlag(flags, 'load');
 const asmFile = getFlag(flags, 'asm');
+const presetName = getFlag(flags, 'preset');
 const [cellI, cellJ] = getCellFlag(flags, 'cell', 0, 0);
 const randomize = 'randomize' in flags;
 const saveFile = getFlag(flags, 'save');
@@ -55,10 +56,19 @@ if (loadFile) {
     writeCellBytes(controller, cellI, cellJ, 0x200, data);
 }
 
-// Assemble and load source
+// Assemble and load source (--asm or --preset)
+let sourceToLoad = null;
 if (asmFile) {
-    const source = readFileSync(asmFile, 'utf-8');
-    const bytes = await assemble(source);
+    sourceToLoad = readFileSync(asmFile, 'utf-8');
+} else if (presetName) {
+    const { getPreset } = await import('../lib/terminal/presets.js');
+    const preset = getPreset(presetName);
+    if (!preset) { console.error(`Unknown preset: ${presetName}`); process.exit(1); }
+    sourceToLoad = preset.source;
+}
+
+if (sourceToLoad) {
+    const bytes = await assemble(sourceToLoad);
     writeCellBytes(controller, cellI, cellJ, 0, bytes);
     writeCellBytes(controller, cellI, cellJ, 0x200, bytes);
     if (!quiet) {
