@@ -173,14 +173,16 @@ async function runSimulation(args) {
     }
 
     // Load assembly or preset
-    if (args.asm) {
-        const source = readFileSync(args.asm, 'utf-8');
-        const bytes = await assemble(source);
-        writeCellBytes(controller, args.cell[0], args.cell[1], 0, bytes);
-    }
-    if (args.preset) {
-        const bytes = await loadPreset(args.preset);
-        writeCellBytes(controller, args.cell[0], args.cell[1], 0, bytes);
+    if (args.asm || args.preset) {
+        const bytes = args.asm
+            ? await assemble(readFileSync(args.asm, 'utf-8'))
+            : await loadPreset(args.preset);
+        const [ci, cj] = args.cell;
+        writeCellBytes(controller, ci, cj, 0, bytes);
+        writeCellBytes(controller, ci, cj, 0x200, bytes);
+        // Set register save area: PC=$0000, P=$04 (I flag set for SEI presets)
+        writeCellBytes(controller, ci, cj, 0xF9, new Uint8Array([0x00, 0x00, 0x04]));
+        process.stderr.write(`Loaded ${bytes.length} bytes into cell (${ci},${cj}) with PC=0, I=1\n`);
     }
 
     const totalCells = args.size * args.size;
