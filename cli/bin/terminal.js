@@ -63,6 +63,7 @@ if (asmFile) {
     const bytes = await assemble(source);
     writeCellBytes(controller, cellI, cellJ, 0, bytes);
     writeCellBytes(controller, cellI, cellJ, 0x200, bytes);
+    writeCellBytes(controller, cellI, cellJ, 0x300, bytes);
 }
 
 // Load preset
@@ -75,6 +76,7 @@ if (presetName) {
     const bytes = await assemble(p.source);
     writeCellBytes(controller, cellI, cellJ, 0, bytes);
     writeCellBytes(controller, cellI, cellJ, 0x200, bytes);
+    writeCellBytes(controller, cellI, cellJ, 0x300, bytes);
 }
 
 const app = new TerminalApp(controller, visualizer);
