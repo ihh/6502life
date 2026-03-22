@@ -26,7 +26,7 @@ const BYTE_OFFSET_MASK: usize = M - 1; // 0x3FF
 
 // Address ranges
 const FIRST_VECTOR_ADDR: usize = 0x00F0;
-const LAST_VECTOR_ADDR: usize = 0x00F9;
+const LAST_VECTOR_ADDR: usize = 0x00F8;
 const FIRST_LOOKUP_TABLE_ADDR: usize = 0xE000;
 const LAST_LOOKUP_TABLE_ADDR: usize = 0xEFFF;
 

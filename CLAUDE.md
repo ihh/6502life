@@ -188,8 +188,8 @@ Colors encode cell activity using HSV with exponential decay of write/move recen
 |--------|-------|
 | 0x000 | Default entry point |
 | 0x000-0x0EF | Zero page: code or data |
-| 0x0F0-0x0F9 | Oriented registers (auto-rotated by memory mapper) |
-| 0x0F9-0x0FF | CPU register save area + RNG |
+| 0x0F0-0x0F8 | Oriented registers (auto-rotated by memory mapper) |
+| 0x0F9-0x0FF | CPU register save area + RNG (0xF9 is also auto-rotated) |
 | 0x100-0x1FF | Stack |
 | 0x200-0x37F | Code or data |
 | 0x380-0x3BF | 16x16 RGB bitmap (R at 0x380, G at 0x3A0, B at 0x3C0) |
@@ -197,10 +197,19 @@ Colors encode cell activity using HSV with exponential decay of write/move recen
 
 ## Conventions
 
-- **Oriented registers** at 0xF0-0xF9: top 6 bits are rotated with the orientation
+- **Oriented registers** at 0xF0-0xF8: top 6 bits are rotated with the orientation. 0xF9 (PCHI) is also auto-rotated but is controller-reserved.
 - **Register save area** at 0xF9-0xFF: PCHI, PCLO, P, A, X, Y, S
 - **RNG** at 0xFC-0xFF: 4 bytes of pseudorandom numbers, refreshed each interrupt
-- **BRK operands**: byte `b` after BRK opcode: 0=reset PC to 0 (noop+yield), 1–244=swap cells (src=floor(b/49), dest=b%49), 245–252=noisy copy origin→cell(b−244), 253–255=reserved. Bad opcodes handled as BRK 0. Copy/swap happens BEFORE registers are saved, so the child inherits the pre-BRK register state.
+- **Magnetosensing**: if enabled (`boardParams.magnetosensing`), the scheduler writes the current orientation to $FA (shifted left 2 bits). Programs can read $FA to detect their absolute orientation. Disabled by default (writes 0).
+- **Board hyperparameters** (`boardParams`): `pBitNoise` (default 1/2048), `pBrkFailure` (default 0), `magnetosensing` (default false), `implementsMove` (default true), `implementsCopy` (default true), `implementsSync` (default false), `implementsAsync` (default false). Feature flags gate which BRK operands have effect; unimplemented BRK types just yield to scheduler.
+- **BRK operands**: byte `b` after BRK opcode:
+  - 0: reset PC to 0, yield
+  - 1-244: swap cells src=floor(b/49), dest=b%49 (if `implementsMove`)
+  - 245-252: noisy copy origin to cell(b-244) (if `implementsCopy`)
+  - 253: sync interrupt request; X,Y registers specify period in cycles, rounded to nearest absolute multiple of period using global board time (if `implementsSync`)
+  - 254: async interrupt request; X,Y registers specify delay in cycles (if `implementsAsync`)
+  - 255: reserved (yield)
+  Bad opcodes handled as BRK 0. Copy/swap happens BEFORE registers are saved, so the child inherits the pre-BRK register state.
 - **Interrupt model**: Pre-emptive scheduling is conceptually an IRQ (maskable by SEI) followed by an NMI (unmaskable context switch). Memory writeback happens between the IRQ and NMI if the I flag allows it. Setting I (SEI) makes writes atomic: they commit only on BRK (software interrupt), and are reverted on timer interrupt.
 - **B flag** (bit 4 of P at $FB): set after BRK (software interrupt), cleared after timer interrupt. Follows 6502 convention (BRK/PHP set B; IRQ/NMI clear B). Enables fork detection: after BRK copy, the child inherits B=clear (pre-BRK state), while the parent gets B=set. Programs can read $FB and test bit 4 to detect whether they are a fresh copy or the original.
 - **Display name** at 0x3E0-0x3FF: 32 bytes of ASCII. Parsed by the web app as

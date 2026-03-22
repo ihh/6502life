@@ -136,8 +136,8 @@ Within each cell, memory is laid out as follows:
 |----------------------|-------|
 | 000 | Default entry point |
 | 000-0EF | Zero page, available for code or data |
-| 0F0-0F9 | Cell index pointers, auto-rotated by memory mapper |
-| 0F9-0FB | Used to save 6502 registers on interrupt, and restore after interrupt |
+| 0F0-0F8 | Cell index pointers, auto-rotated by memory mapper |
+| 0F9-0FB | Used to save 6502 registers on interrupt, and restore after interrupt (0xF9/PCHI is also auto-rotated) |
 | 0FC-0FF | Random number generator, updated on interrupt |
 | 100-1FF | Stack (or risky storage...) |
 | 200-37F | Available for code or data |
@@ -148,8 +148,8 @@ Within each cell, memory is laid out as follows:
 
 Notes:
 
-+ Bytes F0-F9 of zero page are special because they can be used to store pointers to cell indices in the memory map. When the memory map is randomly rotated, the top 6 bits of these cells are "rotated" too. Note this includes byte F9 which is used to store PCHI, the current program register (which allows the CPU to safely - or at least somewhat safely - execute code in a neighborhood page).
-+ Bytes F9-FB are used to store (in order) PCHI, PCLO, P, A, X, Y, S. So a cell can (for example) "hijack" a neighboring cell's execution state by writing directly to its PC, if that is something a developer wants to do.
++ Bytes F0-F8 of zero page are special because they can be used to store pointers to cell indices in the memory map. When the memory map is randomly rotated, the top 6 bits of these cells are "rotated" too. Byte F9 (PCHI) is also auto-rotated but is considered controller-reserved.
++ Bytes F9-FF are used to store (in order) PCHI, PCLO, P, A, X, Y, S. So a cell can (for example) "hijack" a neighboring cell's execution state by writing directly to its PC, if that is something a developer wants to do.
 + Addresses 380-3FF are reserved for visualization, by convention, but there is nothing stopping a program using them for code or data.
 
 Currently the visualization code parses the display name as an [Iconify](https://iconify.design/) icon
@@ -214,11 +214,33 @@ The B flag (bit 4 of P at 0xFB) is set after BRK, cleared after timer interrupt.
 | Operand `b` | Operation |
 |--------------|-----------|
 | 0 | Resets PC to 0x0000. Yields to scheduler. |
-| 1–244 | Swap cells: src = floor(b/49), dest = b%49. Sources are cells 0–4 (origin + 4 cardinal), destinations are cells 0–48 (full neighborhood). Self-swaps (src=dest) update move times but do not copy data. Yields to scheduler. |
-| 245–252 | Noisy copy: origin cell is copied to cell (b − 244), i.e. cells 1–8, subject to bit noise (see below). Yields to scheduler. |
-| 253–255 | Reserved (no operation). Yields to scheduler. |
+| 1–244 | Swap cells: src = floor(b/49), dest = b%49. Sources are cells 0–4 (origin + 4 cardinal), destinations are cells 0–48 (full neighborhood). Self-swaps (src=dest) update move times but do not copy data. Feature-gated by `implementsMove`. Yields to scheduler. |
+| 245–252 | Noisy copy: origin cell is copied to cell (b − 244), i.e. cells 1–8, subject to bit noise (see below). Feature-gated by `implementsCopy`. Yields to scheduler. |
+| 253 | Sync interrupt request: X,Y registers specify period in cycles. The next interrupt for this cell is scheduled at the nearest future absolute multiple of that period (using global board time). Feature-gated by `implementsSync`. Yields to scheduler. |
+| 254 | Async interrupt request: X,Y registers specify delay in cycles. Schedules the next interrupt for this cell after that many cycles. Feature-gated by `implementsAsync`. Yields to scheduler. |
+| 255 | Reserved (no operation). Yields to scheduler. |
+
+If a BRK operand's feature flag is not enabled (e.g. `implementsMove=false`), the BRK just yields to the scheduler with no effect.
 
 A bad (unrecognized) opcode is handled like BRK 0: PC resets to 0, control returns to the scheduler.
+
+#### Board hyperparameters
+
+The `BoardController` accepts a `boardParams` dictionary with the following defaults:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `pBitNoise` | 1/2048 | Per-bit noise probability on BRK noisy copy |
+| `pBrkFailure` | 0 | Probability a BRK copy/swap silently fails |
+| `magnetosensing` | false | If true, scheduler writes orientation to $FA (shifted left 2 bits) |
+| `implementsMove` | true | Enable BRK 1–244 swap operations |
+| `implementsCopy` | true | Enable BRK 245–252 noisy copy |
+| `implementsSync` | false | Enable BRK 253 sync interrupt request |
+| `implementsAsync` | false | Enable BRK 254 async interrupt request |
+
+#### Magnetosensing
+
+When `magnetosensing` is enabled, the scheduler writes the current orientation (0–3, shifted left by 2 bits) to address $FA after each context switch. Programs can read $FA to detect their absolute orientation, breaking rotational symmetry. When disabled (default), $FA is written as 0.
 
 #### Noisy copy model
 

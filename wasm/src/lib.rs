@@ -12,7 +12,7 @@ mod memory;
 mod mt;
 mod tables;
 
-use controller::BoardController;
+use controller::{BoardController, BoardParams};
 use memory::BoardMemory;
 use wasm_bindgen::prelude::*;
 
@@ -30,6 +30,90 @@ impl WasmBoard {
         let memory = BoardMemory::new(seed, size);
         let controller = BoardController::new(memory);
         WasmBoard { controller }
+    }
+
+    /// Create a new board with full board params.
+    pub fn new_with_params(
+        size: usize,
+        seed: u32,
+        p_bit_noise: f64,
+        p_brk_failure: f64,
+        magnetosensing: bool,
+        implements_move: bool,
+        implements_copy: bool,
+        implements_sync: bool,
+        implements_async: bool,
+    ) -> WasmBoard {
+        let memory = BoardMemory::new(seed, size);
+        let params = BoardParams {
+            p_bit_noise,
+            p_brk_failure,
+            magnetosensing,
+            implements_move,
+            implements_copy,
+            implements_sync,
+            implements_async,
+        };
+        let controller = BoardController::with_params(memory, params);
+        WasmBoard { controller }
+    }
+
+    // --- Board params getters/setters ---
+
+    pub fn get_p_bit_noise(&self) -> f64 {
+        self.controller.board_params.p_bit_noise
+    }
+
+    pub fn set_p_bit_noise(&mut self, val: f64) {
+        self.controller.board_params.p_bit_noise = val;
+    }
+
+    pub fn get_p_brk_failure(&self) -> f64 {
+        self.controller.board_params.p_brk_failure
+    }
+
+    pub fn set_p_brk_failure(&mut self, val: f64) {
+        self.controller.board_params.p_brk_failure = val;
+    }
+
+    pub fn get_magnetosensing(&self) -> bool {
+        self.controller.board_params.magnetosensing
+    }
+
+    pub fn set_magnetosensing(&mut self, val: bool) {
+        self.controller.board_params.magnetosensing = val;
+    }
+
+    pub fn get_implements_move(&self) -> bool {
+        self.controller.board_params.implements_move
+    }
+
+    pub fn set_implements_move(&mut self, val: bool) {
+        self.controller.board_params.implements_move = val;
+    }
+
+    pub fn get_implements_copy(&self) -> bool {
+        self.controller.board_params.implements_copy
+    }
+
+    pub fn set_implements_copy(&mut self, val: bool) {
+        self.controller.board_params.implements_copy = val;
+    }
+
+    pub fn get_implements_sync(&self) -> bool {
+        self.controller.board_params.implements_sync
+    }
+
+    pub fn set_implements_sync(&mut self, val: bool) {
+        self.controller.board_params.implements_sync = val;
+    }
+
+    pub fn get_implements_async(&self) -> bool {
+        self.controller.board_params.implements_async
+    }
+
+    pub fn set_implements_async(&mut self, val: bool) {
+        self.controller.board_params.implements_async = val;
     }
 
     /// Board dimension (cells per side).

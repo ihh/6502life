@@ -520,4 +520,272 @@ describe('BoardController', () => {
             expect(mem.read(0x400 + 0x200)).toBe(0x11);
         });
     });
+
+    describe('boardParams defaults', () => {
+        it('has all 7 default params with correct values', () => {
+            const ctrl = new BoardController();
+            expect(ctrl.boardParams.pBitNoise).toBeCloseTo(1 / 2048);
+            expect(ctrl.boardParams.pBrkFailure).toBe(0);
+            expect(ctrl.boardParams.magnetosensing).toBe(false);
+            expect(ctrl.boardParams.implementsMove).toBe(true);
+            expect(ctrl.boardParams.implementsCopy).toBe(true);
+            expect(ctrl.boardParams.implementsSync).toBe(false);
+            expect(ctrl.boardParams.implementsAsync).toBe(false);
+        });
+    });
+
+    describe('boardParams serialization', () => {
+        it('save/restore preserves all params', () => {
+            const ctrl = new BoardController(undefined, {
+                pBitNoise: 0.123,
+                pBrkFailure: 0.456,
+                magnetosensing: true,
+                implementsMove: false,
+                implementsCopy: false,
+                implementsSync: true,
+                implementsAsync: true,
+            });
+            const saved = ctrl.state;
+            const ctrl2 = new BoardController();
+            ctrl2.state = saved;
+            expect(ctrl2.boardParams.pBitNoise).toBeCloseTo(0.123);
+            expect(ctrl2.boardParams.pBrkFailure).toBeCloseTo(0.456);
+            expect(ctrl2.boardParams.magnetosensing).toBe(true);
+            expect(ctrl2.boardParams.implementsMove).toBe(false);
+            expect(ctrl2.boardParams.implementsCopy).toBe(false);
+            expect(ctrl2.boardParams.implementsSync).toBe(true);
+            expect(ctrl2.boardParams.implementsAsync).toBe(true);
+        });
+    });
+
+    describe('magnetosensing', () => {
+        it('$FA is 0 after scheduling when magnetosensing is disabled', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0, magnetosensing: false });
+            const mem = ctrl.memory;
+            mem.iOrig = 0; mem.jOrig = 0; mem.orientation = 0;
+            mem.nextCycles = 100000;
+
+            // Write BRK 0 to trigger an interrupt and scheduling
+            const base = mem.neighborCellStorageBase(0);
+            mem.storage[base] = 0x00;  // BRK
+            mem.storage[base + 1] = 0x00;  // operand 0
+            mem.resetUndoHistory();
+            ctrl.sfotty.PC = 0;
+            ctrl.sfotty.crashed = false;
+            ctrl.sfotty.cycleCounter = 0;
+            ctrl.sfotty.operations = [() => ctrl.sfotty.decode()];
+            ctrl.runToNextInterrupt();
+
+            // After scheduling, check $FA in the newly scheduled cell
+            const newBase = mem.neighborCellStorageBase(0);
+            expect(mem.storage[newBase + 0xFA]).toBe(0);
+        });
+
+        it('$FA contains orientation << 2 after scheduling when magnetosensing is enabled', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0, magnetosensing: true });
+            const mem = ctrl.memory;
+            mem.iOrig = 0; mem.jOrig = 0; mem.orientation = 0;
+            mem.nextCycles = 100000;
+
+            const base = mem.neighborCellStorageBase(0);
+            mem.storage[base] = 0x00;  // BRK
+            mem.storage[base + 1] = 0x00;  // operand 0
+            mem.resetUndoHistory();
+            ctrl.sfotty.PC = 0;
+            ctrl.sfotty.crashed = false;
+            ctrl.sfotty.cycleCounter = 0;
+            ctrl.sfotty.operations = [() => ctrl.sfotty.decode()];
+            ctrl.runToNextInterrupt();
+
+            // After scheduling, $FA should be orientation << 2
+            const newBase = mem.neighborCellStorageBase(0);
+            const orientation = mem.orientation;
+            expect(mem.storage[newBase + 0xFA]).toBe(orientation << 2);
+        });
+    });
+
+    describe('implementsMove=false', () => {
+        it('BRK swap operand (1-244) yields without swapping', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0, implementsMove: false });
+            const mem = ctrl.memory;
+            mem.iOrig = 0; mem.jOrig = 0; mem.orientation = 0;
+            mem.nextCycles = 100000;
+
+            // Write known data to cell 0 and cell 1
+            const base0 = mem.neighborCellStorageBase(0);
+            const base1 = mem.neighborCellStorageBase(1);
+            mem.storage[base0 + 0x200] = 0xAA;
+            mem.storage[base1 + 0x200] = 0xBB;
+
+            // BRK with operand 1 (swap src=0, dest=1)
+            mem.storage[base0] = 0x00;  // BRK
+            mem.storage[base0 + 1] = 1;  // operand 1
+            mem.resetUndoHistory();
+            ctrl.sfotty.PC = 0;
+            ctrl.sfotty.crashed = false;
+            ctrl.sfotty.cycleCounter = 0;
+            ctrl.sfotty.operations = [() => ctrl.sfotty.decode()];
+            ctrl.runToNextInterrupt();
+
+            // Cells should NOT have been swapped
+            expect(mem.storage[base0 + 0x200]).toBe(0xAA);
+            expect(mem.storage[base1 + 0x200]).toBe(0xBB);
+        });
+    });
+
+    describe('implementsCopy=false', () => {
+        it('BRK copy operand (245-252) yields without copying', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0, implementsCopy: false });
+            const mem = ctrl.memory;
+            mem.iOrig = 0; mem.jOrig = 0; mem.orientation = 0;
+            mem.nextCycles = 100000;
+
+            // Write known data to origin cell
+            const base0 = mem.neighborCellStorageBase(0);
+            mem.storage[base0 + 0x200] = 0x42;
+
+            // Clear dest cell
+            const base1 = mem.neighborCellStorageBase(1);
+            mem.storage[base1 + 0x200] = 0x00;
+
+            // BRK with operand 245 (copy to cell 1)
+            mem.storage[base0] = 0x00;  // BRK
+            mem.storage[base0 + 1] = 245;  // operand 245
+            mem.resetUndoHistory();
+            ctrl.sfotty.PC = 0;
+            ctrl.sfotty.crashed = false;
+            ctrl.sfotty.cycleCounter = 0;
+            ctrl.sfotty.operations = [() => ctrl.sfotty.decode()];
+            ctrl.runToNextInterrupt();
+
+            // Copy should NOT have happened
+            expect(mem.storage[base1 + 0x200]).toBe(0x00);
+        });
+    });
+
+    describe('BRK 253 (sync interrupt request)', () => {
+        it('sets nextRequestedInterrupt to next multiple of period when implementsSync=true', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0, implementsSync: true });
+            const mem = ctrl.memory;
+            mem.iOrig = 0; mem.jOrig = 0; mem.orientation = 0;
+            mem.nextCycles = 100000;
+
+            const base = mem.neighborCellStorageBase(0);
+            mem.storage[base] = 0x00;  // BRK
+            mem.storage[base + 1] = 253;  // sync
+            // Period = 0x0100 = 256, set via X (low) and Y (high)
+            ctrl.sfotty.X = 0x00;  // low byte
+            ctrl.sfotty.Y = 0x01;  // high byte
+            mem.resetUndoHistory();
+            ctrl.sfotty.PC = 0;
+            ctrl.sfotty.crashed = false;
+            ctrl.sfotty.cycleCounter = 0;
+            ctrl.sfotty.operations = [() => ctrl.sfotty.decode()];
+
+            // totalCycles is 0 before running, BRK adds 7 cycles
+            ctrl.runToNextInterrupt();
+
+            // After BRK, totalCycles = 7. Period = 256.
+            // nextTime = (floor(7/256) + 1) * 256 = 256
+            const cellIdx = mem.ijToCellIndex(0, 0);
+            expect(ctrl.nextRequestedInterrupt[cellIdx]).toBe(256);
+        });
+
+        it('just yields when implementsSync=false', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0, implementsSync: false });
+            const mem = ctrl.memory;
+            mem.iOrig = 0; mem.jOrig = 0; mem.orientation = 0;
+            mem.nextCycles = 100000;
+
+            const base = mem.neighborCellStorageBase(0);
+            mem.storage[base] = 0x00;  // BRK
+            mem.storage[base + 1] = 253;  // sync
+            ctrl.sfotty.X = 0x00;
+            ctrl.sfotty.Y = 0x01;
+            mem.resetUndoHistory();
+            ctrl.sfotty.PC = 0;
+            ctrl.sfotty.crashed = false;
+            ctrl.sfotty.cycleCounter = 0;
+            ctrl.sfotty.operations = [() => ctrl.sfotty.decode()];
+            ctrl.runToNextInterrupt();
+
+            // No pending interrupt should be set
+            const cellIdx = mem.ijToCellIndex(0, 0);
+            expect(ctrl.nextRequestedInterrupt[cellIdx]).toBe(Infinity);
+        });
+    });
+
+    describe('BRK 254 (async interrupt request)', () => {
+        it('sets nextRequestedInterrupt to totalCycles + delay when implementsAsync=true', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0, implementsAsync: true });
+            const mem = ctrl.memory;
+            mem.iOrig = 0; mem.jOrig = 0; mem.orientation = 0;
+            mem.nextCycles = 100000;
+
+            const base = mem.neighborCellStorageBase(0);
+            mem.storage[base] = 0x00;  // BRK
+            mem.storage[base + 1] = 254;  // async
+            // Delay = 0x0200 = 512
+            ctrl.sfotty.X = 0x00;  // low byte
+            ctrl.sfotty.Y = 0x02;  // high byte
+            mem.resetUndoHistory();
+            ctrl.sfotty.PC = 0;
+            ctrl.sfotty.crashed = false;
+            ctrl.sfotty.cycleCounter = 0;
+            ctrl.sfotty.operations = [() => ctrl.sfotty.decode()];
+            ctrl.runToNextInterrupt();
+
+            // totalCycles after BRK = 7, delay = 512
+            // nextRequestedInterrupt = 7 + 512 = 519
+            const cellIdx = mem.ijToCellIndex(0, 0);
+            expect(ctrl.nextRequestedInterrupt[cellIdx]).toBe(7 + 512);
+        });
+    });
+
+    describe('pending interrupt scheduling', () => {
+        it('cell with nextRequestedInterrupt <= totalCycles is selected by scheduler', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0, implementsSync: true });
+            const mem = ctrl.memory;
+            mem.iOrig = 0; mem.jOrig = 0; mem.orientation = 0;
+
+            // Set totalCycles high enough that a pending interrupt at time 100 is due
+            ctrl.totalCycles = 200;
+            const targetI = 2;
+            const targetJ = 3;
+            const cellIdx = mem.ijToCellIndex(targetI, targetJ);
+            ctrl.nextRequestedInterrupt[cellIdx] = 100;  // already past due
+
+            // Run a BRK 0 to trigger scheduling
+            const base = mem.neighborCellStorageBase(0);
+            mem.storage[base] = 0x00;  // BRK
+            mem.storage[base + 1] = 0x00;  // operand 0
+            mem.nextCycles = 100000;
+            mem.resetUndoHistory();
+            ctrl.sfotty.PC = 0;
+            ctrl.sfotty.crashed = false;
+            ctrl.sfotty.cycleCounter = 0;
+            ctrl.sfotty.operations = [() => ctrl.sfotty.decode()];
+            ctrl.runToNextInterrupt();
+
+            // The scheduler should have selected the cell with the pending interrupt
+            expect(mem.iOrig).toBe(targetI);
+            expect(mem.jOrig).toBe(targetJ);
+            // And cleared the pending interrupt
+            expect(ctrl.nextRequestedInterrupt[cellIdx]).toBe(Infinity);
+        });
+    });
+
+    describe('nextRequestedInterrupt serialization', () => {
+        it('save/restore preserves pending interrupts', () => {
+            const ctrl = new BoardController(undefined, { implementsSync: true });
+            const mem = ctrl.memory;
+            const cellIdx = mem.ijToCellIndex(1, 2);
+            ctrl.nextRequestedInterrupt[cellIdx] = 12345;
+
+            const saved = ctrl.state;
+            const ctrl2 = new BoardController();
+            ctrl2.state = saved;
+            expect(ctrl2.nextRequestedInterrupt[cellIdx]).toBe(12345);
+        });
+    });
 });

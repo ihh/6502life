@@ -51,9 +51,9 @@ $y=-3$ & BC..BF & A4..A7 & 84..87 & 6C..6F & 80..83 & A0..A3 & B8..BB
 
  Each time execution resumes after an interrupt,
 the origin is resampled and the neighborhood rotated by a random multiple of 90 degrees.
-Zero page locations 0xF0-0xF9 are designated as ``oriented registers'',
+Zero page locations 0xF0-0xF8 are designated as ``oriented registers'',
 whose top 6 bits are rotated along with the memory map when a different orientation is sampled.
-(Note: 0xF9 is the storage location for PCHI, so this is also rotated.)
+(Note: 0xF9, the storage location for PCHI, is also auto-rotated but is considered controller-reserved.)
 
  \noindent
  Cell numbers:
@@ -131,7 +131,8 @@ $y=-3$ & 47 & 41 & 33 & 27 & 32 & 40 & 46
 \item The memory-mapped neighborhood is copied from RAM to storage (un-rotating oriented registers at 0xF0--0xF9).
 \item A new origin cell $(i,j)$ and orientation is randomly sampled. The memory-mapped neighborhood of that cell is loaded from storage to RAM.
 \item The last four bytes of zero page are overwritten with pseudorandom numbers.
-\item CPU registers are restored from the last seven bytes of zero page.
+\item Optional (via board-level magnetosensing hyperparameter): the scheduler writes the current orientation vector (left-shifted by two bits) to 0xFA, so programs can detect their orientation and adjust their behavior accordingly. If magnetosensing is disabled, scheduler should write zero to 0xFA instead.
+\item CPU registers are restored from the last seven bytes of zero page (prior to their being overwritten).
 \end{itemize}
 \item A BRK software interrupt costs 7 CPU cycles, matching the real NMOS 6502
   (2 to fetch opcode + operand, 3 to push PC and P to stack, 2 to read the
@@ -152,11 +153,28 @@ $y=-3$ & 47 & 41 & 33 & 27 & 32 & 40 & 46
         $1 \leq b < 245$ & Swap cells: source $= \lfloor b/49 \rfloor$ (cells 0--4),
           destination $= b \bmod 49$ (cells 0--48).
           Self-swaps (src $=$ dest) update move times but do not copy data.
+          Feature-gated by \texttt{implementsMove}.
           Yields to scheduler. \\
         $245 \leq b \leq 252$ & Noisy copy: origin cell is copied to cell $b - 244$ (cells 1--8),
-          subject to the noise model (see below). Yields to scheduler. \\
-        $253$--$255$ & Reserved (no operation). Yields to scheduler.
+          subject to the noise model (see below).
+          Feature-gated by \texttt{implementsCopy}.
+          Yields to scheduler. \\
+        $253$ & Sync interrupt request: X and Y registers specify the period
+          in cycles (X = low byte, Y = high byte). The next interrupt for this
+          cell is scheduled at the nearest future absolute multiple of the period,
+          computed from the global board time.
+          Feature-gated by \texttt{implementsSync}.
+          Yields to scheduler. \\
+        $254$ & Async interrupt request: X and Y registers specify the delay
+          in cycles (X = low byte, Y = high byte). The next interrupt for this
+          cell is scheduled after that many cycles from the current time.
+          Feature-gated by \texttt{implementsAsync}.
+          Yields to scheduler. \\
+        $255$ & Reserved (no operation). Yields to scheduler.
       \end{tabular}
+
+      If a BRK operand's feature flag is not enabled (e.g.\ \texttt{implementsMove} is false),
+      the BRK simply yields to the scheduler with no effect.
 
       \subsubsection*{Noisy copy model}
 
@@ -169,6 +187,21 @@ $y=-3$ & 47 & 41 & 33 & 27 & 32 & 40 & 46
 
       LDA/STA writes (the normal 6502 store instructions) are always exact---the
       noise applies only to BRK noisy copies.
+
+      \subsubsection*{Board hyperparameters}
+
+      The controller accepts a \texttt{boardParams} dictionary with the following defaults:
+
+      \begin{tabular}{l|l|p{.45\textwidth}}
+        Parameter & Default & Description \\ \hline
+        \texttt{pBitNoise} & 1/2048 & Per-bit noise probability on BRK noisy copy \\
+        \texttt{pBrkFailure} & 0 & Probability a BRK copy/swap silently fails \\
+        \texttt{magnetosensing} & false & Write orientation to \$FA (shifted left 2 bits) \\
+        \texttt{implementsMove} & true & Enable BRK 1--244 swap operations \\
+        \texttt{implementsCopy} & true & Enable BRK 245--252 noisy copy \\
+        \texttt{implementsSync} & false & Enable BRK 253 sync interrupt request \\
+        \texttt{implementsAsync} & false & Enable BRK 254 async interrupt request
+      \end{tabular}
 
       The guiding principle when considering adding more software interrupts,
       or expanding the OS in any way, should be to not add any functionality that can't be justified as ``physics''.

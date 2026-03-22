@@ -59,6 +59,21 @@ This is the critical blocker for interesting biology.
 - [ ] P5c: Zero-knowledge proximity proof: can we prove two devices are
       nearby without revealing locations? (Nice to have, not essential)
 
+## Recently implemented engine features
+
+- **Board hyperparameters** (`boardParams`): configurable feature flags and
+  noise parameters, replacing the old `noiseParams`.
+- **BRK 253 (sync interrupt request)**: cell requests next interrupt at a
+  periodic interval (X,Y = period in cycles). Gated by `implementsSync`.
+- **BRK 254 (async interrupt request)**: cell requests next interrupt after
+  a delay (X,Y = delay in cycles). Gated by `implementsAsync`.
+- **Magnetosensing**: scheduler writes orientation to $FA when enabled.
+  Programs can detect absolute orientation, breaking rotational symmetry.
+- **Feature flags**: `implementsMove`, `implementsCopy`, `implementsSync`,
+  `implementsAsync` allow disabling specific BRK operations for experiments.
+- **`pBrkFailure`**: probability that a BRK copy/swap silently fails (no
+  effect), creating selective pressure for multi-copy strategies.
+
 ## Additional questions
 
 - [ ] Q1: TextEncoder/Decoder bug (from math review): fix the lossy
