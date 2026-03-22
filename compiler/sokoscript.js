@@ -332,9 +332,12 @@ function genLhsTermCheckInner(term, termIdx, spiralIdx, typeIndex, failLabel) {
 // --- RHS generation ---
 
 // Generate RHS writes for one term
-function genRhsTermWrite(rhsTerm, rhsIdx, lhsTerms, lhsSpiralIndices, typeIndex) {
+// rhsPos: numeric position in the RHS array (used to index lhsSpiralIndices)
+// labelSuffix: string suffix for label uniqueness (defaults to rhsPos)
+function genRhsTermWrite(rhsTerm, rhsPos, lhsTerms, lhsSpiralIndices, typeIndex, labelSuffix) {
     const lines = [];
-    const spiralIdx = lhsSpiralIndices[rhsIdx];
+    const lbl = labelSuffix !== undefined ? labelSuffix : rhsPos;
+    const spiralIdx = lhsSpiralIndices[rhsPos];
 
     if (rhsTerm.type === '_') {
         // Set to empty
@@ -358,16 +361,16 @@ function genRhsTermWrite(rhsTerm, rhsIdx, lhsTerms, lhsSpiralIndices, typeIndex)
             // Copy state bytes (up to 16)
             // Use a loop with X register
             lines.push(`  TAX`);  // X = state length
-            lines.push(`  BEQ @grp_done_${rhsIdx}`);
-            lines.push(`@grp_copy_${rhsIdx}:`);
+            lines.push(`  BEQ @grp_done_${lbl}`);
+            lines.push(`@grp_copy_${lbl}:`);
             lines.push(`  DEX`);
             const srcBase = cellBaseAddr(srcIdx) + STATE_OFFSET;
             const dstBase = cellBaseAddr(spiralIdx) + STATE_OFFSET;
             lines.push(`  LDA ${addr16(srcBase)},X`);
             lines.push(`  STA ${addr16(dstBase)},X`);
             lines.push(`  CPX #$00`);
-            lines.push(`  BNE @grp_copy_${rhsIdx}`);
-            lines.push(`@grp_done_${rhsIdx}:`);
+            lines.push(`  BNE @grp_copy_${lbl}`);
+            lines.push(`@grp_done_${lbl}:`);
         }
         return lines;
     }
@@ -721,8 +724,8 @@ function genLhsTermCheckPrefixed(term, termIdx, spiralIdx, typeIndex, failLabel,
 
 // Prefixed version of genRhsTermWrite
 function genRhsTermWritePrefixed(rhsTerm, rhsIdx, lhsTerms, lhsSpiralIndices, typeIndex, prefix, ruleIdx) {
-    // Use prefixed labels for group copy loops
-    return genRhsTermWrite(rhsTerm, `${prefix}_${ruleIdx}_${rhsIdx}`, lhsTerms, lhsSpiralIndices, typeIndex);
+    // Pass numeric rhsIdx for array indexing, prefixed string for label uniqueness
+    return genRhsTermWrite(rhsTerm, rhsIdx, lhsTerms, lhsSpiralIndices, typeIndex, `${prefix}_${ruleIdx}_${rhsIdx}`);
 }
 
 // --- Exports for testing ---
