@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>6502life WASM Test</title>
+    <style>
+        body { background: #111; color: #eee; font-family: monospace; padding: 20px; }
+        canvas { image-rendering: pixelated; border: 1px solid #333; }
+        #stats { margin: 10px 0; }
+        button { margin: 5px; padding: 5px 15px; }
+    </style>
+</head>
+<body>
+    <h2>6502life — Rust/WASM Engine Test</h2>
+    <canvas id="board" width="256" height="256" style="width:512px;height:512px"></canvas>
+    <div id="stats">Loading WASM...</div>
+    <div>
+        <button onclick="toggleRun()">Start/Stop</button>
+        <button onclick="step()">Step (100 interrupts)</button>
+    </div>
+
+    <script type="module">
+        import init, { WasmBoard } from './pkg/board6502_wasm.js';
+
+        let board;
+        let running = false;
+        let animId = null;
+
+        async function main() {
+            await init();
+            board = new WasmBoard(32, 42);
+            board.randomize();
+            document.getElementById('stats').textContent =
+                `Board: ${board.size()}x${board.size()}, storage: ${(board.storage_size()/1024).toFixed(0)}KB`;
+
+            // Benchmark
+            const t0 = performance.now();
+            const totalCycles = board.run_interrupts(10000);
+            const t1 = performance.now();
+            const ms = t1 - t0;
+            document.getElementById('stats').textContent +=
+                ` | 10k interrupts in ${ms.toFixed(1)}ms (${(totalCycles/ms/1000).toFixed(1)}M cycles/sec)`;
+
+            render();
+
+            // Export to window for button handlers
+            window._board = board;
+        }
+
+        function render() {
+            const canvas = document.getElementById('board');
+            const ctx = canvas.getContext('2d');
+            const size = board.size();
+            canvas.width = size;
+            canvas.height = size;
+
+            const pixels = board.overview_pixel_buffer();
+            const imageData = new ImageData(new Uint8ClampedArray(pixels), size, size);
+            ctx.putImageData(imageData, 0, 0);
+        }
+
+        function animate() {
+            board.run_interrupts(500);
+            render();
+            if (running) animId = requestAnimationFrame(animate);
+        }
+
+        window.toggleRun = () => {
+            running = !running;
+            if (running) animate();
+            else if (animId) cancelAnimationFrame(animId);
+        };
+
+        window.step = () => {
+            board.run_interrupts(100);
+            render();
+        };
+
+        main();
+    </script>
+</body>
+</html>
