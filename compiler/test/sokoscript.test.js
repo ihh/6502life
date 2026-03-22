@@ -140,19 +140,19 @@ parent _ : _ parent.
 // ---- Address/direction tests ----
 
 describe('address helpers', () => {
-    it('computes self type address at offset 0', () => {
-        expect(cellTypeAddr(0)).toBe(TYPE_TAG_OFFSET);
+    it('computes self type address at 0xA5', () => {
+        expect(cellTypeAddr(0)).toBe(0xA5);
     });
 
     it('computes neighbor type address in correct page', () => {
         // Neighbor idx 1 is at base 1024 = 0x400
-        expect(cellTypeAddr(1)).toBe(0x400 + TYPE_TAG_OFFSET);
+        expect(cellTypeAddr(1)).toBe(0x400 + 0xA5);
     });
 
     it('computes state address', () => {
-        expect(cellStateAddr(0, 1)).toBe(STATE_OFFSET);
-        expect(cellStateAddr(0, 2)).toBe(STATE_OFFSET + 1);
-        expect(cellStateAddr(1, 1)).toBe(0x400 + STATE_OFFSET);
+        expect(cellStateAddr(0, 1)).toBe(0xA8);
+        expect(cellStateAddr(0, 2)).toBe(0xA9);
+        expect(cellStateAddr(1, 1)).toBe(0x400 + 0xA8);
     });
 
     it('resolves relative directions', () => {
@@ -196,10 +196,11 @@ describe('compile', () => {
     it('produces assembly with type tag writes', () => {
         const result = compile('x _ : _ x.');
         const asm = result.programs['x'];
-        const xTag = result.typeIndex['x'];
-        // Should write empty type (0) to self and x type to neighbor
-        expect(asm).toContain('STA $0000');  // write to self type tag
-        expect(asm).toContain(`STA $0400`);  // write to forward neighbor type tag
+        // Should write type tags to self and forward neighbor
+        const selfAddr = cellTypeAddr(0).toString(16).padStart(4, '0');
+        const fwdAddr = cellTypeAddr(1).toString(16).padStart(4, '0');
+        expect(asm).toContain(`STA $${selfAddr}`);
+        expect(asm).toContain(`STA $${fwdAddr}`);
     });
 
     it('compiles multi-rule grammar', () => {
@@ -219,15 +220,17 @@ herbivore : soil, rate=0.02.
     it('compiles rules with relative directions', () => {
         const result = compile('a >R> b : b a.');
         const asm = result.programs['a'];
-        // >R> = right = spiral index 2 = base $0800
-        expect(asm).toContain('$0800');
+        // >R> = right = spiral index 2
+        const rightAddr = cellTypeAddr(2).toString(16).padStart(4, '0');
+        expect(asm).toContain(`$${rightAddr}`);
     });
 
     it('compiles rules with absolute directions', () => {
         const result = compile('a >N> b : b a.');
         const asm = result.programs['a'];
-        // >N> = north = spiral index 3 = base $0C00
-        expect(asm).toContain('$0c00');
+        // >N> = north = spiral index 3
+        const northAddr = cellTypeAddr(3).toString(16).padStart(4, '0');
+        expect(asm).toContain(`$${northAddr}`);
     });
 
     it('compiles single-term rules (spontaneous transformation)', () => {
@@ -243,10 +246,10 @@ herbivore : soil, rate=0.02.
         const result = compile('a b : $2 $1.');
         const asm = result.programs['a'];
         expect(asm).toBeDefined();
-        // $2 at position 0 means copy from neighbor (spiral 1) to self (spiral 0)
-        // $1 at position 1 means copy from self (spiral 0) to neighbor (spiral 1)
-        expect(asm).toContain('LDA $0400');  // read from neighbor
-        expect(asm).toContain('STA $0000');  // write to self
+        const selfAddr = cellTypeAddr(0).toString(16).padStart(4, '0');
+        const fwdAddr = cellTypeAddr(1).toString(16).padStart(4, '0');
+        expect(asm).toContain(`LDA $${fwdAddr}`);
+        expect(asm).toContain(`STA $${selfAddr}`);
     });
 
     it('compiles rules with state', () => {
@@ -288,7 +291,8 @@ describe('compileUniversal', () => {
         const result = compileUniversal('x _ : _ x.');
         expect(result.assembly).toBeDefined();
         expect(result.assembly).toContain('universal');
-        expect(result.assembly).toContain('LDA $0000');  // read own type tag
+        const selfTypeAddr = cellTypeAddr(0).toString(16).padStart(4, '0');
+        expect(result.assembly).toContain(`LDA $${selfTypeAddr}`);  // read own type tag
     });
 
     it('includes dispatch for each type', () => {
@@ -350,8 +354,9 @@ herbivore : soil.
         const result = compile(grammar);
         const asm = result.programs['herbivore'];
 
-        // Should reference the forward neighbor's type tag address ($0400)
-        expect(asm).toContain('$0400');
+        // Should reference the forward neighbor's type tag address
+        const fwdTypeAddr = cellTypeAddr(1).toString(16).padStart(4, '0');
+        expect(asm).toContain(`$${fwdTypeAddr}`);
 
         // Should check against plant and soil type tags
         const plantTag = result.typeIndex['plant'];
