@@ -544,12 +544,6 @@ export function compile(grammarText, options = {}) {
         lines.push(`; ${typeRules.length} rule(s)`);
         lines.push(``);
 
-        // NOP landing pad: the Sfotty's post-reset opcode fetch can cause
-        // the controller to misread the second byte as an opcode. Starting
-        // with two NOPs ensures correct instruction alignment regardless.
-        lines.push(`  NOP`);
-        lines.push(`  NOP`);
-
         // Entry: verify own type tag (if it got corrupted, yield)
         lines.push(`  LDA ${addr16(cellTypeAddr(0))}`);
         lines.push(`  CMP ${imm8(tag)}`);
@@ -590,8 +584,6 @@ export function compile(grammarText, options = {}) {
 function generateEmptyProgram() {
     return [
         '; Empty cell program (type tag = 0)',
-        '  NOP',
-        '  NOP',
         '  LDA #$00',
         `  STA ${addr16(cellTypeAddr(0))}`,
         `  STA ${addr16(cellStateLenAddr(0))}`,
@@ -620,10 +612,6 @@ export function compileUniversal(grammarText, options = {}) {
     lines.push('; SokoScript universal program');
     lines.push(`; Types: ${types.filter(t => t !== '_' && t !== '?').join(', ')}`);
     lines.push('');
-
-    // NOP landing pad for post-reset alignment
-    lines.push('  NOP');
-    lines.push('  NOP');
 
     // Read own type tag and dispatch
     lines.push(`  LDA ${addr16(cellTypeAddr(0))}`);
