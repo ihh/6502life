@@ -1,5 +1,6 @@
 export {
     createBoard,
+    createBoardAsync,
     readCellRegisters,
     readCellMemory,
     writeCellBytes,

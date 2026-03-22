@@ -2,12 +2,57 @@ import { BoardMemory } from '../board/memory.js';
 import { BoardController } from '../board/controller.js';
 import { BoardVisualizer } from '../board/visualizer.js';
 
+/**
+ * Create a board using the Sfotty (JS) engine. Synchronous.
+ * Used by Node.js/CLI and all tests.
+ */
 export function createBoard(size = 32, seed = 42, noiseParams) {
     const memory = new BoardMemory(seed, size);
     const controller = new BoardController(memory, noiseParams);
     const visualizer = new BoardVisualizer(controller);
     return { memory, controller, visualizer };
 }
+
+/** Current backend for the last createBoard/createBoardAsync call */
+createBoard.backend = 'sfotty';
+
+/**
+ * Create a board, preferring WASM in browsers, falling back to Sfotty.
+ * Returns { memory, controller, visualizer } with the same interface
+ * regardless of backend.
+ *
+ * In Node.js, always uses Sfotty (synchronously).
+ * In browsers, attempts WASM first.
+ *
+ * After the returned promise resolves, check createBoardAsync.backend
+ * to see which engine was used ('wasm' or 'sfotty').
+ */
+export async function createBoardAsync(size = 32, seed = 42, boardParams) {
+    // Only attempt WASM in browser environments
+    const isBrowser = typeof window !== 'undefined' && typeof WebAssembly !== 'undefined';
+    if (isBrowser) {
+        try {
+            const { initWasm, createWasmBoardAdapter } = await import('./wasm-board-adapter.js');
+            const ok = await initWasm();
+            if (ok) {
+                const board = createWasmBoardAdapter(size, seed, boardParams);
+                createBoardAsync.backend = 'wasm';
+                return board;
+            }
+        } catch (e) {
+            console.warn('WASM board creation failed, falling back to Sfotty:', e.message);
+        }
+    }
+
+    // Fallback: Sfotty
+    const board = createBoard(size, seed, boardParams);
+    createBoardAsync.backend = 'sfotty';
+    return board;
+}
+
+createBoardAsync.backend = 'sfotty';
+
+// --- Utility functions (unchanged) ---
 
 export function readCellRegisters(controller, i, j) {
     const mem = controller.memory;

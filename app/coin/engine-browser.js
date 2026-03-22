@@ -1,10 +1,12 @@
 /**
  * Browser-compatible 6502life engine adapter.
  * Wraps BoardMemory + BoardController + BoardVisualizer for the coin PWA.
- * Replaces Node-only imports (presets, hash) with browser equivalents.
+ *
+ * Prefers WASM engine in browsers, falls back to Sfotty.
+ * Check Board6502Engine.backend after init() to see which is active.
  */
 
-import { createBoard, writeCellBytes } from '@engine/board.js';
+import { createBoard, createBoardAsync, writeCellBytes } from '@engine/board.js';
 import { assemble } from '@engine/assembler.js';
 import { getPreset } from './presets-browser.js';
 
@@ -18,17 +20,23 @@ export class Board6502Engine {
     this._totalCopies = 0;
     this._totalSwaps = 0;
     this._presetReady = Promise.resolve();
+    /** @type {'wasm'|'sfotty'|null} */
+    this.backend = null;
+    this._wasmInner = null;
   }
 
-  init(config) {
+  async init(config) {
     this.size = config.size ?? config.width ?? 16;
     const seed = config.seed ?? 42;
     const noiseParams = config.pBitNoise != null ? { pBitNoise: config.pBitNoise } : undefined;
 
-    const board = createBoard(this.size, seed, noiseParams);
+    // Try WASM first, fall back to Sfotty
+    const board = await createBoardAsync(this.size, seed, noiseParams);
+    this.backend = createBoardAsync.backend;
     this.memory = board.memory;
     this.controller = board.controller;
     this.visualizer = board.visualizer;
+    this._wasmInner = board._wasmInner ?? null;
 
     this.controller.readRegisters();
 
@@ -48,6 +56,8 @@ export class Board6502Engine {
     } else {
       this._presetReady = Promise.resolve();
     }
+
+    console.log(`6502life engine: using ${this.backend} backend`);
   }
 
   async ready() {
@@ -59,14 +69,25 @@ export class Board6502Engine {
     if (!preset) throw new Error(`Unknown preset: ${name}`);
     const bytes = await assemble(preset.source);
     const [i, j] = cell;
-    writeCellBytes(this.controller, i, j, 0, bytes);
+    if (this._wasmInner) {
+      // Use WASM's native write_cell_bytes for efficiency
+      this._wasmInner.write_cell_bytes(i, j, 0, bytes);
+    } else {
+      writeCellBytes(this.controller, i, j, 0, bytes);
+    }
   }
 
   step(n = 1) {
-    for (let s = 0; s < n; s++) {
-      this.controller.runToNextInterrupt();
-      this._ticks++;
-      this.controller.sfotty.crashed = false;
+    if (this._wasmInner) {
+      // Use WASM's batch interrupt runner for speed
+      this._wasmInner.run_interrupts(n);
+      this._ticks += n;
+    } else {
+      for (let s = 0; s < n; s++) {
+        this.controller.runToNextInterrupt();
+        this._ticks++;
+        this.controller.sfotty.crashed = false;
+      }
     }
     return n;
   }
@@ -80,6 +101,27 @@ export class Board6502Engine {
   }
 
   getCell(x, y) {
+    if (this._wasmInner) {
+      // Use WASM overview buffer directly
+      const buf = this._wasmInner.overview_pixel_buffer();
+      const idx = (x * this.size + y) * 4;
+      const r = buf[idx];
+      const g = buf[idx + 1];
+      const b = buf[idx + 2];
+
+      const cellIdx = x * this.size + y;
+      const currentTime = Number(this._wasmInner.total_cycles());
+      const timeSinceLastWrite = currentTime - Number(this._wasmInner.last_write_time(cellIdx));
+      const timeSinceLastMove = currentTime - Number(this._wasmInner.last_move_time(cellIdx));
+      const activity = Math.exp(-timeSinceLastWrite / 100) * 0.4 +
+                       Math.exp(-timeSinceLastMove / 10) * 0.6;
+
+      const name = this._wasmInner.cell_name(x, y);
+
+      return { rgb: [r, g, b], activity, name };
+    }
+
+    // Sfotty path (unchanged)
     const rgb32 = this.visualizer.getOverviewPixelRGB(x, y);
     const r = rgb32 & 0xFF;
     const g = (rgb32 >> 8) & 0xFF;
@@ -100,6 +142,43 @@ export class Board6502Engine {
   summarize() {
     const B = this.size;
     const totalCells = B * B;
+
+    if (this._wasmInner) {
+      const currentTime = Number(this._wasmInner.total_cycles());
+      let activeCells = 0;
+      const recentThreshold = 10000;
+      for (let idx = 0; idx < totalCells; idx++) {
+        const timeSinceWrite = currentTime - Number(this._wasmInner.last_write_time(idx));
+        const timeSinceMove = currentTime - Number(this._wasmInner.last_move_time(idx));
+        if (timeSinceWrite < recentThreshold || timeSinceMove < recentThreshold) {
+          activeCells++;
+        }
+      }
+
+      const hashes = new Set();
+      const M = 1024;
+      for (let i = 0; i < B; i++) {
+        for (let j = 0; j < B; j++) {
+          const base = (i * B + j) * M;
+          let h = 0x811c9dc5;
+          for (let b = 0; b < M; b++) {
+            h ^= this._wasmInner.get_byte(base + b);
+            h = Math.imul(h, 0x01000193);
+          }
+          hashes.add(h >>> 0);
+        }
+      }
+
+      return {
+        activeCells,
+        totalCopies: this._totalCopies,
+        totalSwaps: this._totalSwaps,
+        uniqueHashes: hashes.size,
+        ticks: this._ticks,
+      };
+    }
+
+    // Sfotty path (unchanged)
     const currentTime = this.controller.totalCycles;
 
     let activeCells = 0;
@@ -140,8 +219,14 @@ export class Board6502Engine {
       await this._injectPreset(action.preset, action.cell);
     } else if (action.type === 'poke') {
       const [i, j] = action.cell;
-      const idx = this.memory.ijbToByteIndex(i, j, action.offset);
-      this.memory.setByteWithoutUndo(idx, action.value);
+      if (this._wasmInner) {
+        const M = 1024;
+        const idx = (i * this.size + j) * M + action.offset;
+        this._wasmInner.set_byte(idx, action.value);
+      } else {
+        const idx = this.memory.ijbToByteIndex(i, j, action.offset);
+        this.memory.setByteWithoutUndo(idx, action.value);
+      }
     }
   }
 }

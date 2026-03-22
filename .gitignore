@@ -129,6 +129,10 @@ dist
 .yarn/install-state.gz
 .pnp.*
 
+# WASM build artifacts
+wasm/pkg/
+wasm/target/
+
 # latex
 tex/*.out
 tex/*.aux

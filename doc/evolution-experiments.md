@@ -138,6 +138,33 @@ Found 20 clusters of identical cells:
 - 2 cells: (3,7), (4,6)
   First 8 bytes: 4f a3 7a d6 8d 2a 15 f4
 
+### Analysis
+
+**No self-replicating patterns emerged spontaneously.** Zero cells developed
+BRK $F5-$F8 at byte 0 across the entire 10M-interrupt run. This is unsurprising:
+a functional replicator needs (at minimum) BRK at byte 0 followed by a copy
+operand ($F5-$F8), then a loop back to byte 0. The probability of this arising
+by chance is vanishingly small, and without a loop, even accidental BRK copies
+produce non-self-replicating offspring.
+
+**Clusters of identical cells arise from swap dynamics, not replication.** The 20
+clusters of 2-3 identical cells have similar content because BRK swap operations
+(operands 1-244) physically exchange cell contents. When two cells are swapped,
+they become neighbors with identical histories, creating the observed clusters.
+The clusters' first 8 bytes contain $F5 at position 7 (not position 1), so these
+are NOT BRK-copy instructions at the entry point.
+
+**Unique fingerprint count fluctuates wildly** (64 -> 3 -> 41). The initial
+collapse to 3 unique fingerprints at 500k is from swap-driven homogenization:
+cells shuffle their contents rapidly, and the random content converges to a few
+attractor states. The later expansion (36, 29, 41) is from divergent random
+execution producing different write patterns.
+
+**Conclusion: abiogenesis does not occur on an 8x8 board in 10M interrupts.**
+The state space of functional self-replicators is too sparse relative to the
+space of random byte sequences. Larger boards or longer runtimes might produce
+spontaneous replicators, but the probability per unit time is extremely low.
+
 ## Experiment 4: Magnetosensing vs standard nano-2x
 
 ### Setup
@@ -201,3 +228,56 @@ parameter affects triplicator survival.
 | 3M | 64 | 0 | 10.0 |
 | 5M | 64 | 0 | 26.0 |
 
+### Analysis
+
+**Both nano-2x variants survive identically at eps=1/131072.** Standard and
+magnetosensing nano-2x both maintain 64/64 alive through 5M interrupts, with
+no measurable difference. Since nano-2x's code does not read $FA, the
+magnetosensing board parameter has no effect on its behavior.
+
+**Magnetosensing does not affect triplicator survival.** Both the magnetosensing
+ON and OFF variants of triplicator-evolvable maintain 64/64 alive through 5M.
+The triplicator's code also does not read $FA, so the parameter is irrelevant.
+The slight difference in 80% fidelity timing (drops at 3M with magneto ON vs
+2M with magneto OFF) is due to different RNG state from the magnetosensing
+writes to $FA consuming different MT entropy.
+
+**N drifted to 26 in the magneto-OFF control.** This confirms the upward drift
+seen in Experiment 1, though the magnitude differs (26 vs 72) likely due to
+different sweep timing and stochastic dynamics.
+
+**Magnetosensing would matter for a direction-aware organism.** The test as
+designed does not exercise magnetosensing because neither nano-2x nor the
+triplicator reads $FA. A true magnetosensing organism would need to use the
+orientation at $FA to make directional decisions (e.g., always copy north).
+This could provide a fitness advantage on boards with spatial structure, but
+on the 8x8 torus with random orientations, there is no directional advantage
+to exploit.
+
+## Summary of Key Findings
+
+### 1. The triplicator survives indefinitely at eps=1/131072
+The evolvable triplicator with self-repair maintains 64/64 alive for 10M+
+interrupts, confirming it has crossed Eigen's error threshold. This is the
+first organism in this system to achieve long-term viability under nonzero noise.
+
+### 2. Natural selection drives N upward
+The repair rate N evolved from 10 to 72 over 2M interrupts, a 7x increase.
+This represents genuine directional selection: more repair is favored when
+copy noise is very low (eps=1/131072) because cross-contamination, not copy
+noise, is the dominant threat.
+
+### 3. Speed wins colonization, repair wins persistence
+In the multi-species experiment, nano-2x (fast, no repair) colonized the board
+in 100k interrupts but went extinct by 3M. The triplicator (slow, self-repair)
+never got established against the nano-2x monoculture. In isolation, both
+survive at this noise level, but neither can displace the other once established.
+
+### 4. Spontaneous replicators do not emerge
+10M interrupts on a randomized 8x8 board produced zero self-replicating patterns.
+The probability of a functional replicator arising by chance is vanishingly small.
+
+### 5. Magnetosensing provides no advantage to existing organisms
+Without code that reads the orientation register at $FA, magnetosensing is
+invisible to the organism. A purpose-built magnetosensing organism remains an
+open research direction.
