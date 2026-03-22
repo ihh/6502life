@@ -385,6 +385,24 @@ ash : grass, rate=0.05.
     });
 });
 
+// ---- Game of Life ----
+
+describe('game of life integration', () => {
+    it('compiles a simplified Game of Life grammar', () => {
+        const grammar = `
+live _ : live live, rate=1.
+live : dead, rate=0.5.
+dead : _, rate=2.
+`;
+        const result = compile(grammar);
+        expect(result.programs['live']).toBeDefined();
+        expect(result.programs['dead']).toBeDefined();
+        expect(result.typeIndex['live']).toBeGreaterThan(0);
+        expect(result.typeIndex['dead']).toBeGreaterThan(0);
+        expect(result.typeIndex['_']).toBe(0);
+    });
+});
+
 // ---- Code size estimation ----
 
 describe('code size', () => {
