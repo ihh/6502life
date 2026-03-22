@@ -56,22 +56,30 @@ function getOrCreate(key) {
     return nodes.get(key);
 }
 
-// Process events chronologically
+// Identify the root: the source of the first event (the originally tracked cell).
+// Pre-create it so it is never assigned a parent during processing.
+const rootKey = cellKey(events[0].src);
+const rootNode = getOrCreate(rootKey);
+
+// Sentinel: mark cells that have been "reached" (either as root or as a copy
+// destination). We use a Set rather than the parent field, since the root has
+// parent=null but should still be treated as reached.
+const reached = new Set([rootKey]);
+
+// Process events chronologically.
+// Use colonization semantics: only the FIRST copy to each destination cell
+// establishes the parent edge. Subsequent re-copies are ignored. This
+// guarantees an acyclic tree (each node has at most one parent, assigned once).
 for (const e of events) {
     const srcKey = cellKey(e.src);
     const dstKey = cellKey(e.dst);
     const src = getOrCreate(srcKey);
     const dst = getOrCreate(dstKey);
 
-    // If dst already has a parent, this is a re-copy (update parent)
-    if (dst.parent && dst.parent !== srcKey) {
-        // Remove from old parent's children
-        const oldParent = nodes.get(dst.parent);
-        if (oldParent) {
-            oldParent.children = oldParent.children.filter(k => k !== dstKey);
-        }
-    }
+    // Skip if destination has already been reached (first copy wins)
+    if (reached.has(dstKey)) continue;
 
+    reached.add(dstKey);
     dst.parent = srcKey;
     dst.time = e.interrupt || e.time || 0;
     dst.similarity = e.similarity || 1;
@@ -87,11 +95,21 @@ for (const [key, node] of nodes) {
     if (!node.parent) roots.push(key);
 }
 
+// Safety check: if somehow no roots exist (should not happen with first-copy
+// semantics, but handle gracefully), warn and identify disconnected components
+if (roots.length === 0 && nodes.size > 0) {
+    console.error('Warning: no root nodes found (unexpected). Listing all nodes as disconnected.');
+    for (const key of nodes.keys()) {
+        roots.push(key);
+    }
+}
+
 // Output
 switch (format) {
     case 'ascii':
-        for (const root of roots) {
-            printAsciiTree(root, '', true);
+        for (let r = 0; r < roots.length; r++) {
+            if (r > 0) console.log('');  // blank line between disconnected trees
+            printAsciiTree(roots[r], '', true);
         }
         printStats();
         break;
