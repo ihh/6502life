@@ -110,10 +110,10 @@ export class Board6502Engine {
     const hue = this.memory.storage[base + 0x3A0];
 
     let r, g, b;
-    if (hue > 0) {
+    if (hue > 0 && activity > 0.001) {
       // Convert hue byte to RGB (HSV with S=1, V=activity-scaled)
       const h = (hue / 255) * 360;
-      const v = Math.min(1.0, 0.3 + activity * 1.5);
+      const v = Math.min(1.0, activity * 2.0);
       const c = v;
       const x2 = c * (1 - Math.abs((h / 60) % 2 - 1));
       const m = 0;
