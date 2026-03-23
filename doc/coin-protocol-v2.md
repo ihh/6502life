@@ -22,12 +22,29 @@ There is no universal currency.
 **Ledger:** Each board's chain is the sole authoritative ledger for
 that board's coins. It records: coins minted (one per T_coin ticks),
 coins earned by visitors (from shares/timestamps), coins spent on
-Moves, coins traded in/out at share events. All entries are signed
-by the board owner.
+Moves, coins traded in/out at share events.
+
+**Co-signatures:** Every balance-affecting ledger entry requires the
+board owner's signature PLUS the counterparty's signature. This
+prevents the owner from forging, omitting, or retroactively editing
+entries. The sole exception is Earn (minting), which is unilateral
+but deterministically verifiable from the Merkle tree.
+
+- **Earn**: owner signature only (verifiable: T_coin ticks elapsed)
+- **Grant**: owner + share partner (part of share attestation)
+- **Trade**: owner + trading partner (part of share attestation)
+- **Spend**: owner + spender (owner timestamps the Move, spender signs the request)
+- **Timestamp payment**: owner + requester (requester signs payment, owner signs receipt)
 
 **Balances:** Your balance on someone else's board is a function of
 THEIR chain, not yours. Anyone can compute it by reading their public
-chain. You can't forge a balance because it requires their signature.
+chain. You can't forge a balance because it requires their signature,
+and they can't deny it because it requires yours.
+
+**Trades require the board owner.** Coins on Board A can only be
+traded when Board A's owner is present (their signature is needed to
+update the ledger). No third-party trades of your-board-coins without
+you. This eliminates double-spend.
 
 ### 3. Signing (Sharing)
 
