@@ -22,6 +22,8 @@ const MAX_SPEED = 500;
 
 // --- State ---
 let engine = null;
+// Expose for browser console debugging
+if (typeof window !== 'undefined') window.__engine = null;
 let renderer = null;
 let wallet = null;
 let social = null;
@@ -116,6 +118,7 @@ async function init() {
 
   // Init engine with a diverse mix of colored organisms
   engine = new Board6502Engine();
+  if (typeof window !== 'undefined') window.__engine = engine;
   await engine.init({
     size: BOARD_SIZE,
     seed: (Date.now() & 0xFFFF) ^ (Math.random() * 0xFFFF | 0),
