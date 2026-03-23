@@ -100,8 +100,9 @@ export class Board6502Engine {
     const currentTime = this.controller.totalCycles;
     const timeSinceLastWrite = currentTime - (this.controller.lastWriteTime[cellIdx] || 0);
     const timeSinceLastMove = currentTime - (this.controller.lastMoveTime[cellIdx] || 0);
-    const activity = Math.exp(-timeSinceLastWrite / 100) * 0.4 +
-                     Math.exp(-timeSinceLastMove / 10) * 0.6;
+    // Slower fade so recent history is visible longer
+    const activity = Math.exp(-timeSinceLastWrite / 5000) * 0.4 +
+                     Math.exp(-timeSinceLastMove / 2000) * 0.6;
 
     // Check cell's hue byte at 0x3A0. If nonzero, use it as the cell color.
     // The hue byte (0-255) maps to HSV hue (0-360°), rendered at full saturation
@@ -110,7 +111,7 @@ export class Board6502Engine {
     const hue = this.memory.storage[base + 0x3A0];
 
     let r, g, b;
-    if (hue > 0 && activity > 0.05) {
+    if (hue > 0 && activity > 0.01) {
       // Convert hue byte to RGB (HSV with S=1, V=activity-scaled)
       const h = (hue / 255) * 360;
       const v = Math.min(1.0, activity * 2.0);

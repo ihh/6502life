@@ -1293,8 +1293,12 @@ class BoardController {
                             } else if (operand >= 245 && operand <= 252 && bp.implementsCopy) {
                                 const dest = operand - 244;
                                 this.copyCellWithNoise (dest);
-                                this.lastMoveTime[0] = this.totalCycles;
-                                this.lastMoveTime[dest] = this.totalCycles;
+                                // Update move times using board cell indices (not neighborhood indices)
+                                const originCellIdx = this.memory.ijToCellIndex(this.memory.iOrig, this.memory.jOrig);
+                                this.lastMoveTime[originCellIdx] = this.totalCycles;
+                                const [di, dj] = this.memory.addrToCellCoords(dest * this.memory.M);
+                                const destCellIdx = this.memory.ijToCellIndex(di, dj);
+                                this.lastMoveTime[destCellIdx] = this.totalCycles;
                                 if (this.onBrkEvent) this.onBrkEvent('copy', 0, dest);
                             } else if (operand === 253 && bp.implementsSync) {
                                 // Sync interrupt request: X,Y = LSB,MSB of period.
