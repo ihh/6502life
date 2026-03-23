@@ -227,6 +227,16 @@ impl WasmBoard {
         }
     }
 
+    /// Get the lastWriter for a cell (linear index).
+    pub fn get_last_writer(&self, cell_idx: usize) -> String {
+        self.controller.last_writer[cell_idx].clone()
+    }
+
+    /// Set the board owner wallet ID.
+    pub fn set_board_owner(&mut self, id: String) {
+        self.controller.board_owner = id;
+    }
+
     /// Read a cell's 32-byte display name as a String.
     pub fn cell_name(&self, i: usize, j: usize) -> String {
         let base = self.controller.memory.ijb_to_byte_index(i, j, 0x3E0);

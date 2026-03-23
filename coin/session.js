@@ -9,6 +9,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { sha256, toHex } from './hash.js';
+import { BoardMerkleTree } from './merkle.js';
 
 /**
  * @typedef {Object} Block
@@ -60,6 +61,9 @@ export class Session {
     /** @type {Block[]} */
     this.blocks = [];
 
+    // Merkle tree for board history checkpoints
+    this.merkleTree = new BoardMerkleTree();
+
     // Capture initial state
     this.initialState = engine.serialize();
     this.initialStateHex = toHex(this.initialState);
@@ -67,6 +71,9 @@ export class Session {
     // Current block tracking
     this._blockStartTick = engine.clock();
     this._blockStartStateHash = toHex(sha256(this.initialState));
+
+    // Append initial state as first checkpoint
+    this.merkleTree.append(this._blockStartStateHash, this._blockStartTick);
     this._blockInputs = [];
     this._blockStartWallTime = Date.now();
     this._nextBlockTick = this._blockStartTick + this.blockInterval;
@@ -124,6 +131,9 @@ export class Session {
       ? this.blocks[this.blocks.length - 1]._hash
       : ZERO_HASH;
 
+    // Append end-of-block state to Merkle tree
+    this.merkleTree.append(endStateHash, this.engine.clock());
+
     const block = {
       index: this.blocks.length,
       prevHash,
@@ -133,7 +143,8 @@ export class Session {
       startTick: this._blockStartTick,
       endTick: this.engine.clock(),
       wallTimeMs: now - this._blockStartWallTime,
-      summary: this.engine.summarize()
+      summary: this.engine.summarize(),
+      merkleRoot: this.merkleTree.root()
     };
 
     // Compute block hash (hash of canonical block content)
@@ -166,6 +177,8 @@ export class Session {
       inputs: this.inputs,
       finalTick: this.engine.clock(),
       lastPairingTime: this.lastPairingTime,
+      merkleTree: this.merkleTree.serialize(),
+      merkleRoot: this.merkleTree.root(),
       blocks: this.blocks.map(b => ({
         index: b.index,
         prevHash: b.prevHash,
@@ -176,6 +189,7 @@ export class Session {
         endTick: b.endTick,
         wallTimeMs: b.wallTimeMs,
         summary: b.summary,
+        merkleRoot: b.merkleRoot,
         hash: b._hash
       }))
     };
@@ -194,6 +208,7 @@ function canonicalBlockString(block) {
     endTick: block.endTick,
     index: block.index,
     inputs: block.inputs,
+    merkleRoot: block.merkleRoot,
     prevHash: block.prevHash,
     startStateHash: block.startStateHash,
     startTick: block.startTick,

@@ -138,6 +138,7 @@ export function verifySession(record, engine) {
         endTick: block.endTick,
         index: block.index,
         inputs: block.inputs,
+        merkleRoot: block.merkleRoot,
         prevHash: block.prevHash,
         startStateHash: block.startStateHash,
         startTick: block.startTick,

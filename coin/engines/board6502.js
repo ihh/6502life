@@ -120,6 +120,7 @@ export class Board6502Engine extends Engine {
       totalCycles: this.controller.totalCycles,
       lastWriteTime: this.controller.lastWriteTime,
       lastMoveTime: this.controller.lastMoveTime,
+      lastWriter: this.controller.lastWriter,
       ticks: this._ticks,
       totalCopies: this._totalCopies,
       totalSwaps: this._totalSwaps,
@@ -140,6 +141,8 @@ export class Board6502Engine extends Engine {
     this.controller.totalCycles = state.totalCycles;
     this.controller.lastWriteTime = state.lastWriteTime;
     this.controller.lastMoveTime = state.lastMoveTime;
+    if (state.lastWriter)
+      this.controller.lastWriter = state.lastWriter;
     this._ticks = state.ticks;
     this._totalCopies = state.totalCopies;
     this._totalSwaps = state.totalSwaps;

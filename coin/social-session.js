@@ -15,6 +15,7 @@
 import { randomUUID, generateKeyPairSync, sign, verify, createHash } from 'node:crypto';
 import { sha256, toHex, fromHex } from './hash.js';
 import { EdgeSession } from './social.js';
+import { detectNicheEvents, DEFAULT_NICHE_BONUS } from './niche.js';
 
 /**
  * Generate an Ed25519 keypair for signing.
@@ -82,6 +83,9 @@ function canonicalBlockString(block) {
     boundaryFramesReceived: block.boundaryFramesReceived,
     partnerPubkeyHex: block.partnerPubkeyHex,
     edgeExport: block.edgeExport,
+    // Niche events (included in block hash for verifiability)
+    nicheEvents: block.nicheEvents ?? [],
+    nicheBonus: block.nicheBonus ?? 0,
   };
   return JSON.stringify(obj);
 }
@@ -117,6 +121,10 @@ export class SocialSession {
    * @param {string} [options.edgeB='east'] - B's export edge
    * @param {{ publicKey: Buffer, privateKey: Buffer }} [options.keypairA] - A's keys (auto-generated if missing)
    * @param {{ publicKey: Buffer, privateKey: Buffer }} [options.keypairB] - B's keys (auto-generated if missing)
+   * @param {string} [options.walletA] - A's wallet ID for Niche detection
+   * @param {string} [options.walletB] - B's wallet ID for Niche detection
+   * @param {number} [options.nicheBonus=0.69] - coins per Niche event
+   * @param {boolean} [options.enableNiche=true] - enable Niche event detection
    */
   constructor(engineA, engineB, configA, configB, options = {}) {
     this.idA = randomUUID();
@@ -129,6 +137,12 @@ export class SocialSession {
 
     this.keypairA = options.keypairA ?? generateKeypair();
     this.keypairB = options.keypairB ?? generateKeypair();
+
+    // Niche detection config
+    this.walletA = options.walletA ?? '';
+    this.walletB = options.walletB ?? '';
+    this.nicheBonus = options.nicheBonus ?? DEFAULT_NICHE_BONUS;
+    this.enableNiche = options.enableNiche ?? true;
 
     const edgeA = options.edgeA ?? 'east';
     const edgeB = options.edgeB ?? 'east';
@@ -222,6 +236,29 @@ export class SocialSession {
     const frameHashesAtoB = blockFramesAtoB.map(f => f.hash);
     const frameHashesBtoA = blockFramesBtoA.map(f => f.hash);
 
+    // Detect Niche events (cross-board provenance / similarity)
+    let nicheEventsA = [];
+    let nicheEventsB = [];
+    let nicheBonusA = 0;
+    let nicheBonusB = 0;
+    if (this.enableNiche && this.walletA && this.walletB &&
+        this.engineA.controller && this.engineB.controller) {
+      try {
+        const allEvents = detectNicheEvents(
+          this.engineA, this.engineB,
+          this.walletA, this.walletB
+        );
+        // Events on board B with wallet A = A's organisms on B = bonus for A
+        nicheEventsA = allEvents.filter(e => e.board === 'B' && e.wallet === this.walletA);
+        // Events on board A with wallet B = B's organisms on A = bonus for B
+        nicheEventsB = allEvents.filter(e => e.board === 'A' && e.wallet === this.walletB);
+        nicheBonusA = nicheEventsA.length * this.nicheBonus;
+        nicheBonusB = nicheEventsB.length * this.nicheBonus;
+      } catch (_) {
+        // Niche detection is optional — don't fail the block if it errors
+      }
+    }
+
     const prevHashA = this.blocksA.length > 0
       ? this.blocksA[this.blocksA.length - 1].blockHash
       : ZERO_HASH;
@@ -245,6 +282,9 @@ export class SocialSession {
       boundaryFramesReceived: frameHashesBtoA,
       partnerPubkeyHex: this.keypairB.publicKey.toString('hex'),
       edgeExport: this.edgeA,
+      // Niche events
+      nicheEvents: nicheEventsA,
+      nicheBonus: nicheBonusA,
     };
 
     // Build block B
@@ -263,6 +303,9 @@ export class SocialSession {
       boundaryFramesReceived: frameHashesAtoB,
       partnerPubkeyHex: this.keypairA.publicKey.toString('hex'),
       edgeExport: this.edgeB,
+      // Niche events
+      nicheEvents: nicheEventsB,
+      nicheBonus: nicheBonusB,
     };
 
     // Compute block content hashes
@@ -541,8 +584,9 @@ function replayAndVerify(sessionA, sessionB, engineA, engineB, errors) {
         engineB.step(batch);
         ticksDone += batch;
 
-        // Share boundary at interval
-        if (numFrames > 0 && ticksDone < ticksA && frameIdx < numFrames) {
+        // Share boundary at interval (must match original EdgeSession timing,
+        // which shares at every shareInterval boundary including the final one)
+        if (numFrames > 0 && frameIdx < numFrames) {
           const dataA = engineA.getBoundary(edgeA);
           const dataB = engineB.getBoundary(edgeB);
           const importB = OPPOSITE_EDGE[edgeA];

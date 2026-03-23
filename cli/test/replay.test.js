@@ -7,44 +7,43 @@ describe('replay (tracker integration)', () => {
     function setupWithTracker(size = 4) {
         const { controller, memory } = createBoard(size, 42);
         const tracker = new Tracker(controller);
-        return { controller, memory, tracker };
-    }
 
-    function stepWithTracking(controller, tracker) {
-        const mem = controller.memory;
-        const origCommitWrites = controller.commitWrites.bind(controller);
-        const origUndoWrites = mem.undoWrites.bind(mem);
+        // Capture prototype methods once to avoid re-binding issues
+        const proto = Object.getPrototypeOf(controller);
+        const origCommitWrites = proto.commitWrites.bind(controller);
+        const origUndoWrites = memory.undoWrites.bind(memory);
 
-        let capturedHistory = null;
-        let wasAtomic = false;
+        function stepWithTracking() {
+            let capturedHistory = null;
+            let wasAtomic = false;
 
-        controller.commitWrites = () => {
-            capturedHistory = mem.undoHistory ? { ...mem.undoHistory } : null;
-            origCommitWrites();
-        };
-        mem.undoWrites = () => {
-            wasAtomic = true;
-            origUndoWrites();
-        };
+            controller.commitWrites = () => {
+                capturedHistory = memory.undoHistory ? { ...memory.undoHistory } : null;
+                origCommitWrites();
+            };
+            memory.undoWrites = () => {
+                wasAtomic = true;
+                origUndoWrites();
+            };
 
-        // Reset sfotty internal state before each interrupt to prevent
-        // stale crashed/cycleCounter state from a previous cell's execution.
-        controller.sfotty.crashed = false;
-        controller.sfotty.cycleCounter = 0;
-        controller.sfotty.operations = [() => controller.sfotty.decode()];
-        controller.runToNextInterrupt();
+            controller.runToNextInterrupt();
 
-        controller.commitWrites = origCommitWrites;
-        mem.undoWrites = origUndoWrites;
+            controller.commitWrites = origCommitWrites;
+            memory.undoWrites = origUndoWrites;
 
-        tracker.onInterrupt(capturedHistory, wasAtomic);
+            tracker.onInterrupt(capturedHistory, wasAtomic);
+        }
+
+        return { controller, memory, tracker, stepWithTracking };
     }
 
     it('captures write events during simulation', async () => {
-        const { controller, tracker } = setupWithTracker(4);
+        const { controller, memory, tracker, stepWithTracking } = setupWithTracker(4);
         zeroAllCells(controller);
+        // Sync sfotty state with zeroed memory (ensures I flag is clear)
+        controller.readRegisters();
 
-        // Load a counter program
+        // Load a counter program into cell (0,0)
         const source = 'TXA\n@loop:\nCLC\nADC #$01\nSTA $10\nBNE @loop';
         const bytes = await assemble(source);
         writeCellBytes(controller, 0, 0, 0, bytes);
@@ -52,12 +51,24 @@ describe('replay (tracker integration)', () => {
         const events = [];
         tracker.subscribe('writes', (e) => events.push(e));
 
-        // Run enough interrupts that cell (0,0) gets scheduled at least once
-        for (let i = 0; i < 200; i++) {
-            stepWithTracking(controller, tracker);
-        }
+        // Force cell (0,0) to be scheduled directly for determinism:
+        // set origin to (0,0), load its registers, give it plenty of cycles.
+        // Use setP() (not raw sfotty.P) to ensure boolean flags are synced,
+        // since sfotty.P is a plain property that doesn't drive flag booleans.
+        memory.iOrig = 0;
+        memory.jOrig = 0;
+        memory.orientation = 0;
+        memory.nextCycles = 1000;
+        controller.readRegisters();
+        controller.sfotty.setP(controller.sfotty.P || 0);
+        controller.sfotty.crashed = false;
+        controller.sfotty.cycleCounter = 0;
+        controller.sfotty.operations = [() => controller.sfotty.decode()];
+        memory.resetUndoHistory();
 
-        // Should have captured some write events (counter writes to $10)
+        stepWithTracking();
+
+        // The counter writes to $10 on every loop iteration
         expect(events.length).toBeGreaterThan(0);
         expect(events[0].channel).toBe('writes');
         expect(events[0].src).toBeDefined();
@@ -65,24 +76,24 @@ describe('replay (tracker integration)', () => {
     });
 
     it('tracks interrupt count correctly', async () => {
-        const { controller, tracker } = setupWithTracker(4);
+        const { stepWithTracking, tracker } = setupWithTracker(4);
 
         for (let i = 0; i < 10; i++) {
-            stepWithTracking(controller, tracker);
+            stepWithTracking();
         }
 
         expect(tracker.interruptCount).toBe(10);
     });
 
     it('emits census events at configured interval', async () => {
-        const { controller, tracker } = setupWithTracker(4);
+        const { stepWithTracking, tracker } = setupWithTracker(4);
         tracker.censusInterval = 3;
 
         const censusEvents = [];
         tracker.subscribe('census', (e) => censusEvents.push(e));
 
         for (let i = 0; i < 10; i++) {
-            stepWithTracking(controller, tracker);
+            stepWithTracking();
         }
 
         // Should have at least 2 census events (at interrupt 3, 6, 9)
@@ -92,7 +103,7 @@ describe('replay (tracker integration)', () => {
     });
 
     it('detects copies when tracking a cell', async () => {
-        const { controller, tracker } = setupWithTracker(8);
+        const { controller, tracker, stepWithTracking } = setupWithTracker(8);
         zeroAllCells(controller);
 
         // Load copier into (0,0) — copies to East neighbor (cell 2)
@@ -130,7 +141,7 @@ describe('replay (tracker integration)', () => {
         controller.sfotty.setP(0);
         mem.resetUndoHistory();
 
-        stepWithTracking(controller, tracker);
+        stepWithTracking();
 
         // The copier should have written enough to trigger a copy detection
         // (depends on similarity threshold — may or may not trigger with default 0.6)
