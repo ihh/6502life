@@ -44,7 +44,9 @@ export class Board6502Engine {
     this.visualizer = board.visualizer || null;
     this._wasmInner = board._wasmInner ?? null;
 
-    if (this.controller.readRegisters) this.controller.readRegisters();
+    console.log('Engine init:', this.backend, 'memory:', !!this.memory, 'controller:', !!this.controller, 'visualizer:', !!this.visualizer);
+
+    if (this.controller && this.controller.readRegisters) this.controller.readRegisters();
 
     this._ticks = 0;
     this._totalCopies = 0;
@@ -128,6 +130,9 @@ export class Board6502Engine {
     }
 
     // Sfotty path
+    if (!this.memory) {
+      return { rgb: [0, 0, 0], activity: 0, name: '' };
+    }
     const cellIdx = this.memory.ijToCellIndex(x, y);
     const currentTime = this.controller.totalCycles;
     const timeSinceLastWrite = currentTime - (this.controller.lastWriteTime?.[cellIdx] || 0);
