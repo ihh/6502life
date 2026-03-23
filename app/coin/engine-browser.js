@@ -31,14 +31,20 @@ export class Board6502Engine {
     const noiseParams = config.pBitNoise != null ? { pBitNoise: config.pBitNoise } : undefined;
 
     // Try WASM first, fall back to Sfotty
-    const board = await createBoardAsync(this.size, seed, noiseParams);
-    this.backend = createBoardAsync.backend;
+    let board;
+    try {
+      board = await createBoardAsync(this.size, seed, noiseParams);
+    } catch (e) {
+      console.warn('createBoardAsync failed, using createBoard:', e.message);
+      board = createBoard(this.size, seed, noiseParams);
+    }
+    this.backend = createBoardAsync.backend || 'sfotty';
     this.memory = board.memory;
     this.controller = board.controller;
-    this.visualizer = board.visualizer;
+    this.visualizer = board.visualizer || null;
     this._wasmInner = board._wasmInner ?? null;
 
-    this.controller.readRegisters();
+    if (this.controller.readRegisters) this.controller.readRegisters();
 
     this._ticks = 0;
     this._totalCopies = 0;
@@ -121,20 +127,26 @@ export class Board6502Engine {
       return { rgb: [r, g, b], activity, name };
     }
 
-    // Sfotty path (unchanged)
-    const rgb32 = this.visualizer.getOverviewPixelRGB(x, y);
-    const r = rgb32 & 0xFF;
-    const g = (rgb32 >> 8) & 0xFF;
-    const b = (rgb32 >> 16) & 0xFF;
-
+    // Sfotty path
     const cellIdx = this.memory.ijToCellIndex(x, y);
     const currentTime = this.controller.totalCycles;
-    const timeSinceLastWrite = currentTime - this.controller.lastWriteTime[cellIdx];
-    const timeSinceLastMove = currentTime - this.controller.lastMoveTime[cellIdx];
+    const timeSinceLastWrite = currentTime - (this.controller.lastWriteTime?.[cellIdx] || 0);
+    const timeSinceLastMove = currentTime - (this.controller.lastMoveTime?.[cellIdx] || 0);
     const activity = Math.exp(-timeSinceLastWrite / 100) * 0.4 +
                      Math.exp(-timeSinceLastMove / 10) * 0.6;
 
-    const name = this.visualizer.getCellName(x, y);
+    let r = 0, g = 0, b = 0, name = '';
+    if (this.visualizer) {
+      const rgb32 = this.visualizer.getOverviewPixelRGB(x, y);
+      r = rgb32 & 0xFF;
+      g = (rgb32 >> 8) & 0xFF;
+      b = (rgb32 >> 16) & 0xFF;
+      name = this.visualizer.getCellName?.(x, y) || '';
+    } else {
+      // Fallback: activity-based grayscale
+      const v = Math.min(255, Math.floor(activity * 255));
+      r = v; g = Math.floor(v * 0.7); b = Math.floor(v * 0.3);
+    }
 
     return { rgb: [r, g, b], activity, name };
   }
