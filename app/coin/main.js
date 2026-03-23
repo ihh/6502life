@@ -17,8 +17,8 @@ import './style.css';
 const BOARD_SIZE = 16;
 const CELL_PX = 16;
 const BLOCK_INTERVAL = 1000; // ticks per coin block
-const DEFAULT_SPEED = 10;    // ticks per frame
-const MAX_SPEED = 200;
+const DEFAULT_SPEED = 50;    // ticks per frame (enough to see dynamics)
+const MAX_SPEED = 500;
 
 // --- State ---
 let engine = null;
@@ -91,7 +91,7 @@ function createUI() {
         <option value="">Inject preset...</option>
       </select>
       <span class="speed-label" id="speed-label">${speed} t/f</span>
-      <input type="range" id="speed-slider" min="1" max="${MAX_SPEED}" value="${speed}">
+      <input type="range" id="speed-slider" min="1" max="${MAX_SPEED}" value="${speed}" step="1">
     </div>
     <div id="notification" class="notification-toast"></div>
   `;
@@ -113,17 +113,28 @@ async function init() {
   wallet = await initWallet();
   document.getElementById('pubkey').textContent = wallet.publicKeyHex;
 
-  // Init engine
+  // Init engine with a diverse mix of colored organisms
   engine = new Board6502Engine();
-  engine.init({
+  await engine.init({
     size: BOARD_SIZE,
     seed: (Date.now() & 0xFFFF) ^ (Math.random() * 0xFFFF | 0),
     presets: [
-      { name: 'nano-2x', cell: [0, 0] },
-      { name: 'spreader', cell: [BOARD_SIZE - 1, BOARD_SIZE - 1] },
+      // Colored replicators -- these write to the RGB bitmap so they show vivid colors
+      { name: 'red',   cell: [0, 0] },
+      { name: 'red',   cell: [8, 8] },
+      { name: 'green', cell: [0, BOARD_SIZE - 1] },
+      { name: 'green', cell: [8, 4] },
+      { name: 'blue',  cell: [BOARD_SIZE - 1, 0] },
+      { name: 'blue',  cell: [4, 12] },
+      // Spreaders for background activity
+      { name: 'nano-2x', cell: [BOARD_SIZE - 1, BOARD_SIZE - 1] },
+      { name: 'nano-2x', cell: [4, 4] },
     ]
   });
   await engine.ready();
+
+  // Run a burst of ticks so the board is already alive on first render
+  engine.step(200);
 
   // Init renderer
   const canvas = document.getElementById('grid-canvas');

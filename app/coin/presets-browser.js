@@ -154,6 +154,69 @@ BRK
 INC $10
 BRK
 .byte $01`
+  },
+  red: {
+    name: 'Red',
+    desc: 'Rock-paper-scissors ecology (RED team)',
+    source: `; Red: rock-paper-scissors ecology (RED team)
+LDA #$01
+STA $A5
+LDA #$72
+STA $03E0
+LDA #$65
+STA $03E1
+LDA #$64
+STA $03E2
+LDA #$FF
+STA $0380
+STA $0381
+@start:
+BRK
+.byte $F5
+BNE @start
+BEQ @start`
+  },
+  green: {
+    name: 'Green',
+    desc: 'Rock-paper-scissors ecology (GREEN team)',
+    source: `; Green: rock-paper-scissors ecology (GREEN team)
+LDA #$02
+STA $A5
+LDA #$67
+STA $03E0
+LDA #$72
+STA $03E1
+LDA #$6E
+STA $03E2
+LDA #$FF
+STA $03A0
+STA $03A1
+@start:
+BRK
+.byte $F5
+BNE @start
+BEQ @start`
+  },
+  blue: {
+    name: 'Blue',
+    desc: 'Rock-paper-scissors ecology (BLUE team)',
+    source: `; Blue: rock-paper-scissors ecology (BLUE team)
+LDA #$03
+STA $A5
+LDA #$62
+STA $03E0
+LDA #$6C
+STA $03E1
+LDA #$75
+STA $03E2
+LDA #$FF
+STA $03C0
+STA $03C1
+@start:
+BRK
+.byte $F5
+BNE @start
+BEQ @start`
   }
 };
 

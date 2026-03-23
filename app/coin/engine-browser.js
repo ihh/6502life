@@ -2,11 +2,14 @@
  * Browser-compatible 6502life engine adapter.
  * Wraps BoardMemory + BoardController + BoardVisualizer for the coin PWA.
  *
- * Prefers WASM engine in browsers, falls back to Sfotty.
- * Check Board6502Engine.backend after init() to see which is active.
+ * Constructs the Sfotty-based board directly from pure-JS modules,
+ * bypassing createBoardAsync (which tries WASM and may fail in browsers).
  */
 
-import { createBoard, createBoardAsync, writeCellBytes, readCellMemory } from '@engine/board.js';
+import { BoardMemory } from '@board/memory.js';
+import { BoardController } from '@board/controller.js';
+import { BoardVisualizer } from '@board/visualizer.js';
+import { writeCellBytes, readCellMemory } from '@engine/board.js';
 import { assemble } from '@engine/assembler.js';
 import { getPreset } from './presets-browser.js';
 
@@ -20,33 +23,19 @@ export class Board6502Engine {
     this._totalCopies = 0;
     this._totalSwaps = 0;
     this._presetReady = Promise.resolve();
-    /** @type {'wasm'|'sfotty'|null} */
-    this.backend = null;
-    this._wasmInner = null;
+    this.backend = 'sfotty';
   }
 
   async init(config) {
     this.size = config.size ?? config.width ?? 16;
     const seed = config.seed ?? 42;
-    const noiseParams = config.pBitNoise != null ? { pBitNoise: config.pBitNoise } : undefined;
+    const boardParams = config.pBitNoise != null ? { pBitNoise: config.pBitNoise } : undefined;
 
-    // Try WASM first, fall back to Sfotty
-    let board;
-    try {
-      board = await createBoardAsync(this.size, seed, noiseParams);
-    } catch (e) {
-      console.warn('createBoardAsync failed, using createBoard:', e.message);
-      board = createBoard(this.size, seed, noiseParams);
-    }
-    this.backend = createBoardAsync.backend || 'sfotty';
-    this.memory = board.memory;
-    this.controller = board.controller;
-    this.visualizer = board.visualizer || null;
-    this._wasmInner = board._wasmInner ?? null;
-
-    console.log('Engine init:', this.backend, 'memory:', !!this.memory, 'controller:', !!this.controller, 'visualizer:', !!this.visualizer);
-
-    if (this.controller && this.controller.readRegisters) this.controller.readRegisters();
+    // Construct board directly from pure-JS modules (no WASM dance)
+    const memory = new BoardMemory(seed, this.size);
+    this.controller = new BoardController(memory, boardParams);
+    this.visualizer = new BoardVisualizer(this.controller);
+    this.memory = memory;
 
     this._ticks = 0;
     this._totalCopies = 0;
@@ -65,7 +54,7 @@ export class Board6502Engine {
       this._presetReady = Promise.resolve();
     }
 
-    console.log(`6502life engine: using ${this.backend} backend`);
+    console.log(`6502coin engine: sfotty ${this.size}x${this.size}, seed=${seed}`);
   }
 
   async ready() {
@@ -77,25 +66,14 @@ export class Board6502Engine {
     if (!preset) throw new Error(`Unknown preset: ${name}`);
     const bytes = await assemble(preset.source);
     const [i, j] = cell;
-    if (this._wasmInner) {
-      // Use WASM's native write_cell_bytes for efficiency
-      this._wasmInner.write_cell_bytes(i, j, 0, bytes);
-    } else {
-      writeCellBytes(this.controller, i, j, 0, bytes);
-    }
+    writeCellBytes(this.controller, i, j, 0, bytes);
   }
 
   step(n = 1) {
-    if (this._wasmInner) {
-      // Use WASM's batch interrupt runner for speed
-      this._wasmInner.run_interrupts(n);
-      this._ticks += n;
-    } else {
-      for (let s = 0; s < n; s++) {
-        this.controller.runToNextInterrupt();
-        this._ticks++;
-        this.controller.sfotty.crashed = false;
-      }
+    for (let s = 0; s < n; s++) {
+      this.controller.runToNextInterrupt();
+      this._ticks++;
+      this.controller.sfotty.crashed = false;
     }
     return n;
   }
@@ -108,50 +86,53 @@ export class Board6502Engine {
     return { width: this.size, height: this.size };
   }
 
+  /**
+   * Get cell color and activity data for rendering.
+   * Prefers RGB bitmap data (0x380-0x3BF) when nonzero,
+   * falls back to activity-based HSV coloring from the visualizer.
+   */
   getCell(x, y) {
-    if (this._wasmInner) {
-      // Use WASM overview buffer directly
-      const buf = this._wasmInner.overview_pixel_buffer();
-      const idx = (x * this.size + y) * 4;
-      const r = buf[idx];
-      const g = buf[idx + 1];
-      const b = buf[idx + 2];
-
-      const cellIdx = x * this.size + y;
-      const currentTime = Number(this._wasmInner.total_cycles());
-      const timeSinceLastWrite = currentTime - Number(this._wasmInner.last_write_time(cellIdx));
-      const timeSinceLastMove = currentTime - Number(this._wasmInner.last_move_time(cellIdx));
-      const activity = Math.exp(-timeSinceLastWrite / 100) * 0.4 +
-                       Math.exp(-timeSinceLastMove / 10) * 0.6;
-
-      const name = this._wasmInner.cell_name(x, y);
-
-      return { rgb: [r, g, b], activity, name };
-    }
-
-    // Sfotty path
     if (!this.memory) {
       return { rgb: [0, 0, 0], activity: 0, name: '' };
     }
+
     const cellIdx = this.memory.ijToCellIndex(x, y);
     const currentTime = this.controller.totalCycles;
-    const timeSinceLastWrite = currentTime - (this.controller.lastWriteTime?.[cellIdx] || 0);
-    const timeSinceLastMove = currentTime - (this.controller.lastMoveTime?.[cellIdx] || 0);
+    const timeSinceLastWrite = currentTime - (this.controller.lastWriteTime[cellIdx] || 0);
+    const timeSinceLastMove = currentTime - (this.controller.lastMoveTime[cellIdx] || 0);
     const activity = Math.exp(-timeSinceLastWrite / 100) * 0.4 +
                      Math.exp(-timeSinceLastMove / 10) * 0.6;
 
-    let r = 0, g = 0, b = 0, name = '';
-    if (this.visualizer) {
+    // Read RGB bitmap bytes from cell memory
+    const base = this.memory.ijbToByteIndex(x, y, 0);
+    let bitmapR = 0, bitmapG = 0, bitmapB = 0;
+    // Sum all bitmap bytes per channel to detect nonzero content
+    for (let k = 0; k < 32; k++) {
+      bitmapR |= this.memory.storage[base + 0x380 + k];
+      bitmapG |= this.memory.storage[base + 0x3A0 + k];
+      bitmapB |= this.memory.storage[base + 0x3C0 + k];
+    }
+
+    let r, g, b;
+    if (bitmapR || bitmapG || bitmapB) {
+      // Cell has bitmap data -- use the dominant channel color, scaled by activity
+      const bright = Math.min(1.0, 0.3 + activity * 1.5);
+      r = bitmapR ? Math.min(255, Math.floor(255 * bright)) : Math.floor(30 * bright);
+      g = bitmapG ? Math.min(255, Math.floor(255 * bright)) : Math.floor(30 * bright);
+      b = bitmapB ? Math.min(255, Math.floor(255 * bright)) : Math.floor(30 * bright);
+    } else if (this.visualizer) {
+      // No bitmap -- use visualizer HSV coloring
       const rgb32 = this.visualizer.getOverviewPixelRGB(x, y);
       r = rgb32 & 0xFF;
       g = (rgb32 >> 8) & 0xFF;
       b = (rgb32 >> 16) & 0xFF;
-      name = this.visualizer.getCellName?.(x, y) || '';
     } else {
-      // Fallback: activity-based grayscale
+      // Last fallback: activity-based warm tone
       const v = Math.min(255, Math.floor(activity * 255));
       r = v; g = Math.floor(v * 0.7); b = Math.floor(v * 0.3);
     }
+
+    const name = this.visualizer?.getCellName?.(x, y) || '';
 
     return { rgb: [r, g, b], activity, name };
   }
@@ -159,43 +140,6 @@ export class Board6502Engine {
   summarize() {
     const B = this.size;
     const totalCells = B * B;
-
-    if (this._wasmInner) {
-      const currentTime = Number(this._wasmInner.total_cycles());
-      let activeCells = 0;
-      const recentThreshold = 10000;
-      for (let idx = 0; idx < totalCells; idx++) {
-        const timeSinceWrite = currentTime - Number(this._wasmInner.last_write_time(idx));
-        const timeSinceMove = currentTime - Number(this._wasmInner.last_move_time(idx));
-        if (timeSinceWrite < recentThreshold || timeSinceMove < recentThreshold) {
-          activeCells++;
-        }
-      }
-
-      const hashes = new Set();
-      const M = 1024;
-      for (let i = 0; i < B; i++) {
-        for (let j = 0; j < B; j++) {
-          const base = (i * B + j) * M;
-          let h = 0x811c9dc5;
-          for (let b = 0; b < M; b++) {
-            h ^= this._wasmInner.get_byte(base + b);
-            h = Math.imul(h, 0x01000193);
-          }
-          hashes.add(h >>> 0);
-        }
-      }
-
-      return {
-        activeCells,
-        totalCopies: this._totalCopies,
-        totalSwaps: this._totalSwaps,
-        uniqueHashes: hashes.size,
-        ticks: this._ticks,
-      };
-    }
-
-    // Sfotty path (unchanged)
     const currentTime = this.controller.totalCycles;
 
     let activeCells = 0;
@@ -236,14 +180,8 @@ export class Board6502Engine {
       await this._injectPreset(action.preset, action.cell);
     } else if (action.type === 'poke') {
       const [i, j] = action.cell;
-      if (this._wasmInner) {
-        const M = 1024;
-        const idx = (i * this.size + j) * M + action.offset;
-        this._wasmInner.set_byte(idx, action.value);
-      } else {
-        const idx = this.memory.ijbToByteIndex(i, j, action.offset);
-        this.memory.setByteWithoutUndo(idx, action.value);
-      }
+      const idx = this.memory.ijbToByteIndex(i, j, action.offset);
+      this.memory.setByteWithoutUndo(idx, action.value);
     }
   }
 
@@ -256,27 +194,6 @@ export class Board6502Engine {
   getBoundary(edge) {
     const B = this.size;
     const M = 1024;
-
-    if (this._wasmInner) {
-      const cells = new Uint8Array(B * M);
-      for (let k = 0; k < B; k++) {
-        let i, j;
-        switch (edge) {
-          case 'north': i = k; j = 0; break;
-          case 'south': i = k; j = B - 1; break;
-          case 'west':  i = 0; j = k; break;
-          case 'east':  i = B - 1; j = k; break;
-          default: throw new Error(`Unknown edge: ${edge}`);
-        }
-        const base = (i * B + j) * M;
-        for (let b = 0; b < M; b++) {
-          cells[k * M + b] = this._wasmInner.get_byte(base + b);
-        }
-      }
-      return cells;
-    }
-
-    // Sfotty path
     const cells = new Uint8Array(B * M);
     for (let k = 0; k < B; k++) {
       let i, j;
@@ -301,7 +218,6 @@ export class Board6502Engine {
   setBoundary(edge, data) {
     const B = this.size;
     const M = 1024;
-
     for (let k = 0; k < B; k++) {
       let i, j;
       switch (edge) {
@@ -312,11 +228,7 @@ export class Board6502Engine {
         default: throw new Error(`Unknown edge: ${edge}`);
       }
       const cellBytes = data.subarray(k * M, (k + 1) * M);
-      if (this._wasmInner) {
-        this._wasmInner.write_cell_bytes(i, j, 0, cellBytes);
-      } else {
-        writeCellBytes(this.controller, i, j, 0, cellBytes);
-      }
+      writeCellBytes(this.controller, i, j, 0, cellBytes);
     }
   }
 }
