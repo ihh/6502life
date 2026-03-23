@@ -92,6 +92,7 @@ function createUI() {
       </select>
       <span class="speed-label" id="speed-label">${speed} t/f</span>
       <input type="range" id="speed-slider" min="1" max="${MAX_SPEED}" value="${speed}" step="1">
+      <button id="btn-save">Save State</button>
     </div>
     <div id="notification" class="notification-toast"></div>
   `;
@@ -119,16 +120,15 @@ async function init() {
     size: BOARD_SIZE,
     seed: (Date.now() & 0xFFFF) ^ (Math.random() * 0xFFFF | 0),
     presets: [
-      // Colored replicators -- these write to the RGB bitmap so they show vivid colors
-      { name: 'red',   cell: [0, 0] },
-      { name: 'red',   cell: [8, 8] },
-      { name: 'green', cell: [0, BOARD_SIZE - 1] },
-      { name: 'green', cell: [8, 4] },
-      { name: 'blue',  cell: [BOARD_SIZE - 1, 0] },
-      { name: 'blue',  cell: [4, 12] },
-      // Spreaders for background activity
-      { name: 'nano-2x', cell: [BOARD_SIZE - 1, BOARD_SIZE - 1] },
-      { name: 'nano-2x', cell: [4, 4] },
+      // Colored replicators spread across corners and center
+      { name: 'red',   cell: [1, 1] },
+      { name: 'red',   cell: [BOARD_SIZE - 2, BOARD_SIZE - 2] },
+      { name: 'green', cell: [1, BOARD_SIZE - 2] },
+      { name: 'green', cell: [BOARD_SIZE - 2, 1] },
+      { name: 'blue',  cell: [Math.floor(BOARD_SIZE/2), 1] },
+      { name: 'blue',  cell: [Math.floor(BOARD_SIZE/2), BOARD_SIZE - 2] },
+      // Spreaders in the center
+      { name: 'nano-2x', cell: [Math.floor(BOARD_SIZE/2), Math.floor(BOARD_SIZE/2)] },
     ]
   });
   await engine.ready();
@@ -171,6 +171,18 @@ async function init() {
 
     // Reset dropdown
     e.target.value = '';
+  });
+
+  // Save state button — downloads board state as JSON for debugging
+  document.getElementById('btn-save').addEventListener('click', () => {
+    const state = engine.controller.state;
+    const blob = new Blob([JSON.stringify(state)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `board-${engine.clock()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   });
 
   // Auto-start

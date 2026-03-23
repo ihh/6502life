@@ -103,23 +103,22 @@ export class Board6502Engine {
     const activity = Math.exp(-timeSinceLastWrite / 100) * 0.4 +
                      Math.exp(-timeSinceLastMove / 10) * 0.6;
 
-    // Read RGB bitmap bytes from cell memory
+    // Read RGB bitmap: just first byte of each channel (not OR of all 32)
+    // Organisms write to the first byte; ORing all 32 mixes stale data
     const base = this.memory.ijbToByteIndex(x, y, 0);
-    let bitmapR = 0, bitmapG = 0, bitmapB = 0;
-    // Sum all bitmap bytes per channel to detect nonzero content
-    for (let k = 0; k < 32; k++) {
-      bitmapR |= this.memory.storage[base + 0x380 + k];
-      bitmapG |= this.memory.storage[base + 0x3A0 + k];
-      bitmapB |= this.memory.storage[base + 0x3C0 + k];
-    }
+    const bitmapR = this.memory.storage[base + 0x380];
+    const bitmapG = this.memory.storage[base + 0x3A0];
+    const bitmapB = this.memory.storage[base + 0x3C0];
 
+    // Determine the dominant color from bitmap (which single channel is strongest?)
+    const maxChannel = Math.max(bitmapR, bitmapG, bitmapB);
     let r, g, b;
-    if (bitmapR || bitmapG || bitmapB) {
-      // Cell has bitmap data -- use the dominant channel color, scaled by activity
+    if (maxChannel > 128) {
+      // Cell has strong bitmap signal — use it, scaled by activity
       const bright = Math.min(1.0, 0.3 + activity * 1.5);
-      r = bitmapR ? Math.min(255, Math.floor(255 * bright)) : Math.floor(30 * bright);
-      g = bitmapG ? Math.min(255, Math.floor(255 * bright)) : Math.floor(30 * bright);
-      b = bitmapB ? Math.min(255, Math.floor(255 * bright)) : Math.floor(30 * bright);
+      r = Math.floor(bitmapR * bright);
+      g = Math.floor(bitmapG * bright);
+      b = Math.floor(bitmapB * bright);
     } else if (this.visualizer) {
       // No bitmap -- use visualizer HSV coloring
       const rgb32 = this.visualizer.getOverviewPixelRGB(x, y);
