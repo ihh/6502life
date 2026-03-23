@@ -47,6 +47,32 @@ The partner's board is rendered from the boundary data you receive —
 you only see their edge strip, not their full board. The rest is
 inferred (greyed out or shown as a gradient fading to dark).
 
+## Edge ownership: each player owns their own board
+
+There is no "shared edge." Each player is authoritative over their
+own board at all times. The edge share is a mutual read:
+
+- You SEND your edge strip to them
+- They SEND their edge strip to you
+- You APPLY their data to your boundary cells
+- They APPLY your data to their boundary cells
+
+This means:
+- **Simultaneous writes:** not a problem. Each player's writes affect
+  their local board. Edge shares overwrite boundary cells with the
+  partner's latest state. Last-share-wins.
+- **Missed messages:** your board keeps running with stale boundary
+  data. No rollback needed. Next successful share brings fresh data.
+- **Ignoring messages:** you're solo mining with a frozen boundary.
+  No social multiplier (partner won't sign your blocks). The chain
+  reveals the truth.
+
+## Niche reward: 0.69 bonus on next coin
+
+One Niche detection per pairing session (not per event). Requires
+minimum session duration to prevent connect/disconnect gaming.
+The bonus applies to the next coin mined after Niche is detected.
+
 ## No "moves" — just boundaries
 
 Unlike sokoscript where players send keystroke commands, 6502life
