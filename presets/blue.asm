@@ -1,17 +1,7 @@
 ; Blue: rock-paper-scissors ecology (BLUE team)
-; Type tag at $A5 = 3 (blue)
-LDA #$03
-STA $A5
-LDA #$62           ; 'b'
-STA $03E0
-LDA #$6C           ; 'l'
-STA $03E1
-LDA #$75           ; 'u'
-STA $03E2
-; Blue bitmap
-LDA #$FF
-STA $03C0
-STA $03C1
+; Hue byte at $3A0: 170 = blue (hue ≈ 240°)
+LDA #$AA
+STA $03A0
 @start:
 BRK
 .byte $F5

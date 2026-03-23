@@ -80,12 +80,16 @@ class BoardMemory {
     get displayNameBytes() { return 32 }
     get displayNameAddr() { return 0x03E0 }
 
-    // RGB bitmap (96 bytes)
+    // Monochrome bitmap (32 bytes) + hue byte
     get bitmapPixelsPerSide() { return 16 }  // bits per dimension (X,Y)
-    get bitmapBytes() { return this.bitmapPixelsPerSide * this.bitmapPixelsPerSide / 8 }  // bytes per channel = 32
-    get bitmapAddrR() { return 0x0380 }  // red
-    get bitmapAddrG() { return 0x03A0 }  // green
-    get bitmapAddrB() { return 0x03C0 }  // blue
+    get bitmapBytes() { return this.bitmapPixelsPerSide * this.bitmapPixelsPerSide / 8 }  // 32 bytes
+    get bitmapAddr() { return 0x0380 }       // 32-byte monochrome bitmap (1 bit/pixel)
+    get hueAddr() { return 0x03A0 }          // 1 byte: hue (0-255 maps to 0-360° HSV)
+    // 0x03A1-0x03DF: available for future use
+    // Legacy aliases for backward compatibility
+    get bitmapAddrR() { return 0x0380 }
+    get bitmapAddrG() { return 0x03A0 }
+    get bitmapAddrB() { return 0x03C0 }
 
     // 2. Memory map - ROM
     // Lookup tables for common symmetry operations

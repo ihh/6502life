@@ -103,22 +103,30 @@ export class Board6502Engine {
     const activity = Math.exp(-timeSinceLastWrite / 100) * 0.4 +
                      Math.exp(-timeSinceLastMove / 10) * 0.6;
 
-    // Read RGB bitmap: just first byte of each channel (not OR of all 32)
-    // Organisms write to the first byte; ORing all 32 mixes stale data
+    // Check cell's hue byte at 0x3A0. If nonzero, use it as the cell color.
+    // The hue byte (0-255) maps to HSV hue (0-360°), rendered at full saturation
+    // with brightness proportional to activity.
     const base = this.memory.ijbToByteIndex(x, y, 0);
-    const bitmapR = this.memory.storage[base + 0x380];
-    const bitmapG = this.memory.storage[base + 0x3A0];
-    const bitmapB = this.memory.storage[base + 0x3C0];
+    const hue = this.memory.storage[base + 0x3A0];
 
-    // Determine the dominant color from bitmap (which single channel is strongest?)
-    const maxChannel = Math.max(bitmapR, bitmapG, bitmapB);
     let r, g, b;
-    if (maxChannel > 128) {
-      // Cell has strong bitmap signal — use it, scaled by activity
-      const bright = Math.min(1.0, 0.3 + activity * 1.5);
-      r = Math.floor(bitmapR * bright);
-      g = Math.floor(bitmapG * bright);
-      b = Math.floor(bitmapB * bright);
+    if (hue > 0) {
+      // Convert hue byte to RGB (HSV with S=1, V=activity-scaled)
+      const h = (hue / 255) * 360;
+      const v = Math.min(1.0, 0.3 + activity * 1.5);
+      const c = v;
+      const x2 = c * (1 - Math.abs((h / 60) % 2 - 1));
+      const m = 0;
+      let r1, g1, b1;
+      if (h < 60)       { r1 = c; g1 = x2; b1 = 0; }
+      else if (h < 120) { r1 = x2; g1 = c; b1 = 0; }
+      else if (h < 180) { r1 = 0; g1 = c; b1 = x2; }
+      else if (h < 240) { r1 = 0; g1 = x2; b1 = c; }
+      else if (h < 300) { r1 = x2; g1 = 0; b1 = c; }
+      else              { r1 = c; g1 = 0; b1 = x2; }
+      r = Math.floor((r1 + m) * 255);
+      g = Math.floor((g1 + m) * 255);
+      b = Math.floor((b1 + m) * 255);
     } else if (this.visualizer) {
       // No bitmap -- use visualizer HSV coloring
       const rgb32 = this.visualizer.getOverviewPixelRGB(x, y);
