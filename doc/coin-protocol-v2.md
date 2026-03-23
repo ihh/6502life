@@ -107,13 +107,14 @@ A Sybil attacker with 1000 self-attesting boards has:
 
 The attack produces nothing of value without engaging real players.
 
-## Summary
+## The five coin operations
 
-The protocol is minimal:
-- **Earn** coins by simulating
-- **Spend** coins to make Moves
-- **Trade** coins at share events or when selling timestamps
-- **Prove** your history via Merkle tree
+1. **Earn** — simulate T_coin ticks → 1 coin minted on your chain
+2. **Spend** — make a Move on your board → deducts coins from your ledger
+3. **Trade** — at a share event, exchange your-board-coins ↔ their-board-coins
+4. **Grant** — during a share, your partner earns coins on your board (and vice versa)
+5. **Timestamp** — optionally let previous share partners spend their your-board-coins by timestamping their Moves on your board
 
-Everything else — reputation, score, exchange rates, interestingness,
-trust — is emergent, subjective, and lives outside the protocol.
+That's it. Everything else — reputation, score, exchange rates,
+interestingness, trust — is emergent, subjective, and lives outside
+the protocol.
