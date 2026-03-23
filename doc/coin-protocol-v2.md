@@ -19,6 +19,16 @@ input events) on your board.
 Coins are per-board. My-board-coins can only be spent on my board.
 There is no universal currency.
 
+**Ledger:** Each board's chain is the sole authoritative ledger for
+that board's coins. It records: coins minted (one per T_coin ticks),
+coins earned by visitors (from shares/timestamps), coins spent on
+Moves, coins traded in/out at share events. All entries are signed
+by the board owner.
+
+**Balances:** Your balance on someone else's board is a function of
+THEIR chain, not yours. Anyone can compute it by reading their public
+chain. You can't forge a balance because it requires their signature.
+
 ### 3. Signing (Sharing)
 
 You and another player temporarily merge your boards, simulate the
@@ -26,8 +36,13 @@ merged board for an agreed duration, split, and both sign the shared
 period. During this:
 
 - You each earn coins on the OTHER's board
-- You can exchange coins (on any boards, not just yours and theirs)
+- You can trade coins between your two boards (I give you N of
+  my-board-coins, you give me M of your-board-coins)
 - Both sign each other's chain for the shared period
+
+Trades are between the two boards involved. No third-party currencies.
+The exchange rate is negotiated between players. The protocol just
+records that the trade happened (signed by both).
 
 Signing events are one of two opportunities to exchange coins.
 
@@ -35,8 +50,8 @@ Signing events are one of two opportunities to exchange coins.
 
 You may optionally offer to timestamp other players' Moves on your
 board. They send you a Move request, you grant a signed timestamp,
-they pay you in coins (on your board, or on any other board — the
-price is negotiated). This is the second opportunity to exchange coins.
+they pay you in your-board-coins. This is the second opportunity to
+exchange coins.
 
 Most players won't offer this. It requires uptime, opens your board
 to others' inputs, and drains battery. It's for enthusiasts running
