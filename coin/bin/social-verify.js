@@ -19,7 +19,6 @@
 import { readFileSync } from 'node:fs';
 import { LifeEngine } from '../engines/life.js';
 import { verifySocialSession } from '../social-session.js';
-import { computeCoinValue, sessionToSummary } from '../economics.js';
 
 function parseArgs(argv) {
   const args = {
@@ -108,11 +107,8 @@ function main() {
     skipReplay: args.skipReplay
   });
 
-  // Economics
-  const summaryA = sessionToSummary(sessionA);
-  const summaryB = sessionToSummary(sessionB);
-  const valueA = computeCoinValue(summaryA);
-  const valueB = computeCoinValue(summaryB);
+  const lastBlockA = sessionA.blocks[sessionA.blocks.length - 1];
+  const lastBlockB = sessionB.blocks[sessionB.blocks.length - 1];
 
   const output = {
     valid: result.valid,
@@ -121,13 +117,13 @@ function main() {
       id: sessionA.id,
       blocks: sessionA.blocks.length,
       finalTick: sessionA.finalTick,
-      coinValue: valueA.totalValue
+      coinBalance: lastBlockA?.coinBalance ?? 0,
     },
     sessionB: {
       id: sessionB.id,
       blocks: sessionB.blocks.length,
       finalTick: sessionB.finalTick,
-      coinValue: valueB.totalValue
+      coinBalance: lastBlockB?.coinBalance ?? 0,
     }
   };
 
@@ -136,8 +132,8 @@ function main() {
   } else {
     if (result.valid) {
       log('VERIFICATION PASSED');
-      log(`  Session A: ${sessionA.blocks.length} blocks, value=${valueA.totalValue.toFixed(2)}`);
-      log(`  Session B: ${sessionB.blocks.length} blocks, value=${valueB.totalValue.toFixed(2)}`);
+      log(`  Session A: ${sessionA.blocks.length} blocks, balance=${output.sessionA.coinBalance.toFixed(4)}`);
+      log(`  Session B: ${sessionB.blocks.length} blocks, balance=${output.sessionB.coinBalance.toFixed(4)}`);
     } else {
       log('VERIFICATION FAILED');
       for (const err of result.errors) {

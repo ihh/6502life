@@ -128,7 +128,11 @@ function main() {
 
   // Summary output
   const summary = engine.summarize();
-  const coin = {
+  const coinBalance = record.coinBalance ?? 0;
+  const coinsEarnedTotal = record.finalTick / 1000; // T_coin default = 1000
+  const coinsSpent = record.inputs.length; // 1 coin per Move
+
+  const result = {
     sessionId: record.id,
     gameId: 'life',
     boardSize: `${args.size}x${args.size}`,
@@ -136,27 +140,29 @@ function main() {
     totalTicks: record.finalTick,
     blocks: record.blocks.length,
     wallTimeMs: elapsedMs,
+    coinsEarned: coinsEarnedTotal,
+    coinsSpent,
+    coinBalance,
     liveCells: summary.liveCells,
     density: summary.density,
-    totalBorn: summary.totalBorn,
-    totalDied: summary.totalDied,
     verified: verifyResult?.valid ?? null,
     sessionFile: args.out
   };
 
   if (args.json) {
-    console.log(JSON.stringify(coin, null, 2));
+    console.log(JSON.stringify(result, null, 2));
   } else {
-    log('\n--- COIN MINTED ---');
-    log(`  Session:    ${coin.sessionId}`);
-    log(`  Game:       ${coin.gameId} (${coin.boardSize})`);
-    log(`  Ticks:      ${coin.totalTicks}`);
-    log(`  Blocks:     ${coin.blocks}`);
-    log(`  Wall time:  ${(coin.wallTimeMs / 1000).toFixed(1)}s`);
-    log(`  Live cells: ${coin.liveCells} (${(coin.density * 100).toFixed(1)}%)`);
-    log(`  Born/Died:  ${coin.totalBorn}/${coin.totalDied}`);
-    if (coin.verified !== null) {
-      log(`  Verified:   ${coin.verified ? 'YES' : 'FAILED'}`);
+    log('\n--- SESSION COMPLETE ---');
+    log(`  Session:      ${result.sessionId}`);
+    log(`  Game:         ${result.gameId} (${result.boardSize})`);
+    log(`  Ticks:        ${result.totalTicks}`);
+    log(`  Blocks:       ${result.blocks}`);
+    log(`  Wall time:    ${(result.wallTimeMs / 1000).toFixed(1)}s`);
+    log(`  Coins earned: ${result.coinsEarned.toFixed(2)}`);
+    log(`  Coins spent:  ${result.coinsSpent}`);
+    log(`  Balance:      ${result.coinBalance.toFixed(4)} (after decay)`);
+    if (result.verified !== null) {
+      log(`  Verified:     ${result.verified ? 'YES' : 'FAILED'}`);
     }
   }
 }

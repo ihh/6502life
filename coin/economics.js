@@ -1,139 +1,112 @@
 /**
- * Coin economics — solo mining rate decay, social multiplier, niche bonus.
+ * Coin economics v2 — local rate limiter with earn, spend, and decay.
  *
- * Solo mining rate decays with a configurable half-life since the last
- * social pairing. Social sessions apply a flat multiplier. Niche events
- * (cross-board organism presence) earn a per-event bonus.
+ * Coins are a metering mechanism. They exist on your board, stay on your
+ * board, and cannot be transferred.
  *
- * All parameters are configurable via a coinParams object, kept separate
- * from board/engine parameters.
+ * - Earn: one coin per T_coin ticks of simulation (faster during shares)
+ * - Spend: making a Move costs coins
+ * - Decay: coins halve over a fixed half-life (use them or lose them)
  *
  * @module coin/economics
  */
 
 /**
- * Default coin parameters. Override any subset via coinParams.
+ * Default coin parameters. Override any subset via params.
  */
 export const DEFAULT_COIN_PARAMS = {
-  /** Hours between solo rate halvings */
-  soloHalfLife: 24,
-  /** Minimum solo mining rate (fraction of max) */
-  minSoloRate: 1 / 128,
-  /** Multiplier applied during social sessions */
-  socialMultiplier: 1.5,
-  /** Bonus coins per Niche event */
-  nicheBonus: 0.69,
+  /** Ticks per coin earned */
+  T_coin: 1000,
+  /** Multiplier on earn rate while sharing */
+  shareBoost: 2,
+  /** Half-life of coin balance in ticks */
+  coinHalfLife: 100000,
+  /** Cost in coins per Move */
+  moveCost: 1,
 };
 
 /**
- * Compute the solo mining rate given hours since last social pairing.
+ * Compute coins earned over a number of ticks.
  *
- * Rate starts at 1.0 and halves every `soloHalfLife` hours (step function,
- * not continuous decay). Clamped to `minSoloRate` at the bottom.
- *
- * @param {number} hoursSinceLastPairing
- * @param {Object} [params]
- * @param {number} [params.soloHalfLife=24]
- * @param {number} [params.minSoloRate=1/128]
- * @returns {number} rate in (0, 1]
+ * @param {number} ticks - simulation ticks elapsed
+ * @param {boolean} isSharing - whether the player is in a share session
+ * @param {Object} [params] - overrides for DEFAULT_COIN_PARAMS
+ * @returns {number} coins earned
  */
-export function soloMiningRate(hoursSinceLastPairing, params = {}) {
-  const halfLife = params.soloHalfLife ?? DEFAULT_COIN_PARAMS.soloHalfLife;
-  const minRate = params.minSoloRate ?? DEFAULT_COIN_PARAMS.minSoloRate;
-  const halvings = Math.floor(hoursSinceLastPairing / halfLife);
-  return Math.max(minRate, Math.pow(0.5, halvings));
+export function coinsEarned(ticks, isSharing, params = {}) {
+  const baseRate = 1 / (params.T_coin ?? DEFAULT_COIN_PARAMS.T_coin);
+  const shareMultiplier = isSharing ? (params.shareBoost ?? DEFAULT_COIN_PARAMS.shareBoost) : 1;
+  return ticks * baseRate * shareMultiplier;
 }
 
 /**
- * @typedef {Object} CoinContext
- * @property {number|null} lastPairingTime - timestamp (ms) of last social session
- * @property {boolean} isSocial - whether this is a social session
- * @property {number} nicheEvents - count of Niche events in this session
- * @property {number} [now] - current timestamp (ms), defaults to Date.now()
- */
-
-/**
- * @typedef {Object} CoinResult
- * @property {number} baseCoins - raw block count
- * @property {number} soloRate - solo mining rate (1.0 if social or just paired)
- * @property {number} socialMultiplier - 1.0 for solo, params.socialMultiplier for social
- * @property {number} nicheBonus - total niche bonus (nicheEvents * params.nicheBonus)
- * @property {number} totalCoins - baseCoins * soloRate * socialMultiplier + nicheBonus
- */
-
-/**
- * @typedef {Object} SessionSummary
- * @property {string} sessionId
- * @property {string} gameId
- * @property {number} totalTicks
- * @property {number} wallTimeMs
- * @property {number} blockCount
- * @property {boolean} isSocial - whether this was a social mining session
- * @property {string|null} partnerPubkey - partner's public key (hex) if social
- * @property {Record<string, number>} lastSummary - engine summary from final block
- */
-
-/**
- * Compute coin value for a session, incorporating solo decay, social
- * multiplier, and niche bonus.
+ * Apply exponential decay to a coin balance.
  *
- * @param {SessionSummary} session
- * @param {CoinContext} context
- * @param {Object} [coinParams] - overrides for DEFAULT_COIN_PARAMS
- * @returns {CoinResult}
+ * @param {number} balance - current balance
+ * @param {number} ticksElapsed - ticks since balance was last computed
+ * @param {Object} [params] - overrides for DEFAULT_COIN_PARAMS
+ * @returns {number} decayed balance
  */
-export function computeCoinValue(session, context = {}, coinParams = {}) {
-  const params = { ...DEFAULT_COIN_PARAMS, ...coinParams };
+export function decayedBalance(balance, ticksElapsed, params = {}) {
+  const halfLife = params.coinHalfLife ?? DEFAULT_COIN_PARAMS.coinHalfLife;
+  return balance * Math.pow(0.5, ticksElapsed / halfLife);
+}
 
-  const baseCoins = session.blockCount;
+/**
+ * Check if the player can afford a Move.
+ *
+ * @param {number} balance - current coin balance
+ * @param {number} [moveCost] - cost per Move (default from params)
+ * @returns {boolean}
+ */
+export function canAffordMove(balance, moveCost = DEFAULT_COIN_PARAMS.moveCost) {
+  return balance >= moveCost;
+}
 
-  // Solo decay: hours since last pairing
-  let soloRate = 1.0;
-  if (!context.isSocial && context.lastPairingTime != null) {
-    const now = context.now ?? Date.now();
-    const hoursSince = (now - context.lastPairingTime) / (1000 * 60 * 60);
-    soloRate = soloMiningRate(hoursSince, params);
+/**
+ * @typedef {Object} HistoryEntry
+ * @property {number} tick - simulation tick of this event
+ * @property {'earn'|'spend'} type - event type
+ * @property {number} amount - coins earned or spent
+ * @property {boolean} [isSharing] - whether earning happened during a share
+ */
+
+/**
+ * Compute the current coin balance from a full history of earn/spend events.
+ *
+ * Applies decay between each event and from the last event to currentTick.
+ *
+ * @param {HistoryEntry[]} history - ordered list of earn/spend events
+ * @param {number} currentTick - the tick at which to evaluate the balance
+ * @param {Object} [params] - overrides for DEFAULT_COIN_PARAMS
+ * @returns {number} current balance after all events and decay
+ */
+export function computeBalance(history, currentTick, params = {}) {
+  let balance = 0;
+  let lastTick = 0;
+
+  for (const entry of history) {
+    // Apply decay from last event to this one
+    const elapsed = entry.tick - lastTick;
+    if (elapsed > 0) {
+      balance = decayedBalance(balance, elapsed, params);
+    }
+
+    // Apply earn or spend
+    if (entry.type === 'earn') {
+      balance += entry.amount;
+    } else if (entry.type === 'spend') {
+      balance -= entry.amount;
+    }
+
+    lastTick = entry.tick;
   }
 
-  // Social multiplier
-  const socialMult = context.isSocial ? params.socialMultiplier : 1.0;
+  // Apply final decay to currentTick
+  const finalElapsed = currentTick - lastTick;
+  if (finalElapsed > 0) {
+    balance = decayedBalance(balance, finalElapsed, params);
+  }
 
-  // Niche bonus
-  const nicheEvents = context.nicheEvents ?? 0;
-  const niche = nicheEvents * params.nicheBonus;
-
-  const totalCoins = baseCoins * soloRate * socialMult + niche;
-
-  return {
-    baseCoins,
-    soloRate,
-    socialMultiplier: socialMult,
-    nicheBonus: niche,
-    totalCoins,
-  };
-}
-
-/**
- * Build a SessionSummary from a finalized session record.
- *
- * Works with both solo sessions (from coin/session.js) and social
- * sessions (from coin/social-session.js).
- *
- * @param {Object} record - session record (solo or social)
- * @returns {SessionSummary}
- */
-export function sessionToSummary(record) {
-  const blocks = record.blocks || [];
-  const lastBlock = blocks[blocks.length - 1];
-
-  return {
-    sessionId: record.id,
-    gameId: record.config?.gameId ?? 'unknown',
-    totalTicks: record.finalTick ?? 0,
-    wallTimeMs: blocks.reduce((sum, b) => sum + (b.wallTimeMs || 0), 0),
-    blockCount: blocks.length,
-    isSocial: !!record.partnerPubkeyHex,
-    partnerPubkey: record.partnerPubkeyHex ?? null,
-    lastSummary: lastBlock?.summary ?? {}
-  };
+  return balance;
 }

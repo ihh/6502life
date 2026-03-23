@@ -28,7 +28,6 @@
 import { writeFileSync } from 'node:fs';
 import { LifeEngine } from '../engines/life.js';
 import { SocialSession, verifySocialSession } from '../social-session.js';
-import { computeCoinValue, sessionToSummary } from '../economics.js';
 
 function parseArgs(argv) {
   const args = {
@@ -176,11 +175,13 @@ function main() {
     }
   }
 
-  // Economics
-  const summaryA = sessionToSummary(sessionA);
-  const summaryB = sessionToSummary(sessionB);
-  const valueA = computeCoinValue(summaryA);
-  const valueB = computeCoinValue(summaryB);
+  // Coin balances from session blocks
+  const lastBlockA = sessionA.blocks[sessionA.blocks.length - 1];
+  const lastBlockB = sessionB.blocks[sessionB.blocks.length - 1];
+  const balanceA = lastBlockA?.coinBalance ?? 0;
+  const balanceB = lastBlockB?.coinBalance ?? 0;
+  const coinsEarnedA = sessionA.finalTick / 1000 * 2; // sharing rate = 2x
+  const coinsEarnedB = sessionB.finalTick / 1000 * 2;
 
   // Output
   const result = {
@@ -188,23 +189,15 @@ function main() {
       sessionId: sessionA.id,
       blocks: sessionA.blocks.length,
       finalTick: sessionA.finalTick,
-      coinValue: valueA.totalValue,
-      multipliers: {
-        activity: valueA.activityMultiplier,
-        social: valueA.socialMultiplier,
-        network: valueA.networkMultiplier
-      }
+      coinsEarned: coinsEarnedA,
+      coinBalance: balanceA,
     },
     playerB: {
       sessionId: sessionB.id,
       blocks: sessionB.blocks.length,
       finalTick: sessionB.finalTick,
-      coinValue: valueB.totalValue,
-      multipliers: {
-        activity: valueB.activityMultiplier,
-        social: valueB.socialMultiplier,
-        network: valueB.networkMultiplier
-      }
+      coinsEarned: coinsEarnedB,
+      coinBalance: balanceB,
     },
     wallTimeMs: elapsedMs,
     verified: verifyResult?.valid ?? null,
@@ -215,11 +208,9 @@ function main() {
   if (args.json) {
     console.log(JSON.stringify(result, null, 2));
   } else {
-    log('\n--- SOCIAL MINING COMPLETE ---');
-    log(`  Player A: ${result.playerA.blocks} blocks, value=${result.playerA.coinValue.toFixed(2)}`);
-    log(`    Activity: ${result.playerA.multipliers.activity.toFixed(2)}x, Social: ${result.playerA.multipliers.social.toFixed(2)}x`);
-    log(`  Player B: ${result.playerB.blocks} blocks, value=${result.playerB.coinValue.toFixed(2)}`);
-    log(`    Activity: ${result.playerB.multipliers.activity.toFixed(2)}x, Social: ${result.playerB.multipliers.social.toFixed(2)}x`);
+    log('\n--- SOCIAL SESSION COMPLETE ---');
+    log(`  Player A: ${result.playerA.blocks} blocks, earned=${result.playerA.coinsEarned.toFixed(2)}, balance=${result.playerA.coinBalance.toFixed(4)}`);
+    log(`  Player B: ${result.playerB.blocks} blocks, earned=${result.playerB.coinsEarned.toFixed(2)}, balance=${result.playerB.coinBalance.toFixed(4)}`);
     log(`  Wall time: ${(elapsedMs / 1000).toFixed(1)}s`);
     if (result.verified !== null) {
       log(`  Verified:  ${result.verified ? 'YES' : 'FAILED'}`);

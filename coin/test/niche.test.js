@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { Board6502Engine } from '../engines/board6502.js';
-import { SocialSession } from '../social-session.js';
 import { detectNicheEvents, DEFAULT_NICHE_BONUS } from '../niche.js';
 import { writeCellBytes, readCellMemory } from '../../engine/board.js';
 import { assemble } from '../../engine/assembler.js';
@@ -195,100 +194,5 @@ describe('Niche event detection', () => {
   });
 });
 
-// --- Niche bonus in session block tests ---
-
-describe('Niche bonus in session blocks', () => {
-  it('Niche bonus appears in session block when provenance detected', () => {
-    const configA = makeConfig(42, 4);
-    const configB = makeConfig(99, 4);
-    const engineA = makeEngine(42, 4);
-    const engineB = makeEngine(99, 4);
-
-    const walletA = 'wallet-alice';
-    const walletB = 'wallet-bob';
-
-    // Set board owners so commitWrites can tag cells
-    engineA.controller.boardOwner = walletA;
-    engineB.controller.boardOwner = walletB;
-
-    // Pre-tag a cell on B as written by A (simulating cross-board copy)
-    engineB.controller.lastWriter[0] = walletA;
-
-    const session = new SocialSession(engineA, engineB, configA, configB, {
-      blockInterval: 50,
-      shareInterval: 10,
-      walletA,
-      walletB,
-      enableNiche: true,
-    });
-
-    session.step(50);
-    const { sessionA, sessionB } = session.finalize();
-
-    // Block A should have niche events (A's organisms found on B)
-    const blockA = sessionA.blocks[0];
-    expect(blockA.nicheEvents).toBeDefined();
-    expect(blockA.nicheEvents.length).toBeGreaterThanOrEqual(1);
-    expect(blockA.nicheBonus).toBeGreaterThan(0);
-    expect(blockA.nicheBonus).toBe(blockA.nicheEvents.length * DEFAULT_NICHE_BONUS);
-  });
-
-  it('Niche bonus is zero when no cross-board content', () => {
-    const configA = makeConfig(42, 4);
-    const configB = makeConfig(99, 4);
-    const engineA = makeEngine(42, 4);
-    const engineB = makeEngine(99, 4);
-
-    const walletA = 'wallet-alice';
-    const walletB = 'wallet-bob';
-
-    const session = new SocialSession(engineA, engineB, configA, configB, {
-      blockInterval: 50,
-      shareInterval: 10,
-      walletA,
-      walletB,
-      enableNiche: true,
-    });
-
-    session.step(50);
-    const { sessionA } = session.finalize();
-
-    const blockA = sessionA.blocks[0];
-    // No provenance events expected (no pre-tagged cells)
-    const provenanceEvents = (blockA.nicheEvents || []).filter(e => e.type === 'provenance');
-    expect(provenanceEvents.length).toBe(0);
-  });
-
-  it('Niche events are included in block hash (verifiable)', () => {
-    const configA = makeConfig(42, 4);
-    const configB = makeConfig(99, 4);
-    const engineA = makeEngine(42, 4);
-    const engineB = makeEngine(99, 4);
-
-    const walletA = 'wallet-alice';
-    const walletB = 'wallet-bob';
-
-    // Tag a cell to create a Niche event
-    engineB.controller.lastWriter[0] = walletA;
-
-    const session = new SocialSession(engineA, engineB, configA, configB, {
-      blockInterval: 50,
-      shareInterval: 10,
-      walletA,
-      walletB,
-      enableNiche: true,
-    });
-
-    session.step(50);
-    const { sessionA } = session.finalize();
-
-    // Verify the block has a valid blockHash (non-empty)
-    const blockA = sessionA.blocks[0];
-    expect(blockA.blockHash).toBeTruthy();
-    expect(blockA.blockHash.length).toBe(64);
-
-    // The nicheEvents are part of the canonical block string,
-    // so changing them would change the hash
-    expect(blockA.nicheEvents.length).toBeGreaterThan(0);
-  });
-});
+// Note: Niche detection is kept for display purposes only.
+// It no longer affects coin rewards (v2 protocol).

@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { sha256, toHex } from './hash.js';
 import { BoardMerkleTree } from './merkle.js';
+import { coinsEarned, decayedBalance, canAffordMove, DEFAULT_COIN_PARAMS } from './economics.js';
 
 /**
  * @typedef {Object} Block
@@ -49,12 +50,17 @@ export class Session {
     this.config = config;
     this.blockInterval = options.blockInterval ?? 10000;
 
-    /**
-     * Timestamp (ms) of the last social pairing, used for solo mining
-     * rate decay. Null means the player has never paired.
-     * @type {number|null}
-     */
-    this.lastPairingTime = options.lastPairingTime ?? null;
+    /** Whether this session is a share session (earns at accelerated rate) */
+    this.isSharing = options.isSharing ?? false;
+
+    /** Coin economics parameters */
+    this.coinParams = { ...DEFAULT_COIN_PARAMS, ...options.coinParams };
+
+    /** Current coin balance */
+    this.coinBalance = options.initialBalance ?? 0;
+
+    /** Tick of last balance update (for decay) */
+    this._lastBalanceTick = 0;
 
     /** @type {import('./engine.js').Input[]} */
     this.inputs = [];
@@ -83,7 +89,23 @@ export class Session {
    * Apply an input to the engine and record it.
    * @param {import('./engine.js').Input} input
    */
-  async applyInput(input) {
+  /**
+   * Apply an input (Move) to the engine, spending coins.
+   * Throws if balance is insufficient.
+   * @param {import('./engine.js').Input} input
+   * @param {Object} [options]
+   * @param {boolean} [options.skipCoinCheck=false] - bypass coin check
+   */
+  async applyInput(input, options = {}) {
+    if (!options.skipCoinCheck) {
+      // Update balance with decay before checking
+      this._updateBalance();
+      const cost = this.coinParams.moveCost;
+      if (!canAffordMove(this.coinBalance, cost)) {
+        throw new Error(`Insufficient coins: balance=${this.coinBalance.toFixed(4)}, cost=${cost}`);
+      }
+      this.coinBalance -= cost;
+    }
     await this.engine.applyInput(input);
     this.inputs.push(input);
     this._blockInputs.push(input);
@@ -122,10 +144,29 @@ export class Session {
    * Produce a block at the current engine state.
    * @private
    */
+  /**
+   * Update coin balance: apply decay and earn coins for elapsed ticks.
+   * @private
+   */
+  _updateBalance() {
+    const currentTick = this.engine.clock();
+    const elapsed = currentTick - this._lastBalanceTick;
+    if (elapsed > 0) {
+      // Apply decay first
+      this.coinBalance = decayedBalance(this.coinBalance, elapsed, this.coinParams);
+      // Then earn
+      this.coinBalance += coinsEarned(elapsed, this.isSharing, this.coinParams);
+      this._lastBalanceTick = currentTick;
+    }
+  }
+
   _produceBlock() {
     const endState = this.engine.serialize();
     const endStateHash = toHex(sha256(endState));
     const now = Date.now();
+
+    // Update coin balance at block boundary
+    this._updateBalance();
 
     const prevHash = this.blocks.length > 0
       ? this.blocks[this.blocks.length - 1]._hash
@@ -144,7 +185,8 @@ export class Session {
       endTick: this.engine.clock(),
       wallTimeMs: now - this._blockStartWallTime,
       summary: this.engine.summarize(),
-      merkleRoot: this.merkleTree.root()
+      merkleRoot: this.merkleTree.root(),
+      coinBalance: this.coinBalance,
     };
 
     // Compute block hash (hash of canonical block content)
@@ -176,7 +218,7 @@ export class Session {
       initialStateHex: this.initialStateHex,
       inputs: this.inputs,
       finalTick: this.engine.clock(),
-      lastPairingTime: this.lastPairingTime,
+      coinBalance: this.coinBalance,
       merkleTree: this.merkleTree.serialize(),
       merkleRoot: this.merkleTree.root(),
       blocks: this.blocks.map(b => ({
@@ -190,6 +232,7 @@ export class Session {
         wallTimeMs: b.wallTimeMs,
         summary: b.summary,
         merkleRoot: b.merkleRoot,
+        coinBalance: b.coinBalance,
         hash: b._hash
       }))
     };

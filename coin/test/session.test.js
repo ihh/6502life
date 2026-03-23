@@ -14,7 +14,8 @@ describe('Session', () => {
     const engine = new LifeEngine();
     engine.init(config);
     return new Session(engine, config, {
-      blockInterval: opts.blockInterval ?? 100
+      blockInterval: opts.blockInterval ?? 100,
+      coinParams: opts.coinParams,
     });
   }
 
@@ -57,7 +58,7 @@ describe('Session', () => {
   });
 
   it('records inputs', async () => {
-    const session = makeSession({ blockInterval: 100 });
+    const session = makeSession({ blockInterval: 100, coinParams: { moveCost: 0 } });
     session.step(50);
     await session.applyInput({ tick: 50, action: { type: 'set', x: 0, y: 0, value: 1 } });
     session.step(150);
@@ -120,7 +121,7 @@ describe('Session verification', () => {
     const config = { gameId: 'life', width: 8, height: 8, seed: 99 };
     const engine = new LifeEngine();
     engine.init(config);
-    const session = new Session(engine, config, { blockInterval: 50 });
+    const session = new Session(engine, config, { blockInterval: 50, coinParams: { moveCost: 0 } });
 
     session.step(25);
     await session.applyInput({ tick: 25, action: { type: 'set', x: 3, y: 3, value: 1 } });

@@ -13,9 +13,10 @@ import { readCellMemory } from '../engine/board.js';
 import { minhash, minhashSimilarity } from '../cli/lib/probe/fingerprint.js';
 
 /**
- * Default Niche bonus per event (in coins).
+ * Default Niche bonus per event (informational, no longer affects coins).
+ * @deprecated Niche detection is kept for display purposes only.
  */
-export const DEFAULT_NICHE_BONUS = 0.69;
+export const DEFAULT_NICHE_BONUS = 0;
 
 /**
  * Default MinHash similarity threshold for Niche detection.
