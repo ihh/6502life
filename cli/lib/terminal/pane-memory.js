@@ -74,6 +74,7 @@ export class MemoryPane {
     constructor(memory, controller) {
         this.memory = memory;
         this.controller = controller;
+        this.app = null; // set by TerminalApp after construction
         // The board cell whose 7x7 neighborhood we're displaying
         this.centerI = 0;
         this.centerJ = 0;
@@ -95,6 +96,8 @@ export class MemoryPane {
         this._lastCursorScreenCol = -1;
         this._lastCursorScreenRow = -1;
         this._lastRect = null;
+        // Whether this pane is currently focused (set by app before render)
+        this.focused = false;
     }
 
     get cursorAddr() {
@@ -237,7 +240,7 @@ export class MemoryPane {
         if (addr < 0) return reset + ' ';
 
         const byte = this.readByteAt(gridCol, gridRow);
-        const { char, fg: fgColor } = byteToAsciiChar(byte, pal);
+        const { char } = byteToAsciiChar(byte, pal);
 
         // Determine background color
         const isOnBorder = (gridCol % 32 === 31) || (gridRow % 32 === 31);
@@ -248,21 +251,28 @@ export class MemoryPane {
             bgColor = pcCellIdx === 0 ? pal.bgCenterPC : pal.bgPC;
         } else if (isOnBorder) {
             bgColor = pal.bgBorder;
+        } else if (this.focused) {
+            bgColor = [20, 20, 40]; // dark blue tint for active pane
         } else {
             bgColor = pal.bgDefault;
         }
 
-        // Determine region-based foreground color override
-        const byteOff = addr & 0x3FF;
-        let effectiveFg = fgColor;
-        if (byte === 0) {
-            effectiveFg = [40, 40, 50]; // dark for zero bytes
-        } else if (byteOff >= 0x0F0 && byteOff <= 0x0FF) {
-            effectiveFg = [255, 220, 80]; // yellow for register area
-        } else if (byteOff >= 0x380 && byteOff <= 0x3FF) {
-            effectiveFg = [220, 100, 255]; // magenta for bitmap/name area
-        } else if (byteOff >= 0x100 && byteOff <= 0x1FF) {
-            effectiveFg = fgColor; // stack: keep default color
+        // Determine foreground color by byte value range
+        let effectiveFg;
+        if (byte === 0x00) {
+            effectiveFg = [60, 60, 70];       // dark grey — zero/empty
+        } else if (byte <= 0x1F) {
+            effectiveFg = [255, 80, 80];       // red — control chars, BRK operands
+        } else if (byte <= 0x7E) {
+            effectiveFg = [255, 255, 255];     // bright white — printable ASCII
+        } else if (byte === 0x7F) {
+            effectiveFg = [255, 255, 0];       // yellow — DEL
+        } else if (byte <= 0x9F) {
+            effectiveFg = [220, 100, 255];     // magenta — high control / undocumented opcodes
+        } else if (byte <= 0xFE) {
+            effectiveFg = [80, 220, 255];      // cyan — high printable / data
+        } else {
+            effectiveFg = [255, 255, 100];     // bright yellow — $FF sentinel
         }
 
         if (isCursor && flashOn) {

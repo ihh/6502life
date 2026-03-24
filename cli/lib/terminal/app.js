@@ -25,7 +25,9 @@ export class TerminalApp {
 
         // Panes
         this.memoryPane = new MemoryPane(controller.memory, controller);
+        this.memoryPane.app = this;
         this.disasmPane = new DisasmPane(controller);
+        this.disasmPane.app = this;
         this.commandPane = new CommandPane();
         this.minimapPane = new MinimapPane(controller, visualizer);
 
@@ -195,6 +197,11 @@ export class TerminalApp {
                 this.memoryPane.moveCursor(dx, dy);
             }
             this.syncCursorToDisasm();
+            // Also sync disasm to show code at cursor address
+            const cursorAddr = this.memoryPane.cursorAddr;
+            if (cursorAddr >= 0) {
+                this.syncDisasmToAddress(cursorAddr);
+            }
             return;
         }
 
@@ -224,6 +231,10 @@ export class TerminalApp {
                 if (!this.disasmPane.syncToPC && this.disasmPane.disasmAddr < 0xFFFF) {
                     this.disasmPane.disasmAddr = Math.min(0xFFFF, this.disasmPane.disasmAddr + 1);
                 }
+            }
+            // Sync memory cursor to follow disasm address
+            if (!this.disasmPane.syncToPC && this.disasmPane.disasmAddr != null) {
+                this.syncMemoryToAddress(this.disasmPane.disasmAddr);
             }
             return;
         }
@@ -291,6 +302,31 @@ export class TerminalApp {
         }
     }
 
+    // Sync disassembler to show code at the given cell-local address
+    syncDisasmToAddress(addr) {
+        if (addr < 0) return;
+        const byteOff = addr & 0x3FF;
+        this.disasmPane.gotoAddr(byteOff);
+    }
+
+    // Sync memory map cursor to the given cell-local address
+    syncMemoryToAddress(addr) {
+        // addr is cell-local (0x000-0x3FF); convert to memory-mapped address
+        // Use center cell (cell index 0 in spiral) for the mapping
+        const mappedAddr = (0 << 10) | (addr & 0x3FF);
+        this.memoryPane.jumpToAddr(mappedAddr);
+    }
+
+    // Jump both panes to a given address
+    syncBothPanesToAddress(addr) {
+        // addr is cell-local (0x000-0x3FF)
+        const byteOff = addr & 0x3FF;
+        // Move memory cursor to center cell at this offset
+        const mappedAddr = (0 << 10) | byteOff;
+        this.memoryPane.jumpToAddr(mappedAddr);
+        this.disasmPane.gotoAddr(byteOff);
+    }
+
     toggleRun() {
         this.running = !this.running;
         this.needsRender = true;
@@ -346,6 +382,11 @@ export class TerminalApp {
         for (let r = 1; r <= this.layout.termH; r++) {
             out += moveTo(r, 1) + ESC + '2K';
         }
+
+        // Set focus state on panes
+        this.memoryPane.focused = (this.activePane === 'memory');
+        this.disasmPane.focused = (this.activePane === 'disasm');
+        this.minimapPane.focused = (this.activePane === 'minimap');
 
         // Render each pane
         out += this.memoryPane.render(this.layout.memory);

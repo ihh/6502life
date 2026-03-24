@@ -10,6 +10,7 @@ export class DisasmPane {
     constructor(controller) {
         this.controller = controller;
         this.memory = controller.memory;
+        this.app = null; // set by TerminalApp after construction
         // Current board cell being inspected
         this.cellI = 0;
         this.cellJ = 0;
@@ -18,6 +19,10 @@ export class DisasmPane {
         this.syncToPC = true;
         // Scroll offset (lines from top)
         this.scrollOffset = 0;
+        // Whether this pane is currently focused (set by app before render)
+        this.focused = false;
+        // The current display start address (for sync back to memory pane)
+        this.currentDisplayAddr = 0;
     }
 
     // Point disassembler at a specific address (detach from PC)
@@ -53,37 +58,46 @@ export class DisasmPane {
     render(rect) {
         const regs = readCellRegisters(this.controller, this.cellI, this.cellJ);
         let out = '';
+        const paneBg = this.focused ? bgRGB(20, 20, 40) : '';
+        const padLine = (lineOut) => {
+            if (!paneBg) return lineOut;
+            const visible = stripAnsi(lineOut).length;
+            return paneBg + lineOut + ' '.repeat(Math.max(0, rect.width - visible)) + reset;
+        };
 
         // --- Registers ---
         const row0 = rect.row;
         out += moveTo(row0, rect.col);
-        out += bold + `Cell (${this.cellI},${this.cellJ})` + reset;
+        out += padLine(bold + `Cell (${this.cellI},${this.cellJ})` + reset);
 
         out += moveTo(row0 + 1, rect.col);
-        out += `A=${fgRGB(180,220,255)}${hex(regs.A)}${reset} `;
-        out += `X=${fgRGB(180,255,180)}${hex(regs.X)}${reset} `;
-        out += `Y=${fgRGB(255,200,180)}${hex(regs.Y)}${reset} `;
-        out += `S=${fgRGB(200,200,200)}${hex(regs.S)}${reset}`;
+        let regLine = `A=${fgRGB(180,220,255)}${hex(regs.A)}${reset} `;
+        regLine += `X=${fgRGB(180,255,180)}${hex(regs.X)}${reset} `;
+        regLine += `Y=${fgRGB(255,200,180)}${hex(regs.Y)}${reset} `;
+        regLine += `S=${fgRGB(200,200,200)}${hex(regs.S)}${reset}`;
+        out += padLine(regLine);
 
         out += moveTo(row0 + 2, rect.col);
-        out += `PC=${fgRGB(255,255,100)}${hex16(regs.PC)}${reset}  `;
-        out += `P=${flagsColored(regs.P)}`;
+        let pcLine = `PC=${fgRGB(255,255,100)}${hex16(regs.PC)}${reset}  `;
+        pcLine += `P=${flagsColored(regs.P)}`;
+        out += padLine(pcLine);
 
         // Sync indicator
         out += moveTo(row0 + 3, rect.col);
         if (this.syncToPC) {
-            out += fgRGB(100, 255, 100) + 'SYNC' + reset + dim + ' [d]etach' + reset;
+            out += padLine(fgRGB(100, 255, 100) + 'SYNC' + reset + dim + ' [d]etach' + reset);
         } else {
-            out += fgRGB(255, 180, 100) + 'FREE' + reset + dim + ` @$${hex16(this.disasmAddr)} [d]sync` + reset;
+            out += padLine(fgRGB(255, 180, 100) + 'FREE' + reset + dim + ` @$${hex16(this.disasmAddr)} [d]sync` + reset);
         }
 
         // --- Separator ---
         const sepRow = row0 + 4;
         out += moveTo(sepRow, rect.col);
-        out += dim + '\u2500'.repeat(Math.min(rect.width, 40)) + reset;
+        out += padLine(dim + '\u2500'.repeat(Math.min(rect.width, 40)) + reset);
 
         // --- Disassembly ---
         const startAddr = this.syncToPC ? regs.PC : (this.disasmAddr || 0);
+        this.currentDisplayAddr = startAddr;
         const asmLines = rect.height - 6;
         if (asmLines <= 0) return out;
 
@@ -138,7 +152,7 @@ export class DisasmPane {
                 // Pad to fill the pane width and apply reverse video background
                 out += bgRGB(30, 30, 60) + line + ' '.repeat(Math.max(0, rect.width - stripAnsi(line).length)) + reset;
             } else {
-                out += line;
+                out += padLine(line);
             }
         }
 

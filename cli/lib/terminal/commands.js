@@ -55,8 +55,8 @@ export class CommandExecutor {
             case 'goto': case 'g': {
                 const addr = parseAddr(args[0]);
                 if (addr === null) return 'Usage: goto <addr>';
-                this.app.memoryPane.jumpToAddr(addr);
-                return `Cursor → $${hex16(addr)}`;
+                this.app.syncBothPanesToAddress(addr);
+                return `Both panes → $${hex16(addr)}`;
             }
 
             case 'cell': case 'c': {
@@ -517,7 +517,7 @@ const HELP_TEXT = `Debugger commands:
   s, step [N]       Step N interrupts (default 1)
   speed N           Set speed (interrupts/frame)
 
-  goto ADDR         Move memory cursor to address
+  goto ADDR         Jump both memory + disasm to address
   cell I,J          Inspect board cell (I,J)
   regs              Show current cell registers
   peek ADDR [N]     Show N bytes at address

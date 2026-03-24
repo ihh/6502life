@@ -22,6 +22,8 @@ export class MinimapPane {
         // Highlight cell
         this.highlightI = 0;
         this.highlightJ = 0;
+        // Whether this pane is currently focused
+        this.focused = false;
     }
 
     setHighlight(i, j) {

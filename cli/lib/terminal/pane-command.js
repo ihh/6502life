@@ -2,7 +2,12 @@
 // CLI input with command history and output scrollback
 
 import { moveTo, ESC, reset, dim, bold } from '../ansi.js';
-import { fgRGB } from '../ansi.js';
+import { fgRGB, bgRGB } from '../ansi.js';
+
+// Strip ANSI escape sequences to get visible character count
+function stripAnsi(str) {
+    return str.replace(/\x1b\[[0-9;]*m/g, '');
+}
 
 export class CommandPane {
     constructor() {
@@ -206,6 +211,12 @@ export class CommandPane {
 
     render(rect, hasFocus) {
         let out = '';
+        const paneBg = hasFocus ? bgRGB(20, 20, 40) : '';
+        const padLine = (lineContent) => {
+            if (!paneBg) return lineContent;
+            const visible = stripAnsi(lineContent).length;
+            return paneBg + lineContent + ' '.repeat(Math.max(0, rect.width - visible)) + reset;
+        };
 
         // Update page size based on current pane dimensions
         const outputRows = rect.height - 1; // -1 for input line
@@ -220,10 +231,12 @@ export class CommandPane {
                     const line = pageLines[i];
                     if (i === pageLines.length - 1) {
                         // Footer line: highlight it
-                        out += fgRGB(100, 200, 255) + line.slice(0, rect.width) + reset;
+                        out += padLine(fgRGB(100, 200, 255) + line.slice(0, rect.width) + reset);
                     } else {
-                        out += dim + line.slice(0, rect.width) + reset;
+                        out += padLine(dim + line.slice(0, rect.width) + reset);
                     }
+                } else {
+                    out += padLine('');
                 }
             }
         } else {
@@ -235,9 +248,9 @@ export class CommandPane {
                 const lineIdx = startLine + i;
                 if (lineIdx < this.outputLines.length) {
                     const line = this.outputLines[lineIdx];
-                    out += dim + line.slice(0, rect.width) + reset;
+                    out += padLine(dim + line.slice(0, rect.width) + reset);
                 } else {
-                    out += ' '.repeat(Math.min(rect.width, 1));
+                    out += padLine('');
                 }
             }
         }
@@ -247,11 +260,11 @@ export class CommandPane {
         out += moveTo(inputRow, rect.col);
         if (this._paginating) {
             // During pagination, show a hint instead of prompt
-            out += fgRGB(100, 200, 255) + 'n/p/s' + reset + dim + '> ' + reset;
+            out += padLine(fgRGB(100, 200, 255) + 'n/p/s' + reset + dim + '> ' + reset);
         } else {
             const prompt = hasFocus ? fgRGB(100, 255, 100) + '> ' + reset : dim + '> ' + reset;
             const input = this.inputBuffer.slice(0, rect.width - 3);
-            out += prompt + input;
+            out += padLine(prompt + input);
         }
 
         // Cursor (when focused and not paginating, show a block cursor)
