@@ -85,7 +85,11 @@ export const DEFAULT_ASCII_PALETTE = {
     highZero:   [255, 255, 100], // yellow — high-bit space (160 → 32)
     highControl:[255, 130, 180], // pink   — high-bit control (129-159, 255)
     bgDefault:  [0,   0,   0],   // black  — normal background
+    bgAlt:      [18,  18,  28],  // dark indigo — alternating cell background (checkerboard)
+    bgCenter:   [30,  25,  0],   // dark amber — center cell background
+    bgCenterAlt:[38,  32,  0],   // slightly lighter amber — center cell alt
     bgBorder:   [50,  90,  50],  // light green — cell boundary background
+    bgCenterBorder: [180, 160, 0], // bright yellow — center cell boundary
     bgPC:       [0,   0,   100], // dark blue — neighbor cell PC background
     bgCenterPC: [0,   140, 140], // cyan — central cell PC background
 };

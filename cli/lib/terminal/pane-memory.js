@@ -197,7 +197,32 @@ export class MemoryPane {
             boardJ = (this.centerJ + dy + B) % B;
         }
 
-        return { addr, cellIdx, byteOff, boardI, boardJ, gx, gy };
+        // Scheduler origin and mapped address
+        const schedI = this.memory.iOrig;
+        const schedJ = this.memory.jOrig;
+        let mappedAddr = -1;
+        if (boardI >= 0 && boardJ >= 0) {
+            // Check if cursor cell is within the scheduler's 7x7 neighborhood
+            const B = this.memory.B;
+            // Compute signed offset from scheduler origin to cursor cell
+            let di = boardI - schedI;
+            let dj = boardJ - schedJ;
+            // Wrap to shortest distance
+            if (di > B / 2) di -= B;
+            if (di < -B / 2) di += B;
+            if (dj > B / 2) dj -= B;
+            if (dj < -B / 2) dj += B;
+            // Check if within 7x7 neighborhood (offsets -3..+3)
+            if (Math.abs(di) <= 3 && Math.abs(dj) <= 3) {
+                // Look up the spiral index for this offset
+                const neighIdx = gridToCell[(dj + 3) * 7 + (di + 3)];
+                if (neighIdx >= 0) {
+                    mappedAddr = (neighIdx << 10) | byteOff;
+                }
+            }
+        }
+
+        return { addr, cellIdx, byteOff, boardI, boardJ, gx, gy, schedI, schedJ, mappedAddr };
     }
 
     // Mark PC positions as needing recomputation (call after stepping/running)
@@ -243,18 +268,26 @@ export class MemoryPane {
         const { char } = byteToAsciiChar(byte, pal);
 
         // Determine background color
+        const gx = Math.floor(gridCol / 32);
+        const gy = Math.floor(gridRow / 32);
+        const isCenter = (gx === 3 && gy === 3);
         const isOnBorder = (gridCol % 32 === 31) || (gridRow % 32 === 31);
+        const checkerOdd = (gx + gy) % 2 === 1;
         const pcKey = `${gridCol},${gridRow}`;
         const pcCellIdx = this._pcPositions.get(pcKey);
         let bgColor;
         if (pcCellIdx !== undefined) {
             bgColor = pcCellIdx === 0 ? pal.bgCenterPC : pal.bgPC;
+        } else if (isOnBorder && isCenter) {
+            bgColor = pal.bgCenterBorder;
         } else if (isOnBorder) {
             bgColor = pal.bgBorder;
+        } else if (isCenter) {
+            bgColor = checkerOdd ? pal.bgCenterAlt : pal.bgCenter;
         } else if (this.focused) {
-            bgColor = [20, 20, 40]; // dark blue tint for active pane
+            bgColor = checkerOdd ? [28, 28, 48] : [20, 20, 40];
         } else {
-            bgColor = pal.bgDefault;
+            bgColor = checkerOdd ? pal.bgAlt : pal.bgDefault;
         }
 
         // Determine foreground color by byte value range

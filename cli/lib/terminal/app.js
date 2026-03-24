@@ -425,6 +425,12 @@ export class TerminalApp {
             valStr = `=$${val.toString(16).toUpperCase().padStart(2, '0')}`;
         }
 
+        // Scheduler info
+        const schedStr = `(${info.schedI},${info.schedJ})`;
+        const mapStr = info.mappedAddr >= 0
+            ? `$${info.mappedAddr.toString(16).toUpperCase().padStart(4, '0')}`
+            : 'n/a';
+
         // Simulation status
         const status = this.running
             ? fgRGB(0, 255, 0) + bold + 'RUN' + reset
@@ -435,6 +441,8 @@ export class TerminalApp {
             + `${dim}cell:${reset}${cellStr} `
             + `${dim}off:${reset}${byteStr} `
             + `${dim}n:${reset}${neighStr} `
+            + `${dim}sched:${reset}${schedStr} `
+            + `${dim}map:${reset}${mapStr} `
             + `${dim}int:${reset}${this.totalInterrupts} `
             + `${dim}spd:${reset}${this.speed} `;
 
