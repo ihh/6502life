@@ -191,8 +191,8 @@ $y=-3$ & 47 & 41 & 33 & 27 & 32 & 40 & 46
       Noisy copy is $O(M)$: each of the $M = 1024$ bytes must be streamed
       through the noise gate.
       As a result, swap has a lower cycle cost than noisy copy.
-      A reasonable default is \texttt{nSwapCycles}~$\approx 5000$ for noisy
-      copy and half that ($\approx 2500$) for swap,
+      A reasonable default might be \texttt{nSwapCycles}~$\approx 15{,}000$
+      (slightly above the copy cost of $\sim$14{,}400 Shadow OS cycles),
       but the reference implementation defaults to~0 (no gating) for
       backwards compatibility.
 
@@ -427,11 +427,48 @@ neighborhood RAM (\$0000--\$BFFF) and the geometric lookup tables
 (\$E000--\$EEFF). The only interface between programs and the OS is the
 BRK operand byte.
 
-The only ``help'' the OS provides to programs---the ROM lookup tables at
-\$E000--\$EEFF---is purely geometric: rotation matrices, symmetry
-transforms, and coordinate lookups that describe the topology of the
-neighborhood. The OS offers no computational, replicative, or strategic
-assistance.
+A reference 6502 implementation of the Shadow OS is provided in
+\texttt{shadow-os/shadow-os.asm}. It is not used by the JS or Rust
+reference implementations (which fast-path all BRK operations as native
+code), but serves to verify the cycle costs and prove that the OS is
+implementable on a real 6502 with the described hardware.
+
+\subsection{Shadow OS contract}
+
+The Shadow OS has a minimal and precisely bounded contract with
+user programs:
+
+\begin{enumerate}
+\item \textbf{Transparent local topology.}
+  The OS implements the $7 \times 7$ neighborhood seamlessly via the
+  memory map. Each scheduling quantum, it maps 49 cells of Board
+  Storage into the program's address space (\$0000--\$BFFF), with a
+  random origin and random rotation. The program sees a contiguous,
+  coherent address space; it does not need to know that the underlying
+  storage is a toroidal grid, or that the mapping changes each interrupt.
+
+\item \textbf{Minimal geometry API.}
+  The only ``help'' the OS provides is a set of read-only lookup tables
+  at \$E000--\$EEFF. These tables encode the local symmetry group of the
+  neighborhood: vector addition (translations), rotations ($90^\circ$,
+  $180^\circ$, $270^\circ$), reflections, and coordinate lookups (cell
+  index $\leftrightarrow$ $(x,y)$). These are purely geometric---they
+  describe the group-like structure of the local topology and nothing
+  else. They help programs reason about \emph{where} things are, not
+  \emph{what} to do about them.
+
+\item \textbf{No computational or strategic assistance.}
+  The OS offers no arithmetic helpers, no pattern matching, no
+  communication primitives, no memory management. It does not
+  interpret cell contents or favor any program over another.
+  All intelligence must emerge from the programs themselves.
+
+\item \textbf{Opaque BRK interface.}
+  Programs interact with the OS exclusively through BRK operands.
+  They set registers and issue BRK; the OS performs the requested
+  operation (move, copy, timer setup) and yields. Programs cannot
+  observe how the operation is performed, only its effects.
+\end{enumerate}
 
 \subsection{Shadow OS memory map}
 
@@ -462,7 +499,9 @@ only during OS execution:
   \$D000 & \texttt{SHADOW\_BANK} & Write: maps neighborhood cell $n$ into the
     shadow window at \$C000--\$C3FF. \\
   \$D001 & \texttt{NOISE\_BYTE} & Read: returns next byte from hardware LFSR,
-    then clocks the shift register. Used by the noisy copy routine. \\
+    then clocks the shift register. Used for the RNG bytes at \$FC--\$FF.
+    (The noisy copy uses the hardware noise gate on the shadow window write
+    path, not this register.) \\
   \$D002 & \texttt{TIMER\_LO} & Read/write: interrupt countdown timer, low byte. \\
   \$D003 & \texttt{TIMER\_HI} & Read/write: interrupt countdown timer, high byte.
 \end{tabular}
@@ -482,49 +521,65 @@ diminishing returns.
 
 \paragraph{Timer interrupt (NMI).}
 The timer fires an NMI. The Shadow OS saves the user's registers (A, X,
-Y, S, P, PC) to the cell's register save area (\$F9--\$FF), writes four
-pseudorandom bytes from \texttt{NOISE\_BYTE} to \$FC--\$FF, optionally
-writes the compass orientation to \$FA, advances the scheduler to the
-next cell, restores that cell's registers, and executes RTI.
-Cost: $\sim$80 cycles.
+Y, S, P, PC) to the cell's register save area (\$F9--\$FF), clears the
+B flag, writes four pseudorandom bytes from \texttt{NOISE\_BYTE} to
+\$FC--\$FF, optionally writes the compass orientation to \$FA, advances
+the scheduler to the next cell, restores that cell's registers, and
+executes RTI.
+Cost: $\sim$95 cycles for save and RNG (59 save + 8 clear B + 28 RNG),
+plus $\sim$38 to restore the next cell's registers, plus scheduler
+overhead.
 
 \paragraph{BRK dispatch.}
-On BRK, the OS reads the operand byte and dispatches:
+On BRK, the OS extracts the operand byte ($\sim$41 cycles of stack
+manipulation, which could be reduced by a hardware operand latch) and
+dispatches:
 
 \begin{itemize}
 \item \textbf{Operand 0} (reset): set PC to 0, jump to scheduler.
-  Cost: $\sim$12 cycles.
+  Cost: $\sim$11 cycles.
 
-\item \textbf{Operands 1--48} (swap): write the target cell index to
-  \texttt{SHADOW\_BANK}. With paged storage hardware, swap is a
-  page-table remap: the OS exchanges the page-table entries for cell~0
-  and the target cell, making swap an $O(1)$ operation regardless of cell
-  size. No data is copied. Set the B flag in the parent's saved P.
-  Yield to scheduler.
-  Cost: $\sim$20 cycles.
+\item \textbf{Operands 1--48} (swap): look up the target's board cell
+  index from a precomputed neighbor table, then exchange the page-table
+  entries for cell~0 and the target cell. This is an $O(1)$ operation
+  regardless of cell size---no data is copied. Set the B flag in the
+  parent's saved P. Yield to scheduler.
+  Cost: $\sim$49 cycles (12 for neighbor lookup, 26 for page-table
+  swap, 11 for B flag and yield).
 
-\item \textbf{Operands 49--96} (noisy copy): write the target cell index
-  to \texttt{SHADOW\_BANK}. Copy all $M = 1024$ bytes from cell~0
-  (\$0000--\$03FF) to the shadow window (\$C000--\$C3FF), XORing each
-  byte with a byte read from \texttt{NOISE\_BYTE}. This is an $O(M)$
-  operation: every byte must be streamed through the noise gate.
-  Set the B flag in the parent's saved P.
+\item \textbf{Operands 49--96} (noisy copy): look up the target cell
+  and write its board index to \texttt{SHADOW\_BANK}, mapping it into the
+  shadow window at \$C000. Copy all $M = 1024$ bytes from cell~0
+  (\$0000--\$03FF) to the shadow window (\$C000--\$C3FF). The hardware
+  noise gate on the shadow window's write path automatically applies the
+  per-bit noise model---the CPU performs a plain \texttt{STA}, and the
+  hardware XORs each bit with the LFSR output at probability
+  $\varepsilon$. This is an $O(M)$ operation: every byte must pass
+  through the noise gate. Set the B flag.
   Yield to scheduler.
-  Cost: $\sim$10{,}500 cycles ($\sim$10 cycles per byte).
+  Cost: $\sim$14{,}400 cycles ($\sim$14 per byte: \texttt{LDA abs,Y}
+  $+$ \texttt{STA abs,Y} $+$ \texttt{INY} $+$ \texttt{BNE} $=$ $4 + 5 +
+  2 + 3 = 14$ cycles, times 1024 bytes, plus setup).
 
 \item \textbf{Operand 97} (sync interrupt): read X and Y from the user's
-  saved registers, compute the next absolute multiple of the period, write
-  to the scheduler mailbox. Cost: $\sim$20 cycles.
+  saved registers, write to the timer hardware.
+  Cost: $\sim$24 cycles.
 
-\item \textbf{Operand 98} (async interrupt): read X and Y, add delay to
-  current time, write to the scheduler mailbox. Cost: $\sim$20 cycles.
+\item \textbf{Operand 98} (async interrupt): read X and Y, write delay
+  to the timer hardware. Cost: $\sim$24 cycles.
 \end{itemize}
 
 The key asymmetry: swap is $O(1)$ because paged storage allows remapping
 without data movement, while noisy copy is inherently $O(M)$ because
-every byte must pass through the noise gate. This means swap should have
-a lower \texttt{nSwapCycles} threshold than noisy copy---roughly half,
-reflecting the constant-time nature of the page remap.
+every byte must pass through the noise gate. Swap costs $\sim$49 cycles
+versus $\sim$14{,}400 for copy---a ratio of roughly 300:1, reflecting
+the fundamental difference between pointer manipulation and bulk data
+transfer.
+
+For \texttt{nSwapCycles} gating, the reference implementation applies
+a single threshold for both operations. An alternative would be separate
+thresholds (e.g.\ $\sim$100 for swap, $\sim$15{,}000 for copy), but the
+single-threshold approach keeps the hyperparameter space small.
 
 \section{Hardware implementations}
 \label{sec:hardware}
@@ -561,10 +616,20 @@ hardware beyond a stock CPU:
   multiplexing, but only modestly---it reuses the same page table and
   storage bus, adding one extra latch and mux stage.
 
-\item \textbf{Noise LFSR.}
+\item \textbf{Noise LFSR and noise gate.}
   A free-running 16-bit Galois LFSR (two 74HC flipflop chips plus an XOR
   gate, $\sim$3 TTL packages). Reading \$D001 latches and returns the
   low 8 bits, then clocks the register.
+
+  The noise gate sits on the data bus between the CPU and the shadow
+  window's backing storage. On any write to \$C000--\$C3FF, the gate
+  applies per-bit resampling: each bit of the written byte independently
+  passes through or is replaced by an LFSR bit, controlled by a
+  comparator against the $\varepsilon$ threshold. With $\varepsilon = 0$,
+  all bits pass through (perfect copy). This adds a single XOR gate and
+  comparator latch to the write path ($\sim$2 extra TTL packages) but
+  makes noisy copy transparent to the CPU---the Shadow OS executes a
+  plain \texttt{STA} and the hardware applies the noise.
 
 \item \textbf{Interrupt timer.}
   A 16-bit countdown register at \$D002--\$D003, triggering NMI on
@@ -621,7 +686,7 @@ to the larger board.
 
 In all cases, BRK swap and copy execute as native ARM code in
 microseconds, but the emulated cycle counter is advanced by the full
-Shadow OS cost ($\sim$20 cycles for swap, $\sim$10{,}500 for noisy copy),
+Shadow OS cost ($\sim$49 cycles for swap, $\sim$14{,}400 for noisy copy),
 preserving the timing semantics that programs experience.
 
 \section{Links}
