@@ -93,6 +93,10 @@ export class DisasmPane {
 
         const instructions = disassembleRangeSync(readFn, startAddr, Math.max(1, asmLines));
 
+        // Determine which line is "current" for the highlight cursor
+        // When synced to PC, highlight the PC line; when free, highlight the first line
+        const highlightAddr = this.syncToPC ? regs.PC : (this.disasmAddr || 0);
+
         for (let i = 0; i < instructions.length && i < asmLines; i++) {
             const instr = instructions[i];
             const lineRow = sepRow + 1 + i;
@@ -101,26 +105,50 @@ export class DisasmPane {
             out += moveTo(lineRow, rect.col);
 
             const isPC = (instr.addr === regs.PC);
+            const isCurrentLine = (instr.addr === highlightAddr);
             const marker = isPC ? fgRGB(255, 255, 0) + '\u25b6' + reset : ' ';
 
             // Address
             const addrStr = hex16(instr.addr);
             // Bytes
             const bytesStr = instr.bytes.map(hex).join(' ').padEnd(8);
-            // Mnemonic + operand
+            // Mnemonic + operand — color by instruction type
             const mnem = instr.mnemonic;
             const operand = instr.operand || '';
 
+            // Color mnemonics by category
+            let mnemColor;
+            if (['JMP','JSR','RTS','RTI','BCC','BCS','BEQ','BNE','BMI','BPL','BVC','BVS','BRK'].includes(mnem)) {
+                mnemColor = fgRGB(255, 180, 80); // orange for flow control
+            } else if (['LDA','LDX','LDY','STA','STX','STY'].includes(mnem)) {
+                mnemColor = fgRGB(100, 220, 255); // cyan for load/store
+            } else if (['NOP'].includes(mnem)) {
+                mnemColor = fgRGB(100, 100, 100); // dim for NOP
+            } else {
+                mnemColor = fgRGB(255, 255, 255); // white for others
+            }
+
             // Truncate to fit pane width
             let line = `${marker}${dim}$${addrStr}${reset} ${fgRGB(120,120,160)}${bytesStr}${reset} `;
-            line += `${bold}${mnem}${reset}`;
+            line += `${mnemColor}${bold}${mnem}${reset}`;
             if (operand) line += ` ${fgRGB(200,200,255)}${operand}${reset}`;
 
-            out += line;
+            // Apply reverse video to the current/PC line for cursor visibility
+            if (isCurrentLine) {
+                // Pad to fill the pane width and apply reverse video background
+                out += bgRGB(30, 30, 60) + line + ' '.repeat(Math.max(0, rect.width - stripAnsi(line).length)) + reset;
+            } else {
+                out += line;
+            }
         }
 
         return out;
     }
+}
+
+// Strip ANSI escape sequences to get visible character count
+function stripAnsi(str) {
+    return str.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
 // Color the P register flags

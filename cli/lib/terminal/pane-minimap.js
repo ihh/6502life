@@ -82,22 +82,37 @@ export class MinimapPane {
                 const isOriginBot = (botI === centerI && botJ === centerJ);
 
                 let fg, bg;
+                const isHighlight = isHighlightTop || isHighlightBot;
                 if (isHighlightTop) {
                     fg = fgRGB(255, 255, 0);
                 } else if (isOriginTop) {
                     fg = fgRGB(255, 100, 100);
                 } else {
-                    fg = fgRGB(...topRGB);
+                    // Brighten active cells
+                    fg = fgRGB(
+                        Math.min(255, Math.round(topRGB[0] * 1.3)),
+                        Math.min(255, Math.round(topRGB[1] * 1.3)),
+                        Math.min(255, Math.round(topRGB[2] * 1.3))
+                    );
                 }
                 if (isHighlightBot) {
                     bg = bgRGB(255, 255, 0);
                 } else if (isOriginBot) {
                     bg = bgRGB(255, 100, 100);
                 } else {
-                    bg = bgRGB(...botRGB);
+                    bg = bgRGB(
+                        Math.min(255, Math.round(botRGB[0] * 1.3)),
+                        Math.min(255, Math.round(botRGB[1] * 1.3)),
+                        Math.min(255, Math.round(botRGB[2] * 1.3))
+                    );
                 }
 
-                out += fg + bg + HALF_BLOCK + reset;
+                // Use reverse video on highlight cell for cursor inversion
+                if (isHighlight) {
+                    out += fg + bg + '\x1b[7m' + HALF_BLOCK + reset;
+                } else {
+                    out += fg + bg + HALF_BLOCK + reset;
+                }
             }
         }
         return out;
@@ -126,10 +141,19 @@ export class MinimapPane {
                              (botI === this.highlightI && botJ === this.highlightJ);
 
                 if (isHL) {
-                    out += fgRGB(255, 255, 0) + bgRGB(255, 255, 0) + HALF_BLOCK + reset;
+                    // Use reverse video for cursor inversion on highlighted cell
+                    out += fgRGB(255, 255, 0) + bgRGB(255, 255, 0) + '\x1b[7m' + HALF_BLOCK + reset;
                 } else {
-                    out += fgRGB(...topRGB);
-                    out += bgRGB(...botRGB);
+                    out += fgRGB(
+                        Math.min(255, Math.round(topRGB[0] * 1.3)),
+                        Math.min(255, Math.round(topRGB[1] * 1.3)),
+                        Math.min(255, Math.round(topRGB[2] * 1.3))
+                    );
+                    out += bgRGB(
+                        Math.min(255, Math.round(botRGB[0] * 1.3)),
+                        Math.min(255, Math.round(botRGB[1] * 1.3)),
+                        Math.min(255, Math.round(botRGB[2] * 1.3))
+                    );
                     out += HALF_BLOCK + reset;
                 }
             }

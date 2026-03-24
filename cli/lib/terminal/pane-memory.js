@@ -252,11 +252,24 @@ export class MemoryPane {
             bgColor = pal.bgDefault;
         }
 
+        // Determine region-based foreground color override
+        const byteOff = addr & 0x3FF;
+        let effectiveFg = fgColor;
+        if (byte === 0) {
+            effectiveFg = [40, 40, 50]; // dark for zero bytes
+        } else if (byteOff >= 0x0F0 && byteOff <= 0x0FF) {
+            effectiveFg = [255, 220, 80]; // yellow for register area
+        } else if (byteOff >= 0x380 && byteOff <= 0x3FF) {
+            effectiveFg = [220, 100, 255]; // magenta for bitmap/name area
+        } else if (byteOff >= 0x100 && byteOff <= 0x1FF) {
+            effectiveFg = fgColor; // stack: keep default color
+        }
+
         if (isCursor && flashOn) {
-            // Inverse: swap fg and bg
-            return fg(...bgColor) + bg(...fgColor) + char + reset;
+            // Use ANSI reverse video for full color inversion
+            return fg(...effectiveFg) + bg(...bgColor) + '\x1b[7m' + char + reset;
         } else {
-            return fg(...fgColor) + bg(...bgColor) + char + reset;
+            return fg(...effectiveFg) + bg(...bgColor) + char + reset;
         }
     }
 

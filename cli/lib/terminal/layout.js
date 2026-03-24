@@ -53,27 +53,54 @@ export class Layout {
     // Render the divider lines between panes
     renderDividers(activePane) {
         let out = '';
-        const color = dim;
 
-        // Horizontal divider
-        out += color;
+        // ANSI color constants for focus indication
+        const activeBorder = '\x1b[1;36m';   // bright cyan
+        const inactiveBorder = '\x1b[2;37m'; // dim grey
+        const activeTitle = '\x1b[1;33m';    // bright yellow bold
+        const inactiveTitle = '\x1b[2;37m';  // dim grey
+
+        // Determine which panes are active (for border coloring)
+        // Left border segments: top-left (memory) and bottom-left (command)
+        // Right border segments: top-right (disasm) and bottom-right (minimap)
+        const topLeftActive = activePane === 'memory';
+        const topRightActive = activePane === 'disasm';
+        const botLeftActive = activePane === 'command';
+        const botRightActive = activePane === 'minimap';
+
+        // Horizontal divider — color each segment by adjacent pane focus
         out += moveTo(this.hDivRow, 1);
-        for (let c = 1; c <= this.termW; c++) {
-            if (c === this.vDivCol) {
-                out += BOX.cross;
-            } else {
-                out += BOX.h;
-            }
+        // Left segment (between memory above, command below)
+        const leftHActive = topLeftActive || botLeftActive;
+        out += (leftHActive ? activeBorder : inactiveBorder);
+        for (let c = 1; c < this.vDivCol; c++) {
+            out += BOX.h;
         }
+        // Cross
+        out += (leftHActive || topRightActive || botRightActive ? activeBorder : inactiveBorder);
+        out += BOX.cross;
+        // Right segment (between disasm above, minimap below)
+        const rightHActive = topRightActive || botRightActive;
+        out += (rightHActive ? activeBorder : inactiveBorder);
+        for (let c = this.vDivCol + 1; c <= this.termW; c++) {
+            out += BOX.h;
+        }
+        out += reset;
 
-        // Vertical divider
+        // Vertical divider — top segment (between memory and disasm)
+        const topVActive = topLeftActive || topRightActive;
+        out += (topVActive ? activeBorder : inactiveBorder);
         for (let r = 1; r < this.hDivRow; r++) {
             out += moveTo(r, this.vDivCol) + BOX.v;
         }
+        out += reset;
+
+        // Vertical divider — bottom segment (between command and minimap)
+        const botVActive = botLeftActive || botRightActive;
+        out += (botVActive ? activeBorder : inactiveBorder);
         for (let r = this.hDivRow + 1; r <= this.termH; r++) {
             out += moveTo(r, this.vDivCol) + BOX.v;
         }
-
         out += reset;
 
         // Pane labels with focus indicators
@@ -86,14 +113,10 @@ export class Layout {
 
         for (const p of panes) {
             const isActive = (activePane === p.id);
-            const label = isActive ? `${ESC}7m${p.name}${reset}` : `${dim}${p.name}${reset}`;
-            if (p.rect.row === 1) {
-                // Top panes: label on horizontal divider
-                out += moveTo(this.hDivRow, p.rect.col + 1) + label;
-            } else {
-                // Bottom panes: label on horizontal divider
-                out += moveTo(this.hDivRow, p.rect.col + 1) + label;
-            }
+            const label = isActive
+                ? `${activeTitle}${ESC}7m${p.name}${reset}`
+                : `${inactiveTitle}${p.name}${reset}`;
+            out += moveTo(this.hDivRow, p.rect.col + 1) + label;
         }
 
         return out;
