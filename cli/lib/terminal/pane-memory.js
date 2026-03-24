@@ -1,12 +1,9 @@
 // Memory Map Pane — top-left
-// Shows the 7x7 neighborhood memory map as sextant characters
-// Each terminal char = 1 byte address
-// Each cell = 32x32 terminal chars (1024 bytes in row-major order)
-// 7x7 cells laid out in spiral order → 224x224 total grid
+// Two view modes:
+//   'cell' (default): hex dump of the focused cell's 1024 bytes
+//   'neighborhood': 7x7 neighborhood grid (sextant characters, one char per byte)
 //
-// The pane has its own center cell (centerI, centerJ) which determines
-// which board cell's 7x7 neighborhood is displayed. This is independent
-// of the scheduler's iOrig/jOrig and is controlled by the user.
+// Press 'v' to toggle between modes.
 
 import { moveTo, ESC, reset, dim, bold } from '../ansi.js';
 import { byteToSextant, byteColor, BORDER_COLOR, CURSOR_COLOR_ON, CURSOR_COLOR_OFF, hsvToRGB,
@@ -70,6 +67,26 @@ function gridToAddr(col, row) {
     return (cellIdx << 10) | byteOff;
 }
 
+// --- Hex dump formatting helpers ---
+function hexByte(val) {
+    return val.toString(16).toUpperCase().padStart(2, '0');
+}
+
+function hexAddr(val) {
+    return val.toString(16).toUpperCase().padStart(3, '0');
+}
+
+// Foreground color for a byte value (same ranges as neighborhood view)
+function byteFgColor(byte) {
+    if (byte === 0x00) return [60, 60, 70];
+    if (byte <= 0x1F) return [255, 80, 80];
+    if (byte <= 0x7E) return [255, 255, 255];
+    if (byte === 0x7F) return [255, 255, 0];
+    if (byte <= 0x9F) return [220, 100, 255];
+    if (byte <= 0xFE) return [80, 220, 255];
+    return [255, 255, 100];
+}
+
 export class MemoryPane {
     constructor(memory, controller) {
         this.memory = memory;
@@ -78,6 +95,14 @@ export class MemoryPane {
         // The board cell whose 7x7 neighborhood we're displaying
         this.centerI = 0;
         this.centerJ = 0;
+        // View mode: 'cell' (hex dump) or 'neighborhood' (7x7 grid)
+        this.viewMode = 'cell';
+        // --- Cell view state ---
+        // Cursor offset within the 1024-byte cell (0-1023)
+        this.cellCursorOffset = 0;
+        // Scroll row for hex dump (each row = 16 bytes, 64 rows total)
+        this.cellScrollRow = 0;
+        // --- Neighborhood view state ---
         // Viewport in the 224x224 grid
         this.scrollX = 3 * 32; // start centered on the center cell (grid pos 3,3)
         this.scrollY = 3 * 32;
@@ -101,6 +126,10 @@ export class MemoryPane {
     }
 
     get cursorAddr() {
+        if (this.viewMode === 'cell') {
+            // In cell mode, the "address" is the cell-local offset
+            return this.cellCursorOffset;
+        }
         return gridToAddr(this.cursorCol, this.cursorRow);
     }
 
@@ -121,12 +150,29 @@ export class MemoryPane {
 
     // Move cursor by delta
     moveCursor(dx, dy) {
-        this.cursorCol = Math.max(0, Math.min(223, this.cursorCol + dx));
-        this.cursorRow = Math.max(0, Math.min(223, this.cursorRow + dy));
+        if (this.viewMode === 'cell') {
+            this.moveCellCursor(dx, dy);
+        } else {
+            this.cursorCol = Math.max(0, Math.min(223, this.cursorCol + dx));
+            this.cursorRow = Math.max(0, Math.min(223, this.cursorRow + dy));
+        }
+    }
+
+    // Move cursor in cell hex dump mode
+    moveCellCursor(dx, dy) {
+        // dx moves by byte, dy moves by row (16 bytes)
+        let newOffset = this.cellCursorOffset + dx + dy * 16;
+        newOffset = Math.max(0, Math.min(1023, newOffset));
+        this.cellCursorOffset = newOffset;
     }
 
     // Jump cursor to a cell (by cell index in spiral order)
     jumpToCell(cellIdx) {
+        if (this.viewMode === 'cell') {
+            // In cell mode, jumping to cell doesn't really apply — stay at offset 0
+            this.cellCursorOffset = 0;
+            return;
+        }
         if (cellIdx < 0 || cellIdx >= 49) return;
         const [gx, gy] = cellToGrid[cellIdx];
         this.cursorCol = gx * 32 + 16;
@@ -135,6 +181,12 @@ export class MemoryPane {
 
     // Jump cursor to a specific address
     jumpToAddr(addr) {
+        if (this.viewMode === 'cell') {
+            // addr is memory-mapped; extract byte offset within cell
+            const byteOff = addr & 0x3FF;
+            this.cellCursorOffset = byteOff;
+            return;
+        }
         const pos = addrToGrid(addr);
         if (pos) {
             this.cursorCol = pos.col;
@@ -148,8 +200,33 @@ export class MemoryPane {
         this.moveCenter(dx, dy);
     }
 
+    // Toggle between cell and neighborhood view
+    toggleViewMode() {
+        if (this.viewMode === 'cell') {
+            // Switching to neighborhood: sync neighborhood cursor to center cell at current offset
+            const mappedAddr = (0 << 10) | (this.cellCursorOffset & 0x3FF);
+            const pos = addrToGrid(mappedAddr);
+            if (pos) {
+                this.cursorCol = pos.col;
+                this.cursorRow = pos.row;
+            }
+            this.viewMode = 'neighborhood';
+        } else {
+            // Switching to cell: sync cell cursor to current neighborhood cursor offset
+            const addr = gridToAddr(this.cursorCol, this.cursorRow);
+            if (addr >= 0) {
+                this.cellCursorOffset = addr & 0x3FF;
+            }
+            this.viewMode = 'cell';
+        }
+    }
+
     // Ensure cursor is visible by scrolling viewport
     ensureCursorVisible(rect) {
+        if (this.viewMode === 'cell') {
+            this.ensureCellCursorVisible(rect);
+            return;
+        }
         const margin = 4;
         if (this.cursorCol < this.scrollX + margin) {
             this.scrollX = Math.max(0, this.cursorCol - margin);
@@ -162,6 +239,20 @@ export class MemoryPane {
         }
         if (this.cursorRow >= this.scrollY + rect.height - margin) {
             this.scrollY = Math.min(224 - rect.height, this.cursorRow - rect.height + margin + 1);
+        }
+    }
+
+    // Ensure cursor row is visible in cell hex dump
+    ensureCellCursorVisible(rect) {
+        const cursorRow = Math.floor(this.cellCursorOffset / 16);
+        // Reserve 1 line for header
+        const visibleRows = rect.height - 1;
+        if (visibleRows <= 0) return;
+        if (cursorRow < this.cellScrollRow) {
+            this.cellScrollRow = cursorRow;
+        }
+        if (cursorRow >= this.cellScrollRow + visibleRows) {
+            this.cellScrollRow = cursorRow - visibleRows + 1;
         }
     }
 
@@ -180,8 +271,17 @@ export class MemoryPane {
         return this.memory.getByte(storageIdx);
     }
 
+    // Read a byte from the focused cell at a given offset (0-1023)
+    readCellByte(offset) {
+        const storageIdx = this.memory.ijbToByteIndex(this.centerI, this.centerJ, offset);
+        return this.memory.getByte(storageIdx);
+    }
+
     // Get info about what the cursor is pointing at
     getCursorInfo() {
+        if (this.viewMode === 'cell') {
+            return this.getCellCursorInfo();
+        }
         const addr = this.cursorAddr;
         const gx = Math.floor(this.cursorCol / 32);
         const gy = Math.floor(this.cursorRow / 32);
@@ -198,6 +298,59 @@ export class MemoryPane {
         }
 
         return { addr, cellIdx, byteOff, boardI, boardJ, gx, gy };
+    }
+
+    // Get cursor info for cell view mode
+    getCellCursorInfo() {
+        const byteOff = this.cellCursorOffset;
+        return {
+            addr: byteOff, // cell-local offset
+            cellIdx: 0, // center cell
+            byteOff,
+            boardI: this.centerI,
+            boardJ: this.centerJ,
+            gx: 3, gy: 3, // center of 7x7 grid
+        };
+    }
+
+    // Compute scheduler mapping info for the byte under cursor
+    // Returns { mapped: true, schedI, schedJ, mappedAddr } or { mapped: false }
+    getSchedulerMapping() {
+        const focusI = this.centerI;
+        const focusJ = this.centerJ;
+        const byteOff = this.viewMode === 'cell'
+            ? this.cellCursorOffset
+            : (this.cursorAddr >= 0 ? this.cursorAddr & 0x3FF : -1);
+
+        if (byteOff < 0) return { mapped: false };
+
+        const schedI = this.memory.iOrig;
+        const schedJ = this.memory.jOrig;
+        const B = this.memory.B;
+
+        // Check if the focused cell is within the 7×7 neighborhood of the scheduler's cell
+        const di = ((focusI - schedI + B + Math.floor(B / 2)) % B) - Math.floor(B / 2);
+        const dj = ((focusJ - schedJ + B + Math.floor(B / 2)) % B) - Math.floor(B / 2);
+
+        if (Math.abs(di) > 3 || Math.abs(dj) > 3) {
+            return { mapped: false, schedI, schedJ };
+        }
+
+        // Find the cell index in the scheduler's neighborhood
+        // spiralVec maps cell index → [dx, dy]
+        let neighIdx = -1;
+        for (let idx = 0; idx < 49; idx++) {
+            const [sx, sy] = spiralVec[idx];
+            if (sx === di && sy === dj) {
+                neighIdx = idx;
+                break;
+            }
+        }
+
+        if (neighIdx < 0) return { mapped: false, schedI, schedJ };
+
+        const mappedAddr = (neighIdx << 10) | byteOff;
+        return { mapped: true, schedI, schedJ, mappedAddr };
     }
 
     // Mark PC positions as needing recomputation (call after stepping/running)
@@ -294,6 +447,12 @@ export class MemoryPane {
         this.flashOn = !this.flashOn;
         this.lastFlash = now;
 
+        if (this.viewMode === 'cell') {
+            // For cell mode, we'd need a partial redraw of the hex dump cursor
+            // For now, trigger a full render via needsRender
+            return '';
+        }
+
         let out = '';
         const cursorScreenCol = this.cursorCol - this.scrollX;
         const cursorScreenRow = this.cursorRow - this.scrollY;
@@ -309,6 +468,136 @@ export class MemoryPane {
     }
 
     render(rect) {
+        if (this.viewMode === 'cell') {
+            return this.renderCellView(rect);
+        }
+        return this.renderNeighborhoodView(rect);
+    }
+
+    // Render the single-cell hex dump view
+    renderCellView(rect) {
+        const now = Date.now();
+        if (now - this.lastFlash > 250) {
+            this.flashOn = !this.flashOn;
+            this.lastFlash = now;
+        }
+
+        this.ensureCellCursorVisible(rect);
+        this._lastRect = rect;
+
+        const fg = (r, g, b) => `\x1b[38;2;${r};${g};${b}m`;
+        const bg = (r, g, b) => `\x1b[48;2;${r};${g};${b}m`;
+        const focusBg = this.focused ? bg(20, 20, 40) : bg(0, 0, 0);
+
+        // Get PC for the focused cell
+        let cellPC = -1;
+        if (this.controller) {
+            const regs = readCellRegisters(this.controller, this.centerI, this.centerJ);
+            cellPC = regs.PC & 0x3FF;
+        }
+
+        let out = '';
+        const visibleRows = rect.height;
+        const BYTES_PER_ROW = 16;
+
+        for (let screenRow = 0; screenRow < visibleRows; screenRow++) {
+            out += moveTo(rect.row + screenRow, rect.col);
+            const dataRow = this.cellScrollRow + screenRow;
+            const rowAddr = dataRow * BYTES_PER_ROW;
+
+            if (rowAddr >= 1024) {
+                // Past end of cell data — blank line
+                out += focusBg + ' '.repeat(Math.min(rect.width, 76)) + reset;
+                continue;
+            }
+
+            // Address column: "$XXX: "
+            out += focusBg + dim + '$' + hexAddr(rowAddr) + ': ' + reset;
+            let col = 7; // characters used so far
+
+            // Hex bytes (two groups of 8)
+            for (let i = 0; i < BYTES_PER_ROW && col + 3 <= rect.width; i++) {
+                const offset = rowAddr + i;
+                if (offset >= 1024) {
+                    out += focusBg + '   ' + reset;
+                    col += 3;
+                    if (i === 7 && col + 1 <= rect.width) { out += ' '; col++; }
+                    continue;
+                }
+                const byte = this.readCellByte(offset);
+                const isCursor = (offset === this.cellCursorOffset);
+                const isPC = (offset === cellPC);
+                const fgColor = byteFgColor(byte);
+
+                let cellBg;
+                if (isPC) {
+                    cellBg = bg(0, 140, 140); // cyan for PC
+                } else if (this.focused) {
+                    cellBg = bg(20, 20, 40);
+                } else {
+                    cellBg = bg(0, 0, 0);
+                }
+
+                const hexStr = hexByte(byte);
+                if (isCursor && this.flashOn) {
+                    out += fg(...fgColor) + cellBg + '\x1b[7m' + hexStr + reset + focusBg + ' ';
+                } else {
+                    out += fg(...fgColor) + cellBg + hexStr + reset + focusBg + ' ';
+                }
+                col += 3;
+
+                // Extra space between byte 7 and 8
+                if (i === 7 && col + 1 <= rect.width) {
+                    out += ' ';
+                    col++;
+                }
+            }
+
+            // ASCII sidebar (if room)
+            if (col + 2 + BYTES_PER_ROW <= rect.width) {
+                out += focusBg + dim + ' ' + reset + focusBg;
+                col += 1;
+                for (let i = 0; i < BYTES_PER_ROW; i++) {
+                    const offset = rowAddr + i;
+                    if (offset >= 1024) {
+                        out += ' ';
+                        col++;
+                        continue;
+                    }
+                    const byte = this.readCellByte(offset);
+                    const isCursor = (offset === this.cellCursorOffset);
+
+                    // ASCII printable range
+                    let ch;
+                    if (byte >= 0x20 && byte <= 0x7E) {
+                        ch = String.fromCharCode(byte);
+                    } else if (byte === 0) {
+                        ch = '.';
+                    } else {
+                        ch = '.';
+                    }
+
+                    const fgColor = byteFgColor(byte);
+                    if (isCursor && this.flashOn) {
+                        out += fg(...fgColor) + focusBg + '\x1b[7m' + ch + reset + focusBg;
+                    } else {
+                        out += fg(...fgColor) + focusBg + ch + reset + focusBg;
+                    }
+                    col++;
+                }
+            }
+
+            // Fill remaining width
+            if (col < rect.width) {
+                out += focusBg + ' '.repeat(rect.width - col) + reset;
+            }
+        }
+
+        return out;
+    }
+
+    // Render the neighborhood grid view (original behavior)
+    renderNeighborhoodView(rect) {
         const now = Date.now();
         if (now - this.lastFlash > 250) {
             this.flashOn = !this.flashOn;

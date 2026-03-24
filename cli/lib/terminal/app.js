@@ -216,6 +216,9 @@ export class TerminalApp {
                 case 'd':
                     this.disasmPane.toggleSync();
                     break;
+                case 'v':
+                    this.memoryPane.toggleViewMode();
+                    break;
             }
         }
     }
@@ -409,21 +412,43 @@ export class TerminalApp {
 
         // Cursor info
         const info = this.memoryPane.getCursorInfo();
-        const addrStr = info.addr >= 0
-            ? `$${info.addr.toString(16).toUpperCase().padStart(4, '0')}`
-            : '----';
         const byteStr = info.byteOff >= 0
             ? `$${info.byteOff.toString(16).toUpperCase().padStart(3, '0')}`
             : '---';
         const cellStr = info.boardI >= 0 ? `(${info.boardI},${info.boardJ})` : '---';
-        const neighStr = info.cellIdx >= 0 ? `#${info.cellIdx}` : '-';
 
         // Byte value at cursor
         let valStr = '';
-        if (info.addr >= 0) {
-            const val = this.controller.memory.read(info.addr);
-            valStr = `=$${val.toString(16).toUpperCase().padStart(2, '0')}`;
+        if (this.memoryPane.viewMode === 'cell') {
+            // In cell mode, read directly from storage
+            if (info.byteOff >= 0) {
+                const val = this.memoryPane.readCellByte(info.byteOff);
+                valStr = ` val:$${val.toString(16).toUpperCase().padStart(2, '0')}`;
+            }
+        } else {
+            // In neighborhood mode, read via memory-mapped address
+            if (info.addr >= 0) {
+                const val = this.controller.memory.read(info.addr);
+                valStr = ` val:$${val.toString(16).toUpperCase().padStart(2, '0')}`;
+            }
         }
+
+        // Scheduler mapping info
+        const sched = this.memoryPane.getSchedulerMapping();
+        let schedStr;
+        if (sched.mapped) {
+            const si = sched.schedI;
+            const sj = sched.schedJ;
+            const ma = sched.mappedAddr.toString(16).toUpperCase().padStart(4, '0');
+            schedStr = `sched:(${si},${sj})\u2192$${ma}`;
+        } else if (sched.schedI !== undefined) {
+            schedStr = `sched:(${sched.schedI},${sched.schedJ})\u2192n/a`;
+        } else {
+            schedStr = 'sched:n/a';
+        }
+
+        // View mode indicator
+        const viewStr = this.memoryPane.viewMode === 'cell' ? 'HEX' : 'NBR';
 
         // Simulation status
         const status = this.running
@@ -431,10 +456,11 @@ export class TerminalApp {
             : dim + 'PAU' + reset;
 
         const statusText = ` ${status} `
-            + `${dim}addr:${reset}${addrStr}${valStr} `
+            + `${dim}[${viewStr}]${reset} `
             + `${dim}cell:${reset}${cellStr} `
-            + `${dim}off:${reset}${byteStr} `
-            + `${dim}n:${reset}${neighStr} `
+            + `${dim}off:${reset}${byteStr}`
+            + `${valStr} `
+            + `${dim}${schedStr}${reset} `
             + `${dim}int:${reset}${this.totalInterrupts} `
             + `${dim}spd:${reset}${this.speed} `;
 
