@@ -6,7 +6,7 @@
 ; 22 bytes.
 @start:
 BRK
-.byte $F5          ; noisy copy to cell 1 (forward), yield
+.byte $31          ; noisy copy to cell 1 (forward), yield
 LDA #$EA           ; NOP opcode = non-zero (alive)
 STA $0800          ; cell 2 byte[0] = NOP
 STA $0C00          ; cell 3 byte[0] = NOP

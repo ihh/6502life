@@ -33,7 +33,7 @@ describe('lastWriter provenance', () => {
     );
     ctrl.lastWriter[originCellIdx] = 'wallet-alice';
 
-    // Perform a perfect copy (BRK 245 = copy to dest 1)
+    // Perform a perfect copy (BRK 49 = copy to dest 1)
     // copyCellWithNoise(dest) copies neighbor 0 -> neighbor dest
     ctrl.copyCellWithNoise(1);
 

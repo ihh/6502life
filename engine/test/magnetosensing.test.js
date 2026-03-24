@@ -127,17 +127,17 @@ describe('Compass experiments', () => {
             }
             expect(foundLdaFA).toBe(true);
 
-            // Should contain all four BRK copy operands: F5, F6, F7, F8
+            // Should contain all four BRK copy operands: $31, $32, $33, $34
             const brkOperands = new Set();
             for (let i = 0; i < bytes.length - 1; i++) {
-                if (bytes[i] === 0x00 && bytes[i + 1] >= 0xF5 && bytes[i + 1] <= 0xF8) {
+                if (bytes[i] === 0x00 && bytes[i + 1] >= 0x31 && bytes[i + 1] <= 0x34) {
                     brkOperands.add(bytes[i + 1]);
                 }
             }
-            expect(brkOperands.has(0xF5)).toBe(true);
-            expect(brkOperands.has(0xF6)).toBe(true);
-            expect(brkOperands.has(0xF7)).toBe(true);
-            expect(brkOperands.has(0xF8)).toBe(true);
+            expect(brkOperands.has(0x31)).toBe(true);
+            expect(brkOperands.has(0x32)).toBe(true);
+            expect(brkOperands.has(0x33)).toBe(true);
+            expect(brkOperands.has(0x34)).toBe(true);
         });
     });
 

@@ -9,9 +9,9 @@ LDA $10
 EOR #$01
 STA $10
 BNE @swap
-; Phase 0: noisy copy origin -> cell 1 (BRK $F5)
+; Phase 0: noisy copy origin -> cell 1 (BRK $31)
 BRK
-.byte $F5   ; noisy copy to cell 1, yield
+.byte $31   ; noisy copy to cell 1, yield
 @swap:
 ; Phase 1: swap cell 0 and cell 1 (BRK $01 = swap origin with cell 1)
 BRK

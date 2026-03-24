@@ -7,7 +7,7 @@
 ; 22 bytes. The resetter itself is B-state (byte[0]=00).
 @start:
 BRK
-.byte $F5          ; noisy copy to cell 1 (forward), yield
+.byte $31          ; noisy copy to cell 1 (forward), yield
 LDA #$00           ; A = 0
 STA $0800          ; cell 2 byte[0] = 0 (BRK opcode)
 STA $0801          ; cell 2 byte[1] = 0 (dead operand)

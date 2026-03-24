@@ -14,9 +14,9 @@ const SYNC_NANO_SOURCE = `
 LDX #$F4
 LDY #$01
 BRK
-.byte $FD
+.byte $61
 BRK
-.byte $F5
+.byte $31
 BNE @start
 BEQ @start
 `;
@@ -25,9 +25,9 @@ const NANO_2X_SOURCE = `
 ; Nano 2x: 8-byte BRK spreader, two directions
 @start:
 BRK
-.byte $F5
+.byte $31
 BRK
-.byte $F6
+.byte $32
 BNE @start
 BEQ @start
 `;
@@ -39,11 +39,11 @@ const SYNC_NANO_2X_SOURCE = `
 LDX #$F4
 LDY #$01
 BRK
-.byte $FD
+.byte $61
 BRK
-.byte $F5
+.byte $31
 BRK
-.byte $F6
+.byte $32
 BNE @start
 BEQ @start
 `;
@@ -235,9 +235,9 @@ describe('Sync interrupt experiments', () => {
 LDX #$${lo.toString(16).padStart(2, '0')}
 LDY #$${hi.toString(16).padStart(2, '0')}
 BRK
-.byte $FD
+.byte $61
 BRK
-.byte $F5
+.byte $31
 BNE @start
 BEQ @start
 `;

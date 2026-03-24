@@ -220,14 +220,14 @@ Colors encode cell activity using HSV with exponential decay of write/move recen
 - **Register save area** at 0xF9-0xFF: PCHI, PCLO, P, A, X, Y, S
 - **RNG** at 0xFC-0xFF: 4 bytes of pseudorandom numbers, refreshed each interrupt
 - **Compass**: if enabled (`boardParams.hasCompass`), the scheduler writes the current orientation to $FA (shifted left 2 bits). Programs can read $FA to detect their absolute orientation. Disabled by default (writes 0).
-- **Board hyperparameters** (`boardParams`): `pBitNoise` (default 1/2048), `pBitNoiseZero` (default 0.5, P(resampled bit=0)), `nSwapCycles` (default 0, cycle budget for BRK copy/swap), `hasCompass` (default false), `implementsMove` (default true), `implementsCopy` (default true), `implementsSync` (default false), `implementsAsync` (default false). Feature flags gate which BRK operands have effect; unimplemented BRK types just yield to scheduler.
+- **Board hyperparameters** (`boardParams`): `pBitNoise` (default 1/2048), `pBitNoiseZero` (default 0.5, P(resampled bit=0)), `nSwapCycles` (default 0, minimum remaining scheduler cycles for BRK copy/swap to succeed), `hasCompass` (default false), `implementsMove` (default true), `implementsCopy` (default true), `implementsSync` (default false), `implementsAsync` (default false). Feature flags gate which BRK operands have effect; unimplemented BRK types just yield to scheduler.
 - **BRK operands**: byte `b` after BRK opcode:
   - 0: reset PC to 0, yield
-  - 1-244: swap cells src=floor(b/49), dest=b%49 (if `implementsMove`)
-  - 245-252: noisy copy origin to cell(b-244) (if `implementsCopy`)
-  - 253: sync interrupt request; X,Y registers specify period in cycles, rounded to nearest absolute multiple of period using global board time (if `implementsSync`)
-  - 254: async interrupt request; X,Y registers specify delay in cycles (if `implementsAsync`)
-  - 255: reserved (yield)
+  - 1-48: swap cell 0 with cell b (if `implementsMove`). O(1) via page-table remap.
+  - 49-96: noisy copy cell 0 to cell (b-48) (if `implementsCopy`). O(M) through noise gate.
+  - 97: sync interrupt request; X,Y registers specify period in cycles, rounded to nearest absolute multiple of period using global board time (if `implementsSync`)
+  - 98: async interrupt request; X,Y registers specify delay in cycles (if `implementsAsync`)
+  - 99-255: reserved (yield)
   Bad opcodes handled as BRK 0. Copy/swap happens BEFORE registers are saved, so the child inherits the pre-BRK register state.
 - **Interrupt model**: Pre-emptive scheduling is conceptually an IRQ (maskable by SEI) followed by an NMI (unmaskable context switch). Memory writeback happens between the IRQ and NMI if the I flag allows it. Setting I (SEI) makes writes atomic: they commit only on BRK (software interrupt), and are reverted on timer interrupt.
 - **B flag** (bit 4 of P at $FB): set after BRK (software interrupt), cleared after timer interrupt. Follows 6502 convention (BRK/PHP set B; IRQ/NMI clear B). Enables fork detection: after BRK copy, the child inherits B=clear (pre-BRK state), while the parent gets B=set. Programs can read $FB and test bit 4 to detect whether they are a fresh copy or the original.

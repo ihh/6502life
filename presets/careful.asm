@@ -16,11 +16,11 @@
 LDA $FC
 AND #$03
 CLC
-ADC #$F5
+ADC #$31
 STA @copy+1       ; patch the BRK operand
 @copy:
 BRK
-.byte $F5         ; noisy copy (patched)
+.byte $31         ; noisy copy (patched)
 ; Step 2: protect and fix the copy's PC to point to $0000
 SEI
 ; We need the target cell's page address. Recompute from the same RNG.

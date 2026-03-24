@@ -164,10 +164,10 @@ class BoardController {
             nSwapCycles: 0,          // cycle budget for BRK copy/swap (0 = no limit)
             pBitNoiseZero: 0.5,      // P(resampled bit = 0); 0.5 = fair coin, 1 = erasure
             hasCompass: false,       // write orientation to $FA if true
-            implementsMove: true,    // BRK 1-244 swap operations
-            implementsCopy: true,    // BRK 245-252 noisy copy
-            implementsSync: false,   // BRK 253 sync interrupt request
-            implementsAsync: false,  // BRK 254 async interrupt request
+            implementsMove: true,    // BRK 1-48 swap cell 0 with cell N
+            implementsCopy: true,    // BRK 49-96 noisy copy cell 0 to cell N-48
+            implementsSync: false,   // BRK 97 sync interrupt request
+            implementsAsync: false,  // BRK 98 async interrupt request
         }, boardParams);
         // Backward compatibility: accept noiseParams as alias for boardParams
         this.noiseParams = this.boardParams;
@@ -1291,21 +1291,18 @@ class BoardController {
                         // so the child inherits the pre-BRK register state
                         // stored at $F9-$FF from the previous scheduling.
                         const operand = brkOperand;
-                        const nDestCells = this.memory.Nsquared;  // 49
-                        const nSrcCells = 5;
                         // nSwapCycles: BRK copy/swap fails if fewer than this
                         // many cycles remain before the next interrupt.
                         const bp = this.boardParams;
                         const brkFails = bp.nSwapCycles > 0
                             && (schedulerCycles - cpuCycles) < bp.nSwapCycles;
                         if (!brkFails) {
-                            if (operand > 0 && operand < nSrcCells * nDestCells && bp.implementsMove) {
-                                const src = Math.floor(operand / nDestCells);
-                                const dest = operand % nDestCells;
-                                this.commitMove (src, dest);
-                                if (this.onBrkEvent) this.onBrkEvent('swap', src, dest);
-                            } else if (operand >= 245 && operand <= 252 && bp.implementsCopy) {
-                                const dest = operand - 244;
+                            if (operand >= 1 && operand <= 48 && bp.implementsMove) {
+                                // Swap cell 0 (origin) with cell N
+                                this.commitMove (0, operand);
+                                if (this.onBrkEvent) this.onBrkEvent('swap', 0, operand);
+                            } else if (operand >= 49 && operand <= 96 && bp.implementsCopy) {
+                                const dest = operand - 48;  // cells 1-48
                                 this.copyCellWithNoise (dest);
                                 // Update move times using board cell indices (not neighborhood indices)
                                 const originCellIdx = this.memory.ijToCellIndex(this.memory.iOrig, this.memory.jOrig);
@@ -1314,7 +1311,7 @@ class BoardController {
                                 const destCellIdx = this.memory.ijToCellIndex(di, dj);
                                 this.lastMoveTime[destCellIdx] = this.totalCycles;
                                 if (this.onBrkEvent) this.onBrkEvent('copy', 0, dest);
-                            } else if (operand === 253 && bp.implementsSync) {
+                            } else if (operand === 97 && bp.implementsSync) {
                                 // Sync interrupt request: X,Y = LSB,MSB of period.
                                 // Round down to nearest absolute multiple of period.
                                 const period = this.sfotty.X | (this.sfotty.Y << 8);
@@ -1323,7 +1320,7 @@ class BoardController {
                                     const cellIdx = this.memory.ijToCellIndex(this.memory.iOrig, this.memory.jOrig);
                                     this.nextRequestedInterrupt[cellIdx] = nextTime;
                                 }
-                            } else if (operand === 254 && bp.implementsAsync) {
+                            } else if (operand === 98 && bp.implementsAsync) {
                                 // Async interrupt request: X,Y = LSB,MSB of delay.
                                 const delay = this.sfotty.X | (this.sfotty.Y << 8);
                                 if (delay > 0) {
@@ -1331,7 +1328,7 @@ class BoardController {
                                     this.nextRequestedInterrupt[cellIdx] = this.totalCycles + delay;
                                 }
                             }
-                            // Operand 255 or unimplemented: just yield (no operation)
+                            // Operand 99-255: reserved, just yield (no operation)
                         }
                     }
                     this.commitWrites();

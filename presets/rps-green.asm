@@ -15,6 +15,6 @@ BRK
 .byte $00          ; yield
 @copy:
 BRK
-.byte $F5          ; copy forward
+.byte $31          ; copy forward
 BNE @start
 BEQ @start

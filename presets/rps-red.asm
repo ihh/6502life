@@ -16,6 +16,6 @@ BRK
 .byte $00          ; yield, try different orientation next time
 @copy:
 BRK
-.byte $F5          ; copy forward
+.byte $31          ; copy forward
 BNE @start
 BEQ @start

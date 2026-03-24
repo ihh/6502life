@@ -4,26 +4,26 @@
 LDA $FC
 AND #$03
 CLC
-ADC #$F5
+ADC #$31
 STA @b1+1
 LDA $FD
 AND #$03
 CLC
-ADC #$F5
+ADC #$31
 STA @b2+1
 LDA $FE
 AND #$03
 CLC
-ADC #$F5
+ADC #$31
 STA @b3+1
 @b1:
 BRK
-.byte $F5
+.byte $31
 @b2:
 BRK
-.byte $F5
+.byte $31
 @b3:
 BRK
-.byte $F5
+.byte $31
 BNE @start
 BEQ @start

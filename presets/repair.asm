@@ -21,7 +21,7 @@ STA $10
 BNE @repair
 ; Phase 0: copy self to forward neighbor
 BRK
-.byte $F5
+.byte $31
 BNE @start
 BEQ @start
 @repair:

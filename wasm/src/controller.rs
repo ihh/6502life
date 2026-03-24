@@ -25,13 +25,13 @@ pub struct BoardParams {
     pub p_bit_noise_zero: f64,
     /// Write orientation to $FA if true
     pub has_compass: bool,
-    /// BRK 1-244 swap operations enabled
+    /// BRK 1-48 swap cell 0 with cell N
     pub implements_move: bool,
-    /// BRK 245-252 noisy copy enabled
+    /// BRK 49-96 noisy copy cell 0 to cell N-48
     pub implements_copy: bool,
-    /// BRK 253 sync interrupt request enabled
+    /// BRK 97 sync interrupt request
     pub implements_sync: bool,
-    /// BRK 254 async interrupt request enabled
+    /// BRK 98 async interrupt request
     pub implements_async: bool,
 }
 
@@ -287,8 +287,6 @@ impl BoardController {
                 } else {
                     if is_brk {
                         let operand = brk_operand;
-                        let n_dest_cells = N_SQUARED; // 49
-                        let n_src_cells = 5;
                         let bp = &self.board_params;
                         // nSwapCycles: BRK copy/swap fails if fewer cycles remain
                         let brk_fails = bp.n_swap_cycles > 0
@@ -300,19 +298,15 @@ impl BoardController {
                             let implements_sync = bp.implements_sync;
                             let implements_async = bp.implements_async;
 
-                            if operand > 0
-                                && (operand as usize) < n_src_cells * n_dest_cells
-                                && implements_move
-                            {
-                                let src = (operand as usize) / n_dest_cells;
-                                let dest = (operand as usize) % n_dest_cells;
-                                self.commit_move(src, dest);
-                            } else if operand >= 245 && operand <= 252 && implements_copy {
-                                let dest = (operand - 244) as usize;
+                            if operand >= 1 && operand <= 48 && implements_move {
+                                // Swap cell 0 (origin) with cell N
+                                self.commit_move(0, operand as usize);
+                            } else if operand >= 49 && operand <= 96 && implements_copy {
+                                let dest = (operand - 48) as usize; // cells 1-48
                                 self.copy_cell_with_noise(dest);
                                 self.last_move_time[0] = self.total_cycles;
                                 self.last_move_time[dest] = self.total_cycles;
-                            } else if operand == 253 && implements_sync {
+                            } else if operand == 97 && implements_sync {
                                 // Sync interrupt request: X,Y = LSB,MSB of period.
                                 let period =
                                     (self.cpu.x as u64) | ((self.cpu.y as u64) << 8);
@@ -325,7 +319,7 @@ impl BoardController {
                                     self.next_requested_interrupt[cell_idx] =
                                         next_time as f64;
                                 }
-                            } else if operand == 254 && implements_async {
+                            } else if operand == 98 && implements_async {
                                 // Async interrupt request: X,Y = LSB,MSB of delay.
                                 let delay =
                                     (self.cpu.x as u64) | ((self.cpu.y as u64) << 8);
