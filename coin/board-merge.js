@@ -1,14 +1,14 @@
 /**
- * Edge swap protocol for social play.
+ * Corner swap protocol for social play.
  *
- * When two players share, they swap a rectangular strip of cells flush
- * with one edge of each board. This is instantaneous — no merged board,
+ * When two players share, they swap a rectangular block of cells from
+ * a corner of each board. This is instantaneous — no merged board,
  * no prolonged simulation. Cells from your board go on theirs, cells
  * from theirs go on yours.
  *
- * The strip dimensions are:
- *   W = min(B1, B2)  (width, along the shared edge)
- *   D <= W            (depth, perpendicular to the edge)
+ * The rectangle is W × D, flush with two edges (i.e. in a corner):
+ *   W <= min(B1, B2)
+ *   D <= W
  *
  * Compatible with different board sizes and hyperparameters — each board
  * keeps its own params throughout.
@@ -20,7 +20,7 @@ import { readCellMemory, writeCellBytes } from '../engine/board.js';
 import { sha256, toHex } from './hash.js';
 
 /**
- * @typedef {'north'|'south'|'east'|'west'} Edge
+ * @typedef {'ne'|'se'|'sw'|'nw'} Corner
  */
 
 /**
@@ -29,29 +29,32 @@ import { sha256, toHex } from './hash.js';
  * @property {string} preHashB - SHA-256 of board B before swap
  * @property {string} postHashA - SHA-256 of board A after swap
  * @property {string} postHashB - SHA-256 of board B after swap
- * @property {number} width - W (cells along edge)
- * @property {number} depth - D (cells perpendicular to edge)
- * @property {Edge} edgeA - which edge of A was swapped
- * @property {Edge} edgeB - which edge of B was swapped
+ * @property {number} width - W
+ * @property {number} depth - D
+ * @property {Corner} cornerA - which corner of A was swapped
+ * @property {Corner} cornerB - which corner of B was swapped
  */
 
 /**
- * Swap a rectangular strip of cells between two boards.
+ * Swap a rectangular block of cells between two boards' corners.
  *
  * @param {Object} engineA - engine with .controller, .size, .serialize()
- * @param {Edge} edgeA - which edge of A to swap from
+ * @param {Corner} cornerA - which corner of A
  * @param {Object} engineB - engine with .controller, .size, .serialize()
- * @param {Edge} edgeB - which edge of B to swap from
+ * @param {Corner} cornerB - which corner of B
  * @param {Object} [options]
- * @param {number} [options.depth] - D (default: min of board sizes)
+ * @param {number} [options.width] - W (default: min of board sizes)
+ * @param {number} [options.depth] - D (default: W)
  * @returns {SwapResult}
  */
-export function swapEdge(engineA, edgeA, engineB, edgeB, options = {}) {
+export function swapCorner(engineA, cornerA, engineB, cornerB, options = {}) {
   const B1 = engineA.size;
   const B2 = engineB.size;
-  const W = Math.min(B1, B2);
+  const maxW = Math.min(B1, B2);
+  const W = Math.min(options.width ?? maxW, maxW);
   const D = Math.min(options.depth ?? W, W);
 
+  if (W < 1) throw new Error('Width must be >= 1');
   if (D < 1) throw new Error('Depth must be >= 1');
 
   // Record pre-swap hashes
@@ -59,18 +62,17 @@ export function swapEdge(engineA, edgeA, engineB, edgeB, options = {}) {
   const preHashB = toHex(sha256(engineB.serialize()));
 
   // Compute the (i,j) rectangles for each board
-  const rectA = edgeRect(B1, edgeA, W, D);
-  const rectB = edgeRect(B2, edgeB, W, D);
+  const rectA = cornerRect(B1, cornerA, W, D);
+  const rectB = cornerRect(B2, cornerB, W, D);
 
-  // Read all cells from both strips
+  // Read all cells from both rectangles
   const cellsA = readRect(engineA.controller, rectA);
   const cellsB = readRect(engineB.controller, rectB);
 
-  // Also read lastWriter for provenance
   const writersA = readWriters(engineA.controller, rectA, B1);
   const writersB = readWriters(engineB.controller, rectB, B2);
 
-  // Write B's cells onto A's strip, and A's cells onto B's strip
+  // Swap: write B's cells onto A, A's cells onto B
   writeRect(engineA.controller, rectA, cellsB);
   writeRect(engineB.controller, rectB, cellsA);
 
@@ -85,46 +87,36 @@ export function swapEdge(engineA, edgeA, engineB, edgeB, options = {}) {
     preHashA, preHashB,
     postHashA, postHashB,
     width: W, depth: D,
-    edgeA, edgeB,
+    cornerA, cornerB,
   };
 }
 
 /**
- * Compute the rectangle of (i,j) coords for a strip flush with an edge.
- * Returns { cells: [{i,j}, ...], W, D }
+ * Compute the rectangle of (i,j) coords for a corner block.
  *
- * The strip is W cells along the edge and D cells deep.
- * Cells are centered along the edge when W < B.
+ * W is the extent along the i-axis, D along the j-axis.
+ * The block is flush with two edges (a corner).
+ *
+ * Corner layout (i increases right, j increases up):
+ *   'sw' → i: 0..W-1,       j: 0..D-1
+ *   'se' → i: B-W..B-1,     j: 0..D-1
+ *   'nw' → i: 0..W-1,       j: B-D..B-1
+ *   'ne' → i: B-W..B-1,     j: B-D..B-1
  */
-function edgeRect(B, edge, W, D) {
-  const cells = [];
-  // Offset to center the strip when W < B
-  const offset = Math.floor((B - W) / 2);
+function cornerRect(B, corner, W, D) {
+  let i0, j0;
+  switch (corner) {
+    case 'sw': i0 = 0;     j0 = 0;     break;
+    case 'se': i0 = B - W; j0 = 0;     break;
+    case 'nw': i0 = 0;     j0 = B - D; break;
+    case 'ne': i0 = B - W; j0 = B - D; break;
+    default: throw new Error(`Unknown corner: ${corner}`);
+  }
 
-  for (let along = 0; along < W; along++) {
-    for (let deep = 0; deep < D; deep++) {
-      let i, j;
-      switch (edge) {
-        case 'north':
-          i = offset + along;
-          j = B - 1 - deep;
-          break;
-        case 'south':
-          i = offset + along;
-          j = deep;
-          break;
-        case 'east':
-          i = B - 1 - deep;
-          j = offset + along;
-          break;
-        case 'west':
-          i = deep;
-          j = offset + along;
-          break;
-        default:
-          throw new Error(`Unknown edge: ${edge}`);
-      }
-      cells.push({ i, j });
+  const cells = [];
+  for (let di = 0; di < W; di++) {
+    for (let dj = 0; dj < D; dj++) {
+      cells.push({ i: i0 + di, j: j0 + dj });
     }
   }
   return { cells, W, D };
@@ -160,4 +152,4 @@ function writeWriters(controller, rect, B, writers) {
   });
 }
 
-export { edgeRect };
+export { cornerRect };
