@@ -602,10 +602,23 @@ hardware beyond a stock CPU:
   plus a 256-entry page table (256 bytes if entries are single-byte page numbers).
 
 \item \textbf{Neighborhood mapper.}
-  On each scheduling event, the mapper loads the 49-cell neighborhood
-  into the 6502's \$0000--\$BFFF address space, applying the random
-  rotation. This is the most complex piece of custom logic---a
-  combination of address translation ROM and bank-select latches.
+  On each scheduling event, the mapper configures 49 bank-select
+  registers to present the new cell's $7 \times 7$ neighborhood in the
+  6502's \$0000--\$BFFF address space, applying the random rotation.
+  With paged storage, this is $O(N^2)$ pointer setups ($\sim$49 register
+  writes), not $O(N^2 M)$ byte copies---the data stays in place in
+  physical storage and only the address translation changes. This is the
+  most complex piece of custom logic: a combination of address
+  translation ROM and bank-select latches.
+
+  \textbf{Write tracking.} During execution, all stores to
+  \$0000--\$BFFF are logged in a small hardware write FIFO that records
+  (address, old\_value) pairs. On commit (BRK or timer with I clear),
+  the log is simply discarded---$O(1)$. On atomic abort (timer with I
+  set), the log is replayed backwards to restore original values---$O(k)$
+  where $k$ is the number of bytes written, typically small for a single
+  scheduling quantum. This matches the \texttt{undoHistory} mechanism in
+  the reference JS implementation.
 
 \item \textbf{Shadow window.}
   A second 1\,KB bank at \$C000, selected by writing to the
