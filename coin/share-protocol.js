@@ -1,91 +1,29 @@
 /**
- * Full share protocol: merge two boards, run simulation, split back.
+ * Share protocol: instantaneous edge swap between two boards.
+ *
+ * A share is a single migration event — a rectangular strip of cells
+ * flush with one edge of each board is swapped. No merged board,
+ * no prolonged simulation.
  *
  * @module coin/share-protocol
  */
 
-import { mergeBoards, runMerged, splitBoards } from './board-merge.js';
+import { swapEdge } from './board-merge.js';
 import { sha256, toHex } from './hash.js';
 
 /**
- * A share session that merges two boards, runs the merged simulation,
- * and splits back into two separate boards.
+ * Execute an instantaneous edge swap between two boards.
+ *
+ * @param {Object} engineA - engine with .controller, .size, .serialize()
+ * @param {Object} engineB
+ * @param {Object} [options]
+ * @param {import('./board-merge.js').Edge} [options.edgeA='east'] - A's swap edge
+ * @param {import('./board-merge.js').Edge} [options.edgeB='west'] - B's swap edge
+ * @param {number} [options.depth] - strip depth (default: min board size)
+ * @returns {import('./board-merge.js').SwapResult}
  */
-export class ShareSession {
-  /**
-   * @param {import('./engines/board6502.js').Board6502Engine} engineA
-   * @param {import('./engines/board6502.js').Board6502Engine} engineB
-   * @param {Object} options
-   * @param {'east-west'|'north-south'} [options.mergeEdge='east-west']
-   * @param {number} [options.duration=100] - Number of ticks to run merged board
-   * @param {Array<{tick: number, action: Object}>} [options.movesA] - Player A moves
-   * @param {Array<{tick: number, action: Object}>} [options.movesB] - Player B moves
-   * @param {string} [options.paramStrategy='min'] - Board param merge strategy
-   */
-  constructor(engineA, engineB, options = {}) {
-    this.engineA = engineA;
-    this.engineB = engineB;
-    this.mergeEdge = options.mergeEdge ?? 'east-west';
-    this.duration = options.duration ?? 100;
-    this.movesA = options.movesA ?? [];
-    this.movesB = options.movesB ?? [];
-    this.paramStrategy = options.paramStrategy ?? 'min';
-  }
-
-  /**
-   * Execute the full share: merge -> run -> split.
-   *
-   * @returns {{
-   *   initialHashA: string,
-   *   initialHashB: string,
-   *   finalHashA: string,
-   *   finalHashB: string,
-   *   mergedStateHash: string,
-   *   engineA: import('./engines/board6502.js').Board6502Engine,
-   *   engineB: import('./engines/board6502.js').Board6502Engine,
-   *   mergeEdge: string,
-   *   duration: number,
-   *   moves: Array
-   * }}
-   */
-  execute() {
-    // 1. Record initial state hashes
-    const initialHashA = toHex(sha256(this.engineA.serialize()));
-    const initialHashB = toHex(sha256(this.engineB.serialize()));
-
-    // 2. Merge boards
-    const { mergedEngine, mapping } = mergeBoards(
-      this.engineA, this.engineB, this.mergeEdge,
-      { paramStrategy: this.paramStrategy }
-    );
-
-    // 3. Combine moves from both players
-    const allMoves = [...this.movesA, ...this.movesB];
-
-    // 4. Run merged board
-    runMerged(mergedEngine, this.duration, allMoves);
-
-    // 5. Record merged state hash
-    const mergedStateHash = toHex(sha256(mergedEngine.serialize()));
-
-    // 6. Split back into two boards
-    const { engineA, engineB } = splitBoards(mergedEngine, mapping);
-
-    // 7. Record final state hashes
-    const finalHashA = toHex(sha256(engineA.serialize()));
-    const finalHashB = toHex(sha256(engineB.serialize()));
-
-    return {
-      initialHashA,
-      initialHashB,
-      finalHashA,
-      finalHashB,
-      mergedStateHash,
-      engineA,
-      engineB,
-      mergeEdge: this.mergeEdge,
-      duration: this.duration,
-      moves: allMoves,
-    };
-  }
+export function executeShare(engineA, engineB, options = {}) {
+  const edgeA = options.edgeA ?? 'east';
+  const edgeB = options.edgeB ?? 'west';
+  return swapEdge(engineA, edgeA, engineB, edgeB, { depth: options.depth });
 }
