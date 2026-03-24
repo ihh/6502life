@@ -141,10 +141,10 @@ Within each cell, memory is laid out as follows:
 | 0FC-0FF | Random number generator, updated on interrupt |
 | 100-1FF | Stack (or risky storage...) |
 | 200-37F | Available for code or data |
-| 380-38F | 16x16 pixel bitmap, red channel |
-| 3A0-3AF | 16x16 pixel bitmap, green channel |
-| 3C0-3CF | 16x16 pixel bitmap, blue channel |
-| 3E0-3FF | ASCII display name |
+| 3C0-3DF | 16x16 monochrome bitmap (1 bit/pixel, 32 bytes) |
+| 3E0-3FB | ASCII display name (28 bytes) |
+| 3FC-3FE | Reserved |
+| 3FF | Hue byte (0-255 → 0-360° HSV) |
 
 Notes:
 
@@ -152,9 +152,7 @@ Notes:
 + Bytes F9-FF are used to store (in order) PCHI, PCLO, P, A, X, Y, S. So a cell can (for example) "hijack" a neighboring cell's execution state by writing directly to its PC, if that is something a developer wants to do.
 + Addresses 380-3FF are reserved for visualization, by convention, but there is nothing stopping a program using them for code or data.
 
-Currently the visualization code parses the display name as an [Iconify](https://iconify.design/) icon
-(optionally preceded by a CSS color name and then a colon); the bitmap is not used.
-This may change.
+The hue byte at 3FF sets the cell's color (0-255 mapped to HSV hue 0-360°). A nonzero hue is rendered at full saturation with brightness scaled by recent activity. The monochrome bitmap at 3C0-3DF provides shape; the hue byte provides color. The display name (28 bytes at 3E0-3FB) is parsed as an [Iconify](https://iconify.design/) icon (optionally preceded by a CSS color name and colon).
 
 ## Vector lookup tables
 
@@ -230,21 +228,22 @@ The `BoardController` accepts a `boardParams` dictionary with the following defa
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `pBitNoise` | 1/2048 | Per-bit noise probability on BRK noisy copy |
-| `pBrkFailure` | 0 | Probability a BRK copy/swap silently fails |
-| `magnetosensing` | false | If true, scheduler writes orientation to $FA (shifted left 2 bits) |
+| `pBitNoise` | 1/2048 | Per-bit resampling probability on BRK noisy copy (ε) |
+| `pBitNoiseZero` | 0.5 | P(resampled bit = 0); 0.5 = fair coin, 1 = erasure (q) |
+| `nSwapCycles` | 0 | Cycle budget for BRK copy/swap; fails if fewer cycles remain (0 = no limit) |
+| `hasCompass` | false | If true, scheduler writes orientation to $FA (shifted left 2 bits) |
 | `implementsMove` | true | Enable BRK 1–244 swap operations |
 | `implementsCopy` | true | Enable BRK 245–252 noisy copy |
 | `implementsSync` | false | Enable BRK 253 sync interrupt request |
 | `implementsAsync` | false | Enable BRK 254 async interrupt request |
 
-#### Magnetosensing
+#### Compass (hasCompass)
 
-When `magnetosensing` is enabled, the scheduler writes the current orientation (0–3, shifted left by 2 bits) to address $FA after each context switch. Programs can read $FA to detect their absolute orientation, breaking rotational symmetry. When disabled (default), $FA is written as 0.
+When `hasCompass` is enabled, the scheduler writes the current orientation (0–3, shifted left by 2 bits) to address $FA after each context switch. Programs can read $FA to detect their absolute orientation, breaking rotational symmetry. When disabled (default), $FA is written as 0.
 
 #### Noisy copy model
 
-The noisy copy (operands 245–252) copies all 1024 bytes of the origin cell to the destination. Each bit is independently randomized (replaced by a fair coin flip) with probability ε (`pBitNoise`), and faithfully copied with probability 1−ε. The default is ε = 1/2048, giving approximately 1 bit error per 256-byte page copied (~4 errors per cell).
+The noisy copy (operands 245–252) copies all 1024 bytes of the origin cell to the destination. Each bit is independently resampled with probability ε (`pBitNoise`), and faithfully copied with probability 1−ε. When a bit is resampled, it becomes 0 with probability q (`pBitNoiseZero`) and 1 with probability 1−q. The defaults are ε = 1/2048 and q = 0.5 (fair coin), giving approximately 1 bit error per 256-byte page copied (~4 errors per cell). Setting q = 1 gives pure erasure noise.
 
 LDA/STA writes (normal 6502 store instructions) are always exact — noise applies only to BRK noisy copies.
 

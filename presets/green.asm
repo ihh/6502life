@@ -1,7 +1,7 @@
 ; Green: rock-paper-scissors ecology (GREEN team)
-; Hue byte at $3A0: 85 = green (hue ≈ 120°)
+; Hue byte at $3FF: 85 = green (hue ≈ 120°)
 LDA #$55
-STA $03A0
+STA $03FF
 @start:
 BRK
 .byte $F5

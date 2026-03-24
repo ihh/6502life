@@ -5,7 +5,7 @@
 LDA #$03
 STA $A5            ; type = 3
 LDA #$AA
-STA $03A0          ; hue = blue
+STA $03FF          ; hue = blue
 @start:
 LDA $04A5          ; forward neighbor's type
 BEQ @copy          ; 0 = empty → copy

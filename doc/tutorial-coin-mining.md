@@ -330,17 +330,17 @@ board hyperparameters:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `pBitNoise` | float | 1/2048 | Per-bit noise on BRK noisy copy |
-| `pBrkFailure` | float | 0 | Probability BRK copy/swap silently fails |
-| `magnetosensing` | bool | false | Write cell orientation to $FA each interrupt |
+| `nSwapCycles` | float | 0 | Probability BRK copy/swap silently fails |
+| `hasCompass` | bool | false | Write cell orientation to $FA each interrupt |
 | `implementsMove` | bool | true | Enable BRK 1-244 swap operations |
 | `implementsCopy` | bool | true | Enable BRK 245-252 noisy copy |
 | `implementsSync` | bool | false | Enable BRK 253 sync interrupt request |
 | `implementsAsync` | bool | false | Enable BRK 254 async interrupt request |
 
 ```bash
-# Enable magnetosensing and sync interrupts with zero noise
+# Enable hasCompass and sync interrupts with zero noise
 node cli/bin/run.js --size 16 --preset nano-2x --cell 0,0 \
-  --board-params '{"magnetosensing":true,"implementsSync":true,"pBitNoise":0}' \
+  --board-params '{"hasCompass":true,"implementsSync":true,"pBitNoise":0}' \
   --interrupts 50000 --save /tmp/magneto.json
 
 # Disable movement but keep copy -- organisms can spread but not move
@@ -353,9 +353,9 @@ Note: if both `--epsilon` and `--board-params` are provided, both are
 applied. The `--board-params` value takes precedence if it also sets
 `pBitNoise`.
 
-### Magnetosensing
+### HasCompass
 
-When `magnetosensing` is enabled, the board writes each cell's current
+When `hasCompass` is enabled, the board writes each cell's current
 orientation to byte $FA of its zero page before every interrupt. Programs
 can read this byte to learn which direction they are facing.
 
@@ -386,7 +386,7 @@ cooperative multi-cell organisms.
 - Use the `inject.js` tool to set up tournament brackets between presets.
 - Watch the mean-field model predictions and compare them to actual
   simulation outcomes.
-- Experiment with board parameters: try magnetosensing, sync interrupts,
+- Experiment with board parameters: try hasCompass, sync interrupts,
   or different mutation rates to see how they change evolutionary dynamics.
 - Read `doc/tutorial-tracking-replicators.md` for a deep dive into lineage
   tracking and phylogenetic analysis.

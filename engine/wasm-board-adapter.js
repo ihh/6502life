@@ -49,8 +49,9 @@ export function createWasmBoardAdapter(size = 32, seed = 42, boardParams) {
         inner = WasmBoard.new_with_params(
             size, seed,
             boardParams.pBitNoise ?? 1 / 2048,
-            boardParams.pBrkFailure ?? 0,
-            boardParams.magnetosensing ?? false,
+            boardParams.nSwapCycles ?? 0,
+            boardParams.pBitNoiseZero ?? 0.5,
+            boardParams.hasCompass ?? false,
             boardParams.implementsMove ?? true,
             boardParams.implementsCopy ?? true,
             boardParams.implementsSync ?? false,
@@ -172,8 +173,9 @@ export function createWasmBoardAdapter(size = 32, seed = 42, boardParams) {
                 totalCycles: Number(inner.total_cycles()),
                 boardParams: {
                     pBitNoise: inner.get_p_bit_noise(),
-                    pBrkFailure: inner.get_p_brk_failure(),
-                    magnetosensing: inner.get_magnetosensing(),
+                    nSwapCycles: inner.get_n_swap_cycles(),
+                    pBitNoiseZero: inner.get_p_bit_noise_zero(),
+                    hasCompass: inner.get_has_compass(),
                     implementsMove: inner.get_implements_move(),
                     implementsCopy: inner.get_implements_copy(),
                     implementsSync: inner.get_implements_sync(),

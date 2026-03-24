@@ -114,27 +114,16 @@ BNE @loop`
   },
   painter: {
     name: 'Painter',
-    desc: 'Fills the RGB bitmap area with a pattern',
-    source: `; Painter: Fills the RGB bitmap area with a pattern
+    desc: 'Fills the monochrome bitmap with a pattern',
+    source: `; Painter: Fills the 16x16 monochrome bitmap with a pattern
+LDA #$AA
+STA $03FF
 LDX #$1F
-LDA #$FF
-@fill_r:
-STA $0380,X
-DEX
-BPL @fill_r
-LDX #$1F
-@fill_g:
+@fill:
 TXA
-STA $03A0,X
-DEX
-BPL @fill_g
-LDX #$1F
-@fill_b:
-TXA
-EOR #$FF
 STA $03C0,X
 DEX
-BPL @fill_b
+BPL @fill
 BRK
 .byte $01`
   },
@@ -160,7 +149,7 @@ BRK
     desc: 'Rock-paper-scissors ecology (RED team)',
     source: `; Red: hue=1 (≈0° red)
 LDA #$01
-STA $03A0
+STA $03FF
 @start:
 BRK
 .byte $F5
@@ -172,7 +161,7 @@ BEQ @start`
     desc: 'Rock-paper-scissors ecology (GREEN team)',
     source: `; Green: hue=85 (≈120° green)
 LDA #$55
-STA $03A0
+STA $03FF
 @start:
 BRK
 .byte $F5
@@ -184,7 +173,7 @@ BEQ @start`
     desc: 'Rock-paper-scissors ecology (BLUE team)',
     source: `; Blue: hue=170 (≈240° blue)
 LDA #$AA
-STA $03A0
+STA $03FF
 @start:
 BRK
 .byte $F5

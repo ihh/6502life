@@ -165,15 +165,15 @@ The state space of functional self-replicators is too sparse relative to the
 space of random byte sequences. Larger boards or longer runtimes might produce
 spontaneous replicators, but the probability per unit time is extremely low.
 
-## Experiment 4: Magnetosensing vs standard nano-2x
+## Experiment 4: HasCompass vs standard nano-2x
 
 ### Setup
 - Board: 8x8, seed 42
 - Noise: pBitNoise = 1/131072
 - Duration: 5M interrupts
-- Comparison: standard nano-2x vs magnetosensing nano-2x variant
+- Comparison: standard nano-2x vs hasCompass nano-2x variant
 
-### Control: standard nano-2x (no magnetosensing)
+### Control: standard nano-2x (no hasCompass)
 
 | Interrupts | Alive | Unique FPs |
 |-----------|-------|-----------|
@@ -185,10 +185,10 @@ spontaneous replicators, but the probability per unit time is extremely low.
 | 3M | 64 | 4 |
 | 5M | 64 | 2 |
 
-### Magnetosensing nano-2x variant
+### HasCompass nano-2x variant
 
 This variant uses a direction-aware copy strategy.
-When magnetosensing is enabled, $FA contains (orientation << 2).
+When hasCompass is enabled, $FA contains (orientation << 2).
 The organism reads $FA and adjusts its BRK operand accordingly.
 
 | Interrupts | Alive | Unique FPs |
@@ -201,11 +201,11 @@ The organism reads $FA and adjusts its BRK operand accordingly.
 | 3M | 64 | 3 |
 | 5M | 64 | 1 |
 
-### Direction-aware triplicator (magnetosensing ON)
+### Direction-aware triplicator (hasCompass ON)
 
-Uses triplicator-evolvable with magnetosensing enabled.
+Uses triplicator-evolvable with hasCompass enabled.
 The organism itself does not read $FA, but the board provides
-orientation info. This tests whether magnetosensing as a board
+orientation info. This tests whether hasCompass as a board
 parameter affects triplicator survival.
 
 | Interrupts | Alive | 80% fidelity | Mean N |
@@ -217,7 +217,7 @@ parameter affects triplicator survival.
 | 3M | 64 | 0 | 10.0 |
 | 5M | 64 | 0 | 10.0 |
 
-### Triplicator control (magnetosensing OFF)
+### Triplicator control (hasCompass OFF)
 
 | Interrupts | Alive | 80% fidelity | Mean N |
 |-----------|-------|-------------|--------|
@@ -231,24 +231,24 @@ parameter affects triplicator survival.
 ### Analysis
 
 **Both nano-2x variants survive identically at eps=1/131072.** Standard and
-magnetosensing nano-2x both maintain 64/64 alive through 5M interrupts, with
+hasCompass nano-2x both maintain 64/64 alive through 5M interrupts, with
 no measurable difference. Since nano-2x's code does not read $FA, the
-magnetosensing board parameter has no effect on its behavior.
+hasCompass board parameter has no effect on its behavior.
 
-**Magnetosensing does not affect triplicator survival.** Both the magnetosensing
+**HasCompass does not affect triplicator survival.** Both the hasCompass
 ON and OFF variants of triplicator-evolvable maintain 64/64 alive through 5M.
 The triplicator's code also does not read $FA, so the parameter is irrelevant.
 The slight difference in 80% fidelity timing (drops at 3M with magneto ON vs
-2M with magneto OFF) is due to different RNG state from the magnetosensing
+2M with magneto OFF) is due to different RNG state from the hasCompass
 writes to $FA consuming different MT entropy.
 
 **N drifted to 26 in the magneto-OFF control.** This confirms the upward drift
 seen in Experiment 1, though the magnitude differs (26 vs 72) likely due to
 different sweep timing and stochastic dynamics.
 
-**Magnetosensing would matter for a direction-aware organism.** The test as
-designed does not exercise magnetosensing because neither nano-2x nor the
-triplicator reads $FA. A true magnetosensing organism would need to use the
+**HasCompass would matter for a direction-aware organism.** The test as
+designed does not exercise hasCompass because neither nano-2x nor the
+triplicator reads $FA. A true hasCompass organism would need to use the
 orientation at $FA to make directional decisions (e.g., always copy north).
 This could provide a fitness advantage on boards with spatial structure, but
 on the 8x8 torus with random orientations, there is no directional advantage
@@ -277,7 +277,7 @@ survive at this noise level, but neither can displace the other once established
 10M interrupts on a randomized 8x8 board produced zero self-replicating patterns.
 The probability of a functional replicator arising by chance is vanishingly small.
 
-### 5. Magnetosensing provides no advantage to existing organisms
-Without code that reads the orientation register at $FA, magnetosensing is
-invisible to the organism. A purpose-built magnetosensing organism remains an
+### 5. HasCompass provides no advantage to existing organisms
+Without code that reads the orientation register at $FA, hasCompass is
+invisible to the organism. A purpose-built hasCompass organism remains an
 open research direction.

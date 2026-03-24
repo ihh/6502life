@@ -250,8 +250,8 @@ export function splitBoards(mergedEngine, mapping) {
  * @returns {Object}
  */
 function mergeParams(paramsA, paramsB, strategy) {
-  const numericKeys = ['pBitNoise', 'pBrkFailure'];
-  const boolKeys = ['magnetosensing', 'implementsMove', 'implementsCopy', 'implementsSync', 'implementsAsync'];
+  const numericKeys = ['pBitNoise', 'nSwapCycles', 'pBitNoiseZero'];
+  const boolKeys = ['hasCompass', 'implementsMove', 'implementsCopy', 'implementsSync', 'implementsAsync'];
   const result = {};
 
   for (const key of numericKeys) {

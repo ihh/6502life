@@ -387,14 +387,14 @@ async function experiment4() {
     log('- Board: 8x8, seed 42');
     log('- Noise: pBitNoise = 1/131072');
     log('- Duration: 5M interrupts');
-    log('- Comparison: standard nano-2x vs magnetosensing nano-2x variant');
+    log('- Comparison: standard nano-2x vs hasCompass nano-2x variant');
     log('');
 
     // Standard nano-2x (control)
-    log('### Control: standard nano-2x (no magnetosensing)');
+    log('### Control: standard nano-2x (no hasCompass)');
     {
         const size = 8;
-        const { controller } = createBoard(size, 42, { pBitNoise: 1/131072, magnetosensing: false });
+        const { controller } = createBoard(size, 42, { pBitNoise: 1/131072, hasCompass: false });
         zeroAllCells(controller);
         const bytes = await assemblePreset('nano-2x');
         seedCell(controller, 0, 0, bytes, { pages: [0] });
@@ -424,19 +424,19 @@ async function experiment4() {
     log('### Magnetosensing nano-2x variant');
     log('');
     log('This variant uses a direction-aware copy strategy.');
-    log('When magnetosensing is enabled, $FA contains (orientation << 2).');
+    log('When hasCompass is enabled, $FA contains (orientation << 2).');
     log('The organism reads $FA and adjusts its BRK operand accordingly.');
     log('');
 
-    // Assemble a magnetosensing variant
-    // Simple approach: always copy forward ($F5). With magnetosensing,
+    // Assemble a hasCompass variant
+    // Simple approach: always copy forward ($F5). With hasCompass,
     // the organism knows its orientation, so "forward" is always the same
-    // absolute direction. Without magnetosensing, "forward" is random.
+    // absolute direction. Without hasCompass, "forward" is random.
     // A smarter variant: copy in two fixed absolute directions.
     const magnetoSource = `
 ; Magnetosensing nano-2x: copies forward and right, aware of orientation
 ; Reads $FA to know orientation. Copies $F5 (forward) and $F6 (right).
-; With magnetosensing enabled, these map to consistent absolute directions.
+; With hasCompass enabled, these map to consistent absolute directions.
 @start:
 BRK
 .byte $F5
@@ -448,7 +448,7 @@ BEQ @start
 
     {
         const size = 8;
-        const { controller } = createBoard(size, 42, { pBitNoise: 1/131072, magnetosensing: true });
+        const { controller } = createBoard(size, 42, { pBitNoise: 1/131072, hasCompass: true });
         zeroAllCells(controller);
         const bytes = await assemble(magnetoSource);
         seedCell(controller, 0, 0, bytes, { pages: [0] });
@@ -470,18 +470,18 @@ BEQ @start
         log('');
     }
 
-    // Now the real magnetosensing test: a direction-aware organism
+    // Now the real hasCompass test: a direction-aware organism
     // that uses $FA to pick which neighbor to copy to
-    log('### Direction-aware triplicator (magnetosensing ON)');
+    log('### Direction-aware triplicator (hasCompass ON)');
     log('');
-    log('Uses triplicator-evolvable with magnetosensing enabled.');
+    log('Uses triplicator-evolvable with hasCompass enabled.');
     log('The organism itself does not read $FA, but the board provides');
-    log('orientation info. This tests whether magnetosensing as a board');
+    log('orientation info. This tests whether hasCompass as a board');
     log('parameter affects triplicator survival.');
     log('');
     {
         const size = 8;
-        const { controller } = createBoard(size, 42, { pBitNoise: 1/131072, magnetosensing: true });
+        const { controller } = createBoard(size, 42, { pBitNoise: 1/131072, hasCompass: true });
         const bytes = await assemblePreset('triplicator-evolvable');
         seedAllCells(controller, bytes, size, { N: 10, pages: [0, 2, 3] });
 
@@ -508,11 +508,11 @@ BEQ @start
     }
 
     // Magnetosensing OFF for comparison
-    log('### Triplicator control (magnetosensing OFF)');
+    log('### Triplicator control (hasCompass OFF)');
     log('');
     {
         const size = 8;
-        const { controller } = createBoard(size, 42, { pBitNoise: 1/131072, magnetosensing: false });
+        const { controller } = createBoard(size, 42, { pBitNoise: 1/131072, hasCompass: false });
         const bytes = await assemblePreset('triplicator-evolvable');
         seedAllCells(controller, bytes, size, { N: 10, pages: [0, 2, 3] });
 

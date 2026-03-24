@@ -60,7 +60,7 @@ node cli/bin/run.js --preset nano-2x --cell 0,0 --epsilon 0 --interrupts 10000
 
 # Set any board params via JSON
 node cli/bin/run.js --preset nano-2x --cell 0,0 \
-  --board-params '{"magnetosensing":true,"pBitNoise":0}' --interrupts 10000
+  --board-params '{"hasCompass":true,"pBitNoise":0}' --interrupts 10000
 
 # Save/load state
 node cli/bin/run.js --randomize --save state.json
@@ -134,7 +134,7 @@ node cli/bin/replay.js --size 16 --preset nano-2x --cell 0,0 --interrupts 1000 -
 
 # With epsilon and board params
 node cli/bin/replay.js --size 16 --preset nano-2x --cell 0,0 --epsilon 0 --interrupts 1000 --log events.jsonl
-node cli/bin/replay.js --state snap.json --board-params '{"magnetosensing":true}' --interrupts 500 --log events.jsonl
+node cli/bin/replay.js --state snap.json --board-params '{"hasCompass":true}' --interrupts 500 --log events.jsonl
 
 # Periodic census during replay
 node cli/bin/replay.js --state snap.json --interrupts 500 --census 100 --log census.jsonl
@@ -209,16 +209,18 @@ Colors encode cell activity using HSV with exponential decay of write/move recen
 | 0x0F9-0x0FF | CPU register save area + RNG (0xF9 is also auto-rotated) |
 | 0x100-0x1FF | Stack |
 | 0x200-0x37F | Code or data |
-| 0x380-0x3BF | 16x16 RGB bitmap (R at 0x380, G at 0x3A0, B at 0x3C0) |
-| 0x3E0-0x3FF | ASCII display name (32 bytes) |
+| 0x3C0-0x3DF | 16x16 monochrome bitmap (1 bit/pixel, 32 bytes) |
+| 0x3E0-0x3FB | ASCII display name (28 bytes) |
+| 0x3FC-0x3FE | Reserved |
+| 0x3FF | Hue byte (0-255 → 0-360° HSV) |
 
 ## Conventions
 
 - **Oriented registers** at 0xF0-0xF8: top 6 bits are rotated with the orientation. 0xF9 (PCHI) is also auto-rotated but is controller-reserved.
 - **Register save area** at 0xF9-0xFF: PCHI, PCLO, P, A, X, Y, S
 - **RNG** at 0xFC-0xFF: 4 bytes of pseudorandom numbers, refreshed each interrupt
-- **Magnetosensing**: if enabled (`boardParams.magnetosensing`), the scheduler writes the current orientation to $FA (shifted left 2 bits). Programs can read $FA to detect their absolute orientation. Disabled by default (writes 0).
-- **Board hyperparameters** (`boardParams`): `pBitNoise` (default 1/2048), `pBrkFailure` (default 0), `magnetosensing` (default false), `implementsMove` (default true), `implementsCopy` (default true), `implementsSync` (default false), `implementsAsync` (default false). Feature flags gate which BRK operands have effect; unimplemented BRK types just yield to scheduler.
+- **Compass**: if enabled (`boardParams.hasCompass`), the scheduler writes the current orientation to $FA (shifted left 2 bits). Programs can read $FA to detect their absolute orientation. Disabled by default (writes 0).
+- **Board hyperparameters** (`boardParams`): `pBitNoise` (default 1/2048), `pBitNoiseZero` (default 0.5, P(resampled bit=0)), `nSwapCycles` (default 0, cycle budget for BRK copy/swap), `hasCompass` (default false), `implementsMove` (default true), `implementsCopy` (default true), `implementsSync` (default false), `implementsAsync` (default false). Feature flags gate which BRK operands have effect; unimplemented BRK types just yield to scheduler.
 - **BRK operands**: byte `b` after BRK opcode:
   - 0: reset PC to 0, yield
   - 1-244: swap cells src=floor(b/49), dest=b%49 (if `implementsMove`)
@@ -234,18 +236,20 @@ Colors encode cell activity using HSV with exponential decay of write/move recen
 The VM does not read or interpret these bytes — programs can use them for anything.
 But viewers, debuggers, and phone UIs may render cells based on this layout:
 
-- **Display name** at 0x3E0-0x3FF: 32 bytes of ASCII. Parsed by the web app as
+- **Hue byte** at 0x3FF: 1 byte, 0-255 mapped to 0-360° HSV hue. Nonzero hue is
+  rendered at full saturation with brightness scaled by recent activity. Zero falls
+  back to default activity-based heat coloring.
+- **Monochrome bitmap** at 0x3C0-0x3DF: 16x16 pixel bitmap (1 bit/pixel, 32 bytes).
+  Provides shape; the hue byte provides color. Available for cell inspector panels.
+- **Display name** at 0x3E0-0x3FB: 28 bytes of ASCII. Parsed by the web app as
   `[cssColor]:[iconifyIconName]` (e.g. `orange:bee`, `red:sword`). If no colon present,
   the name is treated as an Iconify icon in the `game-icons` set.
-- **RGB bitmap** at 0x380-0x3BF: 16x16 pixel bitmap (32 bytes per channel: R, G, B).
-  Each bit represents one pixel. Rendered in the Cell Inspector panel.
-- **Phone PWA**: uses overview color (HSV from write/move recency), not the bitmap.
-  The bitmap is available for future detail views.
-- **SokoScript**: compiled programs should write their cell type name to 0x3E0 and
-  optionally render state as a bitmap, giving viewers a rich display for free.
+- **Phone PWA**: uses hue byte for cell color when present, falling back to overview
+  color (HSV from write/move recency).
+- **SokoScript**: compiled programs should write their cell type name to 0x3E0, set
+  a hue byte, and optionally render state as a bitmap.
 - **CLI heatmap**: uses activity data (lastWriteTime/lastMoveTime), not the bitmap.
-- **TUI debugger**: shows hex dump, disassembly, and activity colors. Could render
-  the bitmap in a cell inspector pane.
+- **TUI debugger**: shows hex dump, disassembly, and activity colors.
 
 ## Sfotty CPU Notes
 

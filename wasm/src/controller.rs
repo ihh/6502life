@@ -19,10 +19,12 @@ const RNG_ADDR: usize = 0xFC;
 pub struct BoardParams {
     /// Per-bit noise on BRK noisy copy
     pub p_bit_noise: f64,
-    /// Probability BRK copy/swap silently fails
-    pub p_brk_failure: f64,
+    /// Cycle budget for BRK copy/swap (0 = no limit)
+    pub n_swap_cycles: u32,
+    /// P(resampled bit = 0); 0.5 = fair coin, 1.0 = erasure
+    pub p_bit_noise_zero: f64,
     /// Write orientation to $FA if true
-    pub magnetosensing: bool,
+    pub has_compass: bool,
     /// BRK 1-244 swap operations enabled
     pub implements_move: bool,
     /// BRK 245-252 noisy copy enabled
@@ -37,8 +39,9 @@ impl Default for BoardParams {
     fn default() -> Self {
         BoardParams {
             p_bit_noise: 1.0 / 2048.0,
-            p_brk_failure: 0.0,
-            magnetosensing: false,
+            n_swap_cycles: 0,
+            p_bit_noise_zero: 0.5,
+            has_compass: false,
             implements_move: true,
             implements_copy: true,
             implements_sync: false,
@@ -145,6 +148,7 @@ impl BoardController {
         let src_base = self.memory.neighbor_cell_storage_base(0);
         let dst_base = self.memory.neighbor_cell_storage_base(dest);
         let eps = self.board_params.p_bit_noise;
+        let q = self.board_params.p_bit_noise_zero;
         let mut perfect = true;
 
         if eps == 0.0 {
@@ -155,7 +159,22 @@ impl BoardController {
         } else {
             for b in 0..M {
                 let src_byte = self.memory.storage[src_base + b];
-                let rnd_byte = (self.memory.mt.int() & 0xFF) as u8;
+                // Generate replacement byte: each bit is 0 with probability q
+                let rnd_byte: u8 = if q == 0.5 {
+                    (self.memory.mt.int() & 0xFF) as u8  // fast path: fair coin
+                } else if q >= 1.0 {
+                    0x00  // erasure
+                } else if q <= 0.0 {
+                    0xFF
+                } else {
+                    let mut rb: u8 = 0;
+                    for bit in 0..8 {
+                        if self.memory.mt.real() >= q {
+                            rb |= 1 << bit;
+                        }
+                    }
+                    rb
+                };
                 let mut noise_bits: u8 = 0;
                 for bit in 0..8 {
                     if self.memory.mt.real() < eps {
@@ -271,9 +290,9 @@ impl BoardController {
                         let n_dest_cells = N_SQUARED; // 49
                         let n_src_cells = 5;
                         let bp = &self.board_params;
-                        // pBrkFailure: probability the copy/swap silently fails
-                        let brk_fails = bp.p_brk_failure > 0.0
-                            && self.memory.mt.real() < bp.p_brk_failure;
+                        // nSwapCycles: BRK copy/swap fails if fewer cycles remain
+                        let brk_fails = bp.n_swap_cycles > 0
+                            && (scheduler_cycles - cpu_cycles) < bp.n_swap_cycles as usize;
                         if !brk_fails {
                             // Clone board_params fields we need to avoid borrow issues
                             let implements_move = bp.implements_move;
@@ -370,7 +389,7 @@ impl BoardController {
                 // shifted left 2 bits to match oriented register format.
                 {
                     let base = self.memory.neighbor_cell_storage_base(0);
-                    self.memory.storage[base + 0xFA] = if self.board_params.magnetosensing {
+                    self.memory.storage[base + 0xFA] = if self.board_params.has_compass {
                         (self.memory.orientation << 2) as u8
                     } else {
                         0
@@ -406,14 +425,14 @@ mod tests {
     fn test_controller_with_params() {
         let mem = BoardMemory::new(42, 8);
         let params = BoardParams {
-            magnetosensing: true,
+            has_compass: true,
             implements_sync: true,
             implements_async: true,
             ..Default::default()
         };
         let ctrl = BoardController::with_params(mem, params);
         assert_eq!(ctrl.board_size(), 8);
-        assert!(ctrl.board_params.magnetosensing);
+        assert!(ctrl.board_params.has_compass);
         assert!(ctrl.board_params.implements_sync);
         assert!(ctrl.board_params.implements_async);
     }
@@ -466,10 +485,10 @@ mod tests {
     }
 
     #[test]
-    fn test_brk_failure() {
+    fn test_swap_cycle_budget() {
         let mem = BoardMemory::new(42, 8);
         let params = BoardParams {
-            p_brk_failure: 1.0, // always fail
+            n_swap_cycles: 999999, // always fail (budget exceeds any quantum)
             ..Default::default()
         };
         let mut ctrl = BoardController::with_params(mem, params);
@@ -481,10 +500,10 @@ mod tests {
     }
 
     #[test]
-    fn test_magnetosensing_writes_orientation() {
+    fn test_has_compass_writes_orientation() {
         let mem = BoardMemory::new(42, 8);
         let params = BoardParams {
-            magnetosensing: true,
+            has_compass: true,
             ..Default::default()
         };
         let mut ctrl = BoardController::with_params(mem, params);
@@ -497,10 +516,10 @@ mod tests {
     }
 
     #[test]
-    fn test_no_magnetosensing_writes_zero() {
+    fn test_no_has_compass_writes_zero() {
         let mem = BoardMemory::new(42, 8);
         let params = BoardParams {
-            magnetosensing: false,
+            has_compass: false,
             ..Default::default()
         };
         let mut ctrl = BoardController::with_params(mem, params);

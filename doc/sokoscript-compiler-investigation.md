@@ -62,7 +62,7 @@ Each cell runs an independent 6502 program in 1024 bytes of local RAM. The progr
 5. Optionally issues a BRK to swap cells (operands 1-244) or noisily copy self (operands 245-252), then yields to the scheduler.
 
 ### Key VM Constraints
-- **1024 bytes per cell**: Divided into zero page (0x00-0xEF usable), stack (0x100-0x1FF), code/data (0x200-0x37F), display area (0x380-0x3FF). Effectively ~736 bytes for code+data.
+- **1024 bytes per cell**: Divided into zero page (0x00-0xEF usable), stack (0x100-0x1FF), code/data (0x200-0x3BF), display area (0x3C0-0x3FF). Effectively ~800 bytes for code+data.
 - **7x7 neighborhood**: 49 cells visible, addressed via memory pages.
 - **Random orientation**: Each interrupt randomly rotates the neighborhood by 0/90/180/270 degrees. Programs see a consistent relative frame, but absolute directions change.
 - **Asynchronous scheduling**: One cell runs at a time, with Poisson-distributed interrupts (~4096 cycles between interrupts on average).

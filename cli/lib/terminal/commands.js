@@ -41,7 +41,28 @@ export class CommandExecutor {
                     this.controller.runToNextInterrupt();
                     this.app.totalInterrupts++;
                 }
+                this.app.memoryPane.invalidatePC();
+                this.app.needsRender = true;
                 return `Stepped ${n} interrupt${n > 1 ? 's' : ''}. Total: ${this.app.totalInterrupts}`;
+            }
+
+            case 'si': case 'stepi': {
+                // Step one 6502 instruction (not a full interrupt)
+                const n = parseInt(args[0]) || 1;
+                const sfotty = this.controller.sfotty;
+                let totalCycles = 0;
+                for (let i = 0; i < n; i++) {
+                    // Run until we hit an instruction boundary (cycleCounter resets to 0)
+                    do {
+                        sfotty.run();
+                        totalCycles++;
+                        this.controller.totalCycles++;
+                    } while (sfotty.cycleCounter !== 0 && totalCycles < 100);
+                }
+                this.app.memoryPane.invalidatePC();
+                this.app.needsRender = true;
+                const pc = sfotty.PC;
+                return `Stepped ${n} insn (${totalCycles} cycles). PC=$${pc.toString(16).padStart(4, '0')}`;
             }
 
             case 'speed': {
@@ -515,6 +536,7 @@ const HELP_TEXT = `Debugger commands:
   r, run            Start simulation
   p, pause          Pause simulation
   s, step [N]       Step N interrupts (default 1)
+  si, stepi [N]     Step N instructions (default 1)
   speed N           Set speed (interrupts/frame)
 
   goto ADDR         Jump both memory + disasm to address

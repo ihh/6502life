@@ -13,56 +13,81 @@
 \maketitle
 
 \begin{abstract}
-We derive a closed-form evolutionary distance formula for cells diverging
+We derive closed-form evolutionary distance formulas for cells diverging
 through the 6502life noisy copy channel, where each bit is independently
-randomized with probability $\varepsilon$ per copy event. This is the
-binary Jukes--Cantor model. The MLE of evolutionary distance is a
-closed-form function of Hamming distance.
+resampled with probability $\varepsilon$ per copy event, and a resampled
+bit takes value~0 with probability $q$ and value~1 with probability
+$1-q$.  When $q = 1/2$ this is the standard binary Jukes--Cantor model;
+the general case covers erasure noise ($q=1$) and arbitrary bias.
 \end{abstract}
 
 \section{The Noisy Copy Channel}
 
 When a BRK noisy-copy fires (operands \$F5--\$F8), the origin cell's
 $M = 1024$ bytes are copied to a neighbor. Each bit is independently
-randomized (replaced by a fair coin flip) with probability
-$\varepsilon$ (\texttt{pBitNoise}), and faithfully copied with
-probability $1-\varepsilon$. The default is $\varepsilon = 1/2048$,
-giving $\sim$1 bit error per 256-byte page copied.
+resampled with probability $\varepsilon$ (\texttt{pBitNoise}), and
+faithfully copied with probability $1-\varepsilon$. When resampled,
+the bit becomes~0 with probability $q$ (\texttt{pBitNoiseZero}) and~1
+with probability $1-q$. The defaults are $\varepsilon = 1/2048$ and
+$q = 1/2$.
 
-\section{Binary Jukes--Cantor Distance}
+\section{Biased Binary Jukes--Cantor Distance}
+
+Let $r = 1-\varepsilon$. Each bit evolves under a 2-state Markov chain
+with transition matrix
+\[
+P = \begin{pmatrix} 1-\varepsilon(1-q) & \varepsilon(1-q) \\
+                     \varepsilon q & 1-\varepsilon q
+    \end{pmatrix}
+\]
+with stationary distribution $\pi(0) = q$, $\pi(1) = 1-q$.
+The second eigenvalue is $r = 1-\varepsilon$.
 
 \begin{proposition}
-After $T$ copy events on the tree path between two cells, the fraction
-of differing bits is
+After $T$ copy events on the tree path between two cells whose ancestral
+bit distribution is at stationarity, the fraction of differing bits is
 \begin{equation}
-p = \tfrac{1}{2}\bigl(1 - (1-\varepsilon)^T\bigr)
+p = 2q(1-q)\bigl(1 - (1-\varepsilon)^T\bigr)
 \end{equation}
 and the MLE of $T$ given observed bit mismatch fraction $\hat{p}$ is
 \begin{equation}
-\boxed{\hat{T} = \frac{\log(1 - 2\hat{p})}{\log(1 - \varepsilon)}}
+\boxed{\hat{T} = \frac{\log\bigl(1 - \hat{p}/\bigl(2q(1-q)\bigr)\bigr)}{\log(1 - \varepsilon)}}
 \end{equation}
-Saturation: $p \to 1/2$ as $T \to \infty$.
+Saturation: $p \to p_{\max} = 2q(1-q)$ as $T \to \infty$.
+When $q = 1/2$, $p_{\max} = 1/2$ and we recover the standard binary
+Jukes--Cantor formula $\hat{T} = \log(1-2\hat{p})/\log(1-\varepsilon)$.
 \end{proposition}
 
 \begin{proof}
-Each bit evolves under a 2-state symmetric Markov chain with transition
-rate $\varepsilon/2$ per copy event. Starting from ``same'' at $T=0$:
-$P(\text{diff}) = \frac{1}{2}(1 - (1-\varepsilon)^T)$. This is the
-standard binary Jukes--Cantor model. The MLE of $p$ from $n$ i.i.d.\
-bit comparisons is $\hat{p} = (\text{differing bits})/n$, and the
-invariance property of MLEs gives the formula for $\hat{T}$.
+Two bits, both starting in state~$s$, evolve independently under~$P$.
+After $T$ steps the probability of being in state~0 given start
+state~$s$ is
+\[
+P_T(0 \mid s=0) = q + (1-q) r^T, \qquad
+P_T(0 \mid s=1) = q(1 - r^T).
+\]
+Averaging over the stationary ancestor distribution
+$(\pi_0, \pi_1) = (q, 1-q)$, the probability that two independent
+descendants differ is
+\begin{align*}
+P(\text{diff})
+&= \sum_{s \in \{0,1\}} \pi_s \cdot 2\, P_T(0 \mid s)\, P_T(1 \mid s) \\
+&= 2q(1-q)(1 - r^T).
+\end{align*}
+The MLE follows by solving for~$T$.
 \end{proof}
 
 \subsection{Byte-level distance}
 
-Since bits within a byte are independent (no byte-level noise), the
-probability that two corresponding bytes match is $(1-p)^8$:
+Since bits within a byte are independent, the probability that two
+corresponding bytes match is $(1-p)^8$, where $p$ is the bit mismatch
+fraction:
 \begin{align}
-P(\text{byte differs}) &= 1 - \Bigl[\frac{1 + (1-\varepsilon)^T}{2}\Bigr]^8
+P(\text{byte differs}) &= 1 - (1-p)^8
 \end{align}
 Inverting:
 \begin{equation}
-\hat{T} = \frac{\log\bigl(2(1-\hat{p}_{\text{byte}})^{1/8} - 1\bigr)}{\log(1-\varepsilon)}
+\hat{T} = \frac{\log\bigl(1 - \bigl(1-(1-\hat{p}_{\text{byte}})^{1/8}\bigr)\big/\bigl(2q(1-q)\bigr)\bigr)}{\log(1-\varepsilon)}
 \end{equation}
 
 \subsection{Byte Hamming histogram}
@@ -73,6 +98,22 @@ $\bar{h}$, giving $\hat{p} = \bar{h}/8$. The histogram provides no
 additional information beyond the mean (it is a single-parameter
 exponential family), but can be used for goodness-of-fit testing
 against the copy-noise model.
+
+\subsection{Special cases}
+
+\begin{itemize}
+\item $q = 1/2$: standard binary symmetric channel. Saturation at
+  $p = 1/2$. This is the default.
+\item $q = 1$ (or $q = 0$): pure erasure noise. All resampled bits
+  converge to the same value. Saturation mismatch $p_{\max} = 0$:
+  two descendants become identical as $T \to \infty$. Distance
+  estimation degenerates (the formula returns~$\infty$ for any
+  $\hat{p} > 0$).
+\item $q \neq 1/2$: biased noise. The equilibrium byte distribution
+  is no longer uniform --- bytes are biased toward $q > 1/2$ meaning
+  more zero bits (sparser memory). This can model physical decay
+  (UV erasure of EPROM, cosmic-ray bit clearing).
+\end{itemize}
 
 \section{Applicability}
 

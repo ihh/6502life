@@ -161,8 +161,9 @@ class BoardController {
         // Board hyperparameters
         this.boardParams = Object.assign({
             pBitNoise: 1 / 2048,     // per-bit noise on BRK noisy copy
-            pBrkFailure: 0,          // probability BRK copy/swap silently fails
-            magnetosensing: false,   // write orientation to $FA if true
+            nSwapCycles: 0,          // cycle budget for BRK copy/swap (0 = no limit)
+            pBitNoiseZero: 0.5,      // P(resampled bit = 0); 0.5 = fair coin, 1 = erasure
+            hasCompass: false,       // write orientation to $FA if true
             implementsMove: true,    // BRK 1-244 swap operations
             implementsCopy: true,    // BRK 245-252 noisy copy
             implementsSync: false,   // BRK 253 sync interrupt request
@@ -1118,6 +1119,7 @@ class BoardController {
         const mem = this.memory;
         const mt = mem.mt;
         const eps = this.noiseParams.pBitNoise;
+        const q = this.noiseParams.pBitNoiseZero ?? 0.5;
         const storage = mem.storage;
         const srcBase = mem.neighborCellStorageBase(0);  // origin cell
         const dstBase = mem.neighborCellStorageBase(dest);
@@ -1131,7 +1133,20 @@ class BoardController {
         } else {
             for (let b = 0; b < M; ++b) {
                 const srcByte = storage[srcBase + b];
-                const rndByte = mt.int() & 0xFF;
+                // Generate replacement byte: each bit is 0 with probability q
+                let rndByte;
+                if (q === 0.5) {
+                    rndByte = mt.int() & 0xFF;  // fast path: fair coin
+                } else if (q >= 1) {
+                    rndByte = 0x00;  // erasure: all resampled bits become 0
+                } else if (q <= 0) {
+                    rndByte = 0xFF;  // all resampled bits become 1
+                } else {
+                    rndByte = 0;
+                    for (let bit = 0; bit < 8; ++bit) {
+                        if (mt.real() >= q) rndByte |= (1 << bit);
+                    }
+                }
                 let noiseBits = 0;
                 for (let bit = 0; bit < 8; ++bit) {
                     if (mt.real() < eps)
@@ -1184,7 +1199,7 @@ class BoardController {
             this.writeRng();
             {
                 const base = this.memory.neighborCellStorageBase(0);
-                this.memory.storage[base + 0xFA] = this.boardParams.magnetosensing
+                this.memory.storage[base + 0xFA] = this.boardParams.hasCompass
                     ? (this.memory.orientation << 2)
                     : 0;
             }
@@ -1242,7 +1257,7 @@ class BoardController {
                     this.writeRng();
                     {
                         const base = this.memory.neighborCellStorageBase(0);
-                        this.memory.storage[base + 0xFA] = this.boardParams.magnetosensing
+                        this.memory.storage[base + 0xFA] = this.boardParams.hasCompass
                             ? (this.memory.orientation << 2)
                             : 0;
                     }
@@ -1278,12 +1293,11 @@ class BoardController {
                         const operand = brkOperand;
                         const nDestCells = this.memory.Nsquared;  // 49
                         const nSrcCells = 5;
-                        // pBrkFailure: probability the copy/swap silently fails
-                        // (no effect, no noise). Creates selective pressure for
-                        // multi-copy strategies and error correction.
+                        // nSwapCycles: BRK copy/swap fails if fewer than this
+                        // many cycles remain before the next interrupt.
                         const bp = this.boardParams;
-                        const brkFails = bp.pBrkFailure > 0
-                            && this.memory.mt.real() < bp.pBrkFailure;
+                        const brkFails = bp.nSwapCycles > 0
+                            && (schedulerCycles - cpuCycles) < bp.nSwapCycles;
                         if (!brkFails) {
                             if (operand > 0 && operand < nSrcCells * nDestCells && bp.implementsMove) {
                                 const src = Math.floor(operand / nDestCells);
@@ -1348,12 +1362,12 @@ class BoardController {
                 }
                 this.readRegisters();
                 this.writeRng();
-                // Magnetosensing: write orientation to $FA (PCLO register area)
+                // Compass: write orientation to $FA (PCLO register area)
                 // shifted left 2 bits to match oriented register format.
                 // Programs can read $FA to detect their absolute orientation.
                 {
                     const base = this.memory.neighborCellStorageBase(0);
-                    this.memory.storage[base + 0xFA] = this.boardParams.magnetosensing
+                    this.memory.storage[base + 0xFA] = this.boardParams.hasCompass
                         ? (this.memory.orientation << 2)
                         : 0;
                 }

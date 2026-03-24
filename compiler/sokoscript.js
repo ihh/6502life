@@ -12,9 +12,10 @@
 //   0x000-0x011: type tag + state (shared encoding region)
 //   0x012-0x0EF: zero page scratch space
 //   0x100-0x1FF: stack
-//   0x200-0x37F: compiled rule code (384 bytes)
-//   0x380-0x3BF: RGB bitmap
-//   0x3E0-0x3FF: display name
+//   0x200-0x3BF: compiled rule code (448 bytes)
+//   0x3C0-0x3DF: 16x16 monochrome bitmap
+//   0x3E0-0x3FB: display name (28 bytes)
+//   0x3FF: hue byte
 //
 // The compiled program is placed starting at 0x000 (entry point).
 // It reads its own type tag and neighbor type tags to decide which

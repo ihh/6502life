@@ -88,7 +88,7 @@ export class Board6502Engine {
 
   /**
    * Get cell color and activity data for rendering.
-   * Prefers RGB bitmap data (0x380-0x3BF) when nonzero,
+   * Uses hue byte at 0x3FF when nonzero,
    * falls back to activity-based HSV coloring from the visualizer.
    */
   getCell(x, y) {
@@ -104,11 +104,11 @@ export class Board6502Engine {
     const activity = Math.exp(-timeSinceLastWrite / 5000) * 0.4 +
                      Math.exp(-timeSinceLastMove / 2000) * 0.6;
 
-    // Check cell's hue byte at 0x3A0. If nonzero, use it as the cell color.
+    // Check cell's hue byte at 0x3FF. If nonzero, use it as the cell color.
     // The hue byte (0-255) maps to HSV hue (0-360°), rendered at full saturation
     // with brightness proportional to activity.
     const base = this.memory.ijbToByteIndex(x, y, 0);
-    const hue = this.memory.storage[base + 0x3A0];
+    const hue = this.memory.storage[base + 0x3FF];
 
     let r, g, b;
     if (hue > 0 && activity > 0.01) {

@@ -67,11 +67,11 @@ This is the critical blocker for interesting biology.
   periodic interval (X,Y = period in cycles). Gated by `implementsSync`.
 - **BRK 254 (async interrupt request)**: cell requests next interrupt after
   a delay (X,Y = delay in cycles). Gated by `implementsAsync`.
-- **Magnetosensing**: scheduler writes orientation to $FA when enabled.
+- **HasCompass**: scheduler writes orientation to $FA when enabled.
   Programs can detect absolute orientation, breaking rotational symmetry.
 - **Feature flags**: `implementsMove`, `implementsCopy`, `implementsSync`,
   `implementsAsync` allow disabling specific BRK operations for experiments.
-- **`pBrkFailure`**: probability that a BRK copy/swap silently fails (no
+- **`nSwapCycles`**: probability that a BRK copy/swap silently fails (no
   effect), creating selective pressure for multi-copy strategies.
 
 ## Additional questions

@@ -4,6 +4,7 @@ import {
     expectedByteMismatch,
     distanceFromBitMismatch,
     distanceFromByteMismatch,
+    saturationMismatch,
     hammingBits,
     hammingBytes,
     byteHammingHistogram,
@@ -97,6 +98,48 @@ describe('Hamming distances', () => {
         const hist = byteHammingHistogram(a, b);
         expect(hist[4]).toBe(1);
         expect(hist[8]).toBe(1);
+    });
+});
+
+describe('biased noise (pBitNoiseZero)', () => {
+    it('saturation is 2q(1-q)', () => {
+        expect(saturationMismatch(0.5)).toBeCloseTo(0.5, 10);
+        expect(saturationMismatch(1.0)).toBe(0);
+        expect(saturationMismatch(0.0)).toBe(0);
+        expect(saturationMismatch(0.25)).toBeCloseTo(0.375, 10);
+    });
+
+    it('q=0.5 matches standard Jukes-Cantor', () => {
+        for (const T of [10, 100, 500]) {
+            expect(expectedBitMismatch(T, EPS, 0.5)).toBeCloseTo(
+                0.5 * (1 - Math.pow(1 - EPS, T)), 10);
+        }
+    });
+
+    it('q=1 (erasure) saturates at 0', () => {
+        // When q=1, all resampled bits become 0, so two descendants
+        // both converge toward all-zeros. Saturation mismatch = 0.
+        expect(expectedBitMismatch(1e8, EPS, 1.0)).toBeCloseTo(0, 4);
+    });
+
+    it('biased round-trips', () => {
+        for (const q of [0.25, 0.5, 0.75]) {
+            for (const T of [10, 100, 500]) {
+                const p = expectedBitMismatch(T, EPS, q);
+                const recovered = distanceFromBitMismatch(p, EPS, q);
+                expect(recovered).toBeCloseTo(T, 3);
+            }
+        }
+    });
+
+    it('biased byte round-trips', () => {
+        for (const q of [0.25, 0.5, 0.75]) {
+            for (const T of [10, 100, 500]) {
+                const p = expectedByteMismatch(T, EPS, q);
+                const recovered = distanceFromByteMismatch(p, EPS, q);
+                expect(recovered).toBeCloseTo(T, 2);
+            }
+        }
     });
 });
 

@@ -19,12 +19,12 @@ Not perfectly synchronous (cells still execute sequentially within a
 tick), but much closer than pure random scheduling. The `implementsSync`
 flag must be enabled on the board.
 
-## 2. Absolute-direction rules → magnetosensing
+## 2. Absolute-direction rules → hasCompass
 
 The original limitation: "Absolute-direction rules (>N>, >E>, >S>, >W>)
 conflict with random orientation resampling."
 
-**Now solved**: with `magnetosensing: true`, the scheduler writes the
+**Now solved**: with `hasCompass: true`, the scheduler writes the
 current orientation to $FA. The compiled code reads $FA to determine
 which physical direction corresponds to which memory-mapped neighbor.
 A lookup table at $E000+ can translate absolute directions to rotated

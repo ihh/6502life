@@ -233,14 +233,15 @@ describe('BoardController', () => {
         });
     });
 
-    describe('pBrkFailure', () => {
+    describe('nSwapCycles', () => {
         it('defaults to 0', () => {
             const ctrl = new BoardController();
-            expect(ctrl.noiseParams.pBrkFailure).toBe(0);
+            expect(ctrl.noiseParams.nSwapCycles).toBe(0);
         });
 
-        it('pBrkFailure=1 prevents all BRK copies', () => {
-            const ctrl = new BoardController(undefined, { pBitNoise: 0, pBrkFailure: 1 });
+        it('nSwapCycles very large prevents all BRK copies', () => {
+            // Set nSwapCycles larger than any scheduling quantum so BRK always fails
+            const ctrl = new BoardController(undefined, { pBitNoise: 0, nSwapCycles: 999999 });
             const mem = ctrl.memory;
             mem.orientation = 0;
             mem.iOrig = 0;
@@ -271,8 +272,8 @@ describe('BoardController', () => {
             expect(mem.getByte(destByteIdx)).toBe(0x00);
         });
 
-        it('pBrkFailure=0 allows BRK copies normally', () => {
-            const ctrl = new BoardController(undefined, { pBitNoise: 0, pBrkFailure: 0 });
+        it('nSwapCycles=0 allows BRK copies normally', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0, nSwapCycles: 0 });
             const mem = ctrl.memory;
             mem.orientation = 0;
             mem.iOrig = 0;
@@ -297,12 +298,12 @@ describe('BoardController', () => {
             expect(mem.getByte(destByteIdx)).toBe(0x42);
         });
 
-        it('serializes and deserializes pBrkFailure', () => {
-            const ctrl = new BoardController(undefined, { pBrkFailure: 0.25 });
+        it('serializes and deserializes nSwapCycles', () => {
+            const ctrl = new BoardController(undefined, { nSwapCycles: 14336 });
             const saved = ctrl.state;
             const ctrl2 = new BoardController();
             ctrl2.state = saved;
-            expect(ctrl2.noiseParams.pBrkFailure).toBe(0.25);
+            expect(ctrl2.noiseParams.nSwapCycles).toBe(14336);
         });
     });
 
@@ -522,11 +523,12 @@ describe('BoardController', () => {
     });
 
     describe('boardParams defaults', () => {
-        it('has all 7 default params with correct values', () => {
+        it('has all default params with correct values', () => {
             const ctrl = new BoardController();
             expect(ctrl.boardParams.pBitNoise).toBeCloseTo(1 / 2048);
-            expect(ctrl.boardParams.pBrkFailure).toBe(0);
-            expect(ctrl.boardParams.magnetosensing).toBe(false);
+            expect(ctrl.boardParams.nSwapCycles).toBe(0);
+            expect(ctrl.boardParams.pBitNoiseZero).toBe(0.5);
+            expect(ctrl.boardParams.hasCompass).toBe(false);
             expect(ctrl.boardParams.implementsMove).toBe(true);
             expect(ctrl.boardParams.implementsCopy).toBe(true);
             expect(ctrl.boardParams.implementsSync).toBe(false);
@@ -538,8 +540,9 @@ describe('BoardController', () => {
         it('save/restore preserves all params', () => {
             const ctrl = new BoardController(undefined, {
                 pBitNoise: 0.123,
-                pBrkFailure: 0.456,
-                magnetosensing: true,
+                nSwapCycles: 14336,
+                pBitNoiseZero: 0.8,
+                hasCompass: true,
                 implementsMove: false,
                 implementsCopy: false,
                 implementsSync: true,
@@ -549,8 +552,9 @@ describe('BoardController', () => {
             const ctrl2 = new BoardController();
             ctrl2.state = saved;
             expect(ctrl2.boardParams.pBitNoise).toBeCloseTo(0.123);
-            expect(ctrl2.boardParams.pBrkFailure).toBeCloseTo(0.456);
-            expect(ctrl2.boardParams.magnetosensing).toBe(true);
+            expect(ctrl2.boardParams.nSwapCycles).toBe(14336);
+            expect(ctrl2.boardParams.pBitNoiseZero).toBeCloseTo(0.8);
+            expect(ctrl2.boardParams.hasCompass).toBe(true);
             expect(ctrl2.boardParams.implementsMove).toBe(false);
             expect(ctrl2.boardParams.implementsCopy).toBe(false);
             expect(ctrl2.boardParams.implementsSync).toBe(true);
@@ -558,9 +562,9 @@ describe('BoardController', () => {
         });
     });
 
-    describe('magnetosensing', () => {
-        it('$FA is 0 after scheduling when magnetosensing is disabled', () => {
-            const ctrl = new BoardController(undefined, { pBitNoise: 0, magnetosensing: false });
+    describe('hasCompass', () => {
+        it('$FA is 0 after scheduling when hasCompass is disabled', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0, hasCompass: false });
             const mem = ctrl.memory;
             mem.iOrig = 0; mem.jOrig = 0; mem.orientation = 0;
             mem.nextCycles = 100000;
@@ -581,8 +585,8 @@ describe('BoardController', () => {
             expect(mem.storage[newBase + 0xFA]).toBe(0);
         });
 
-        it('$FA contains orientation << 2 after scheduling when magnetosensing is enabled', () => {
-            const ctrl = new BoardController(undefined, { pBitNoise: 0, magnetosensing: true });
+        it('$FA contains orientation << 2 after scheduling when hasCompass is enabled', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0, hasCompass: true });
             const mem = ctrl.memory;
             mem.iOrig = 0; mem.jOrig = 0; mem.orientation = 0;
             mem.nextCycles = 100000;

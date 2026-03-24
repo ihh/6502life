@@ -71,25 +71,23 @@ class BoardMemory {
     get firstControllerAddr() { return 0x00FA }
     get lastControllerAddr() { return 0x00FF }
 
-    // B. Reserved for visualizer, 0x380-0x3FF.
-    // Conventionally, the upper 128 bytes are for visualization
+    // B. Reserved for visualizer, 0x3C0-0x3FF.
+    // Conventionally, the upper 64 bytes are for visualization
     // The program is free to ignore these, they will not disrupt program flow
     // Debuggers should not rely on them!
 
-    // Name, also used as default icon (32 bytes)
-    get displayNameBytes() { return 32 }
-    get displayNameAddr() { return 0x03E0 }
-
-    // Monochrome bitmap (32 bytes) + hue byte
+    // 16x16 monochrome bitmap (32 bytes)
     get bitmapPixelsPerSide() { return 16 }  // bits per dimension (X,Y)
     get bitmapBytes() { return this.bitmapPixelsPerSide * this.bitmapPixelsPerSide / 8 }  // 32 bytes
-    get bitmapAddr() { return 0x0380 }       // 32-byte monochrome bitmap (1 bit/pixel)
-    get hueAddr() { return 0x03A0 }          // 1 byte: hue (0-255 maps to 0-360° HSV)
-    // 0x03A1-0x03DF: available for future use
-    // Legacy aliases for backward compatibility
-    get bitmapAddrR() { return 0x0380 }
-    get bitmapAddrG() { return 0x03A0 }
-    get bitmapAddrB() { return 0x03C0 }
+    get bitmapAddr() { return 0x03C0 }       // 32-byte monochrome bitmap (1 bit/pixel)
+
+    // Display name (28 bytes)
+    get displayNameBytes() { return 28 }
+    get displayNameAddr() { return 0x03E0 }
+
+    // 0x03FC-0x03FE: reserved
+    // Hue byte
+    get hueAddr() { return 0x03FF }          // 1 byte: hue (0-255 maps to 0-360° HSV)
 
     // 2. Memory map - ROM
     // Lookup tables for common symmetry operations

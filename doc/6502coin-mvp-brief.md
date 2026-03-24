@@ -113,5 +113,5 @@ address translation was the main issue, now fixed; CPU execution is only
 - `doc/gridcoin-math-review.md` — math/crypto review with issues found
 - `CLAUDE.md` — 6502life VM spec (includes `boardParams` dictionary with
   feature flags: `implementsMove`, `implementsCopy`, `implementsSync`,
-  `implementsAsync`, `magnetosensing`, `pBitNoise`, `pBrkFailure`)
+  `implementsAsync`, `hasCompass`, `pBitNoise`, `nSwapCycles`)
 - `tex/6502life.tex` — full VM specification

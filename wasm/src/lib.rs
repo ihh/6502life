@@ -37,8 +37,9 @@ impl WasmBoard {
         size: usize,
         seed: u32,
         p_bit_noise: f64,
-        p_brk_failure: f64,
-        magnetosensing: bool,
+        n_swap_cycles: u32,
+        p_bit_noise_zero: f64,
+        has_compass: bool,
         implements_move: bool,
         implements_copy: bool,
         implements_sync: bool,
@@ -47,8 +48,9 @@ impl WasmBoard {
         let memory = BoardMemory::new(seed, size);
         let params = BoardParams {
             p_bit_noise,
-            p_brk_failure,
-            magnetosensing,
+            n_swap_cycles,
+            p_bit_noise_zero,
+            has_compass,
             implements_move,
             implements_copy,
             implements_sync,
@@ -68,20 +70,28 @@ impl WasmBoard {
         self.controller.board_params.p_bit_noise = val;
     }
 
-    pub fn get_p_brk_failure(&self) -> f64 {
-        self.controller.board_params.p_brk_failure
+    pub fn get_n_swap_cycles(&self) -> u32 {
+        self.controller.board_params.n_swap_cycles
     }
 
-    pub fn set_p_brk_failure(&mut self, val: f64) {
-        self.controller.board_params.p_brk_failure = val;
+    pub fn set_n_swap_cycles(&mut self, val: u32) {
+        self.controller.board_params.n_swap_cycles = val;
     }
 
-    pub fn get_magnetosensing(&self) -> bool {
-        self.controller.board_params.magnetosensing
+    pub fn get_p_bit_noise_zero(&self) -> f64 {
+        self.controller.board_params.p_bit_noise_zero
     }
 
-    pub fn set_magnetosensing(&mut self, val: bool) {
-        self.controller.board_params.magnetosensing = val;
+    pub fn set_p_bit_noise_zero(&mut self, val: f64) {
+        self.controller.board_params.p_bit_noise_zero = val;
+    }
+
+    pub fn get_has_compass(&self) -> bool {
+        self.controller.board_params.has_compass
+    }
+
+    pub fn set_has_compass(&mut self, val: bool) {
+        self.controller.board_params.has_compass = val;
     }
 
     pub fn get_implements_move(&self) -> bool {
@@ -237,11 +247,11 @@ impl WasmBoard {
         self.controller.board_owner = id;
     }
 
-    /// Read a cell's 32-byte display name as a String.
+    /// Read a cell's 28-byte display name as a String.
     pub fn cell_name(&self, i: usize, j: usize) -> String {
         let base = self.controller.memory.ijb_to_byte_index(i, j, 0x3E0);
-        let mut name = Vec::with_capacity(32);
-        for offset in 0..32 {
+        let mut name = Vec::with_capacity(28);
+        for offset in 0..28 {
             let b = self.controller.memory.storage[base + offset];
             if b == 0 {
                 break;

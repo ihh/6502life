@@ -51,11 +51,11 @@ const listenFlag = getFlag(flags, 'listen');
 const scriptFile = getFlag(flags, 'script');
 const dumpFile = getFlag(flags, 'dump');
 const epsilon = getFlag(flags, 'epsilon');
-const brkFailure = getFlag(flags, 'brk-failure');
+const swapCycles = getFlag(flags, 'swap-cycles');
 
-const noiseParams = (epsilon !== undefined || brkFailure !== undefined) ? {} : undefined;
+const noiseParams = (epsilon !== undefined || swapCycles !== undefined) ? {} : undefined;
 if (epsilon !== undefined) noiseParams.pBitNoise = parseFloat(epsilon);
-if (brkFailure !== undefined) noiseParams.pBrkFailure = parseFloat(brkFailure);
+if (swapCycles !== undefined) noiseParams.nSwapCycles = parseInt(swapCycles);
 const { controller, visualizer } = createBoard(size, seed, noiseParams);
 
 // Load state if provided

@@ -46,14 +46,14 @@ function countNonTrivialCells(controller) {
 }
 
 /**
- * Count cells with hue marker byte at offset 0x3A0.
+ * Count cells with hue marker byte at offset 0x3FF.
  */
 function countHueCells(controller, hue) {
     const B = controller.memory.B;
     let count = 0;
     for (let i = 0; i < B; i++) {
         for (let j = 0; j < B; j++) {
-            const base = controller.memory.ijbToByteIndex(i, j, 0x3A0);
+            const base = controller.memory.ijbToByteIndex(i, j, 0x3FF);
             if (controller.memory.getByte(base) === hue) count++;
         }
     }
@@ -61,14 +61,14 @@ function countHueCells(controller, hue) {
 }
 
 /**
- * Get (i,j) coordinates of cells with a specific hue value at 0x3A0.
+ * Get (i,j) coordinates of cells with a specific hue value at 0x3FF.
  */
 function getHueCells(controller, hue) {
     const B = controller.memory.B;
     const cells = [];
     for (let i = 0; i < B; i++) {
         for (let j = 0; j < B; j++) {
-            const base = controller.memory.ijbToByteIndex(i, j, 0x3A0);
+            const base = controller.memory.ijbToByteIndex(i, j, 0x3FF);
             if (controller.memory.getByte(base) === hue) cells.push([i, j]);
         }
     }
@@ -105,7 +105,7 @@ function page0Similarity(a, b) {
     return same / 256;
 }
 
-describe('Magnetosensing experiments', () => {
+describe('Compass experiments', () => {
 
     describe('Step 1: Compass spreader assembles correctly', () => {
         it('compass-spreader preset exists and assembles', async () => {
@@ -143,13 +143,13 @@ describe('Magnetosensing experiments', () => {
 
     describe('Step 2: Directional spreading (no noise)', () => {
         it('compass-spreader shows early directional bias using hue marker', async () => {
-            // Use hue=42 at 0x3A0 as the definitive marker for compass-spreader cells.
+            // Use hue=42 at 0x3FF as the definitive marker for compass-spreader cells.
             // The scheduler writes register save bytes (0xF9-0xFF) to every visited cell,
             // so "non-zero page 0" is not a reliable indicator of replication.
             const size = 8;
             const mem = new BoardMemory(42, size);
             const controller = new BoardController(mem, {
-                magnetosensing: true,
+                hasCompass: true,
                 pBitNoise: 0,
             });
 
@@ -196,7 +196,7 @@ describe('Magnetosensing experiments', () => {
             const size = 8;
             const mem = new BoardMemory(42, size);
             const controller = new BoardController(mem, {
-                magnetosensing: true,
+                hasCompass: true,
                 pBitNoise: 0,
             });
 
@@ -221,7 +221,7 @@ describe('Magnetosensing experiments', () => {
             const size = 8;
             const mem = new BoardMemory(42, size);
             const controller = new BoardController(mem, {
-                magnetosensing: true,
+                hasCompass: true,
                 pBitNoise: 0,
             });
 
@@ -281,7 +281,7 @@ describe('Magnetosensing experiments', () => {
             const size = 8;
             const mem = new BoardMemory(42, size);
             const controller = new BoardController(mem, {
-                magnetosensing: true,
+                hasCompass: true,
                 pBitNoise: 1 / 131072,
             });
 
@@ -316,7 +316,7 @@ describe('Magnetosensing experiments', () => {
             const size = 8;
             const mem = new BoardMemory(42, size);
             const controller = new BoardController(mem, {
-                magnetosensing: true,
+                hasCompass: true,
                 pBitNoise: 1 / 131072,
             });
 
@@ -345,7 +345,7 @@ describe('Magnetosensing experiments', () => {
                 console.log(`  ${String(s.interrupts).padStart(8)}  ${String(s.hueCells).padStart(6)}  ${String(s.nonTrivial).padStart(10)}`);
             }
 
-            // The compass-spreader writes hue=42 to 0x3A0 on each execution.
+            // The compass-spreader writes hue=42 to 0x3FF on each execution.
             // Copies inherit it (BRK noisy copy copies the whole cell).
             // Over time we should see hue=42 cells present.
             const finalHue = snapshots[snapshots.length - 1].hueCells;

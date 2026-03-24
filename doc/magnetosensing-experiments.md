@@ -1,11 +1,11 @@
-# Magnetosensing Experiments
+# HasCompass Experiments
 
 Experiments with organisms that read `$FA` (orientation register) to navigate
 directionally on the board.
 
 ## Background
 
-When `boardParams.magnetosensing=true`, the scheduler writes
+When `boardParams.hasCompass=true`, the scheduler writes
 `(orientation << 2)` to `$FA` before each cell executes. Orientation is 0--3,
 so `$FA` takes values 0, 4, 8, 12. The memory-mapped neighborhood is randomly
 rotated each scheduling, but `$FA` tells the program HOW it was rotated,
@@ -28,7 +28,7 @@ The organism also writes hue=42 (0x2A) to `$03A0` as a visual marker.
 
 ## Experiment Results
 
-All experiments on 8x8 board, seed=42, magnetosensing=true.
+All experiments on 8x8 board, seed=42, hasCompass=true.
 
 ### Step 2: Directional Spreading (epsilon=0)
 
@@ -102,7 +102,7 @@ At this low noise level, the hue byte itself is rarely corrupted.
 
 ## Conclusions
 
-1. **Magnetosensing enables directional navigation**: The compass-spreader
+1. **HasCompass enables directional navigation**: The compass-spreader
    successfully uses `$FA` to always copy in the same absolute direction,
    creating a directional wave visible at early time steps.
 
@@ -124,8 +124,8 @@ At this low noise level, the hue byte itself is rarely corrupted.
 - Test on larger boards (32x32, 64x64) where directional wavefronts are more
   distinct and take longer to saturate.
 - Design a smaller compass-spreader (fewer branches, lookup table approach).
-- Combine magnetosensing with movement (BRK swap) for directional migration.
+- Combine hasCompass with movement (BRK swap) for directional migration.
 - Test compass organisms that spread in all four cardinal directions
   sequentially but prefer one direction, creating an anisotropic expansion.
-- Evolve magnetosensing de novo by seeding with random code at epsilon > 0 and
+- Evolve hasCompass de novo by seeding with random code at epsilon > 0 and
   checking if any surviving organisms read `$FA`.

@@ -1,70 +1,81 @@
 // Jukes-Cantor distance for the 6502life noisy copy channel
 //
 // The copyCellWithNoise function copies M=1024 bytes from source to dest.
-// Each bit is independently randomized with probability ε = pBitNoise,
+// Each bit is independently resampled with probability ε = pBitNoise,
 // and faithfully copied with probability 1-ε.
 //
-// This is a binary symmetric channel — the 2-state Jukes-Cantor model.
+// When a bit is resampled, it becomes 0 with probability q = pBitNoiseZero
+// and 1 with probability 1-q. Default q = 0.5 (fair coin = binary symmetric
+// channel = standard Jukes-Cantor). Setting q = 1 gives pure erasure noise.
+//
+// The stationary distribution is π(0) = q, π(1) = 1-q.
+// The equilibrium mismatch fraction (saturation) is 2q(1-q).
 //
 // After T copy events on the tree path between two cells:
 //
-//   P(bit differs) = p = ½(1 - (1-ε)^T)
+//   P(bit differs) = p = 2q(1-q)(1 - (1-ε)^T)
 //
-//   T = log(1 - 2p) / log(1 - ε)
+//   T = log(1 - p/(2q(1-q))) / log(1 - ε)
 //
-// Saturation at p → ½.
+// When q = 0.5 this reduces to p = ½(1-(1-ε)^T), the standard binary JC.
 //
-// For bytes, bits within a byte are independent (no byte-level noise), so:
+// For bytes, bits within a byte are independent, so:
 //
-//   P(byte differs) = 1 - [(1 + (1-ε)^T)/2]^8 = 1 - [(1-p)]^8 ... wait
-//   P(byte matches) = P(all 8 bits match) = [(1-p)]^8 ... no
-//   P(bit matches) = 1-p = ½(1 + (1-ε)^T)
-//   P(byte matches) = [½(1 + (1-ε)^T)]^8
+//   P(byte matches) = (1-p)^8
 //
-//   T = log(2·(1 - p_byte)^{1/8} - 1) / log(1 - ε)
-//
-// Per-byte Hamming distance h ~ Bin(8, p). The histogram {n_0,...,n_8}
-// has sufficient statistic p̂ = mean_h / 8.
+//   T = log(1 - (1-(1-p_byte)^{1/8})/(2q(1-q))) / log(1 - ε)
 
 const DEFAULT_EPS = 1 / 2048;  // ~1 bit error per 256-byte page
+const DEFAULT_Q = 0.5;         // fair coin (standard Jukes-Cantor)
+
+/**
+ * Saturation (equilibrium) bit mismatch fraction for bias q.
+ */
+export function saturationMismatch(q = DEFAULT_Q) {
+    return 2 * q * (1 - q);
+}
 
 /**
  * Expected bit mismatch fraction after T copy events.
  */
-export function expectedBitMismatch(T, eps = DEFAULT_EPS) {
-    return 0.5 * (1 - Math.pow(1 - eps, T));
+export function expectedBitMismatch(T, eps = DEFAULT_EPS, q = DEFAULT_Q) {
+    return 2 * q * (1 - q) * (1 - Math.pow(1 - eps, T));
 }
 
 /**
  * Expected byte mismatch fraction after T copy events.
  */
-export function expectedByteMismatch(T, eps = DEFAULT_EPS) {
-    const q = Math.pow(1 - eps, T);
-    return 1 - Math.pow((1 + q) / 2, 8);
+export function expectedByteMismatch(T, eps = DEFAULT_EPS, q = DEFAULT_Q) {
+    const pBit = expectedBitMismatch(T, eps, q);
+    return 1 - Math.pow(1 - pBit, 8);
 }
 
 /**
  * Jukes-Cantor distance from observed bit mismatch fraction.
- * T = log(1 - 2p) / log(1 - ε)
+ * T = log(1 - p/(2q(1-q))) / log(1 - ε)
  */
-export function distanceFromBitMismatch(pBit, eps = DEFAULT_EPS) {
+export function distanceFromBitMismatch(pBit, eps = DEFAULT_EPS, q = DEFAULT_Q) {
     if (pBit <= 0) return 0;
-    if (pBit >= 0.5) return Infinity;
+    const pMax = 2 * q * (1 - q);
+    if (pMax <= 0) return pBit > 0 ? Infinity : 0;
+    if (pBit >= pMax) return Infinity;
     if (eps <= 0) return pBit > 0 ? Infinity : 0;
-    return Math.log(1 - 2 * pBit) / Math.log(1 - eps);
+    return Math.log(1 - pBit / pMax) / Math.log(1 - eps);
 }
 
 /**
  * Distance from observed byte mismatch fraction.
- * T = log(2·(1-p)^{1/8} - 1) / log(1-ε)
  */
-export function distanceFromByteMismatch(pByte, eps = DEFAULT_EPS) {
+export function distanceFromByteMismatch(pByte, eps = DEFAULT_EPS, q = DEFAULT_Q) {
     if (pByte <= 0) return 0;
-    if (pByte >= 255 / 256) return Infinity;
+    const pMax = 2 * q * (1 - q);
+    const pMaxByte = 1 - Math.pow(1 - pMax, 8);
+    if (pMaxByte <= 0) return pByte > 0 ? Infinity : 0;
+    if (pByte >= pMaxByte) return Infinity;
     if (eps <= 0) return pByte > 0 ? Infinity : 0;
-    const inner = 2 * Math.pow(1 - pByte, 1 / 8) - 1;
-    if (inner <= 0) return Infinity;
-    return Math.log(inner) / Math.log(1 - eps);
+    // Recover bit mismatch from byte mismatch
+    const pBit = 1 - Math.pow(1 - pByte, 1 / 8);
+    return Math.log(1 - pBit / pMax) / Math.log(1 - eps);
 }
 
 // --- Hamming distances ---
@@ -112,7 +123,7 @@ export function byteHammingHistogram(a, b, start = 0, end = undefined) {
 /**
  * Compute evolutionary distance between two cell byte arrays.
  */
-export function cellDistance(a, b, eps = DEFAULT_EPS, range = [0, 896]) {
+export function cellDistance(a, b, eps = DEFAULT_EPS, range = [0, 896], q = DEFAULT_Q) {
     const [start, end] = range;
     const totalBytes = end - start;
     const totalBits = totalBytes * 8;
@@ -126,8 +137,8 @@ export function cellDistance(a, b, eps = DEFAULT_EPS, range = [0, 896]) {
     return {
         pBit,
         pByte,
-        bitDist: distanceFromBitMismatch(pBit, eps),
-        byteDist: distanceFromByteMismatch(pByte, eps),
+        bitDist: distanceFromBitMismatch(pBit, eps, q),
+        byteDist: distanceFromByteMismatch(pByte, eps, q),
         diffBits,
         diffBytes,
         totalBits,
