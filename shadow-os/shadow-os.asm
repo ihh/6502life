@@ -23,10 +23,8 @@
 ;;    and paged storage using exact (noiseless) copies through the
 ;;    shadow window. This is the undo mechanism:
 ;;      - Before execution: copy 49 cells from storage → working RAM
-;;      - On commit: copy dirty cells from working RAM → storage
+;;      - On commit (I flag clear): copy all 49 cells from working RAM → storage
 ;;      - On undo (I flag set): skip writeback, storage is untouched
-;;    A 49-bit dirty register (one bit per mapped cell) tracks which
-;;    cells have been written to during the current quantum.
 ;;
 ;; 3. Shadow window at $C000-$C3FF, bank-selected by writing a
 ;;    board cell index to $D000. Gives the OS simultaneous access
@@ -170,26 +168,24 @@ nmi_handler:
 
     ;; ── Phase 1b: Writeback or undo ────────────────────
     ;; Check I flag: if set, skip writeback (atomic abort).
-    ;; If clear, copy dirty cells from working RAM → storage.
+    ;; If clear, copy all 49 cells from working RAM → storage.
     ;;
     ;; The I flag was in the user's stacked P, now in REG_P.
     LDA REG_P               ; 3
     AND #$04                ; 2  isolate I flag (bit 2)
     BNE @skip_writeback     ; 2/3
 
-    ;; Commit: write back dirty cells to storage.
-    ;; For each of the 49 mapped cells, check the dirty bit.
-    ;; If dirty, copy the cell's 1KB from working RAM ($0000+n*$400)
+    ;; Commit: write back all 49 cells to storage.
+    ;; Each cell's 1KB is copied from working RAM ($0000+n*$400)
     ;; to storage via shadow window (exact copy, noise gate off).
-    ;; This is O(k * M) where k = number of dirty cells.
-    JSR writeback_dirty     ; 6 + subroutine cost
+    ;; Cost: 49 × ~15K = ~753K cycles.
+    JSR writeback_all       ; 6 + subroutine cost
     JMP @writeback_done     ; 3
 
 @skip_writeback:
     ;; Undo: discard all writes. Working RAM changes are simply
     ;; abandoned — storage retains its pre-quantum state.
-    ;; Just reset the dirty register. O(1).
-    JSR reset_dirty_bits    ; 6 + ~10 cycles
+    ;; Nothing to do — just fall through.
 
 @writeback_done:
 
@@ -429,9 +425,9 @@ brk_set_b_and_yield:
 ;; ================================================================
 
 brk_yield:
-    ;; BRK always commits: write back dirty cells to storage,
+    ;; BRK always commits: write back all cells to storage,
     ;; then advance scheduler and read in the new neighborhood.
-    JSR writeback_dirty     ; write dirty cells → storage
+    JSR writeback_all       ; write all 49 cells → storage
     JSR advance_scheduler   ; pick next cell, rebuild neighbor map
     JSR readin_neighborhood ; copy 49 cells storage → working RAM
 
@@ -506,38 +502,25 @@ advance_scheduler:
 
 
 ;; ================================================================
-;; writeback_dirty — Copy dirty cells from working RAM to storage
+;; writeback_all — Copy all 49 cells from working RAM to storage
 ;; ================================================================
-;; For each of the 49 mapped cells, check the dirty bit. If set,
-;; copy the cell's 1KB from working RAM to storage via the shadow
-;; window (exact copy, noise gate disabled).
+;; Unconditionally copies every mapped cell's 1KB from working RAM
+;; to storage via the shadow window (exact copy, noise gate disabled).
+;; No dirty tracking needed — if I flag was set, we skip writeback
+;; entirely; otherwise we write back everything.
 ;;
-;; The shadow window is just a bus to the board's paged storage.
-;; Writing $C000-$C3FF with noise gate off goes straight through.
-;;
-;; Cost: O(k * M) where k = number of dirty cells.
-;; Per cell: ~14 cycles/byte × 1024 bytes = ~14,336 cycles.
-;; Typical k = 1-3, so ~14K-43K cycles.
+;; Cost: 49 × ~15K cycles/cell ≈ ~753K cycles.
+;; A DMA controller would reduce this to ~50K cycles (1 byte/cycle).
 ;; ================================================================
 
-writeback_dirty:
+writeback_all:
     LDX #$00                ; cell index 0
 @cell_loop:
-    ;; Check dirty bit for cell X
-    ;; [Hardware dirty register read — implementation dependent]
-    ;; Assume: JSR check_dirty sets carry if cell X is dirty
-    JSR check_dirty         ; 6 + ~8
-    BCC @next_cell          ; 2/3 — skip if clean
-
-    ;; Dirty cell: copy working RAM → storage via shadow window
-    ;; Map this cell's storage page into $C000
+    ;; Map this cell's storage page into shadow window
     LDA NEIGHBOR_MAP,X      ; 4 — board cell index
     STA SHADOW_BANK         ; 4 — shadow window → storage cell
 
     ;; Working RAM base for cell X = X * $0400
-    ;; We use an unrolled copy: source is working RAM, dest is $C000
-    ;; For cell 0: $0000→$C000. For cell 1: $0400→$C000. Etc.
-    ;; The base address depends on X — use indirect addressing.
     ;; Store source base high byte: X * 4 (since each cell = $0400)
     TXA                     ; 2
     ASL A                   ; 2 — X * 2
@@ -545,11 +528,8 @@ writeback_dirty:
     STA $02                 ; 3 — source high byte (ZP pointer)
     LDA #$00                ; 2
     STA $00                 ; 3 — source low byte = 0
-    STA $01                 ; 3 — (unused, $02 has high byte)
 
     ;; Copy 4 pages: (source) → $C000-$C3FF
-    ;; Use ($00),Y indirect indexed addressing
-    ;; Source pointer at $00-$01, dest is absolute $C000+page
     LDA $02                 ; 3 — source high byte
     STA $01                 ; 3 — set up ZP pointer
 
@@ -586,7 +566,6 @@ writeback_dirty:
 
     ;; Per cell: 4 pages × 256 × (5+5+2+3) = 15,360 cycles + overhead
 
-@next_cell:
     INX                     ; 2
     CPX #49                 ; 2
     BNE @cell_loop          ; 3
@@ -660,60 +639,6 @@ readin_neighborhood:
     CPX #49                 ; 2
     BNE @ri_loop            ; 3
 
-    ;; Reset all dirty bits
-    JSR reset_dirty_bits    ; 6 + ~10
-    RTS                     ; 6
-
-
-;; ================================================================
-;; reset_dirty_bits — Clear the 49-bit dirty register
-;; ================================================================
-;; The dirty register tracks which of the 49 mapped cells have been
-;; written to during the current quantum. Implemented as 7 bytes
-;; in the OS scratch area (56 bits, 49 used).
-;; ================================================================
-
-DIRTY_BITS = $0450          ; 7 bytes in OS scratch
-
-reset_dirty_bits:
-    LDA #$00                ; 2
-    STA DIRTY_BITS          ; 4
-    STA DIRTY_BITS+1        ; 4
-    STA DIRTY_BITS+2        ; 4
-    STA DIRTY_BITS+3        ; 4
-    STA DIRTY_BITS+4        ; 4
-    STA DIRTY_BITS+5        ; 4
-    STA DIRTY_BITS+6        ; 4
-    RTS                     ; 6
-    ;; Total: ~36 cycles
-
-
-;; ================================================================
-;; check_dirty — Test dirty bit for cell X
-;; ================================================================
-;; Sets carry if cell X (0-48) is dirty, clears carry otherwise.
-;; ================================================================
-
-check_dirty:
-    ;; Bit index = X. Byte = X/8, bit = X%8.
-    TXA                     ; 2
-    LSR A                   ; 2 — X/2
-    LSR A                   ; 2 — X/4
-    LSR A                   ; 2 — X/8 = byte index
-    TAY                     ; 2
-    TXA                     ; 2
-    AND #$07                ; 2 — X%8 = bit index
-    TAX                     ; 2
-    LDA DIRTY_BITS,Y        ; 4 — load byte
-    ;; Shift bit X%8 into carry
-@shift:
-    CPX #$00                ; 2
-    BEQ @done               ; 2/3
-    LSR A                   ; 2
-    DEX                     ; 2
-    JMP @shift              ; 3
-@done:
-    LSR A                   ; 2 — bit 0 → carry
     RTS                     ; 6
 
 
@@ -735,21 +660,21 @@ check_dirty:
 ;;
 ;;   Register save:          59 cycles
 ;;   Clear B flag:            8 cycles
-;;   Writeback dirty cells:  ~15K × k cycles (k = dirty cell count)
+;;   Writeback all cells:   ~15K × 49 = ~753K cycles (without DMA)
 ;;   Write RNG:              28 cycles
 ;;   advance_scheduler:      board-size dependent
 ;;   Read-in neighborhood:   ~15K × 49 = ~753K cycles (without DMA)
 ;;   restore_and_rti:        38 cycles
 ;;   ─────────────────────────
 ;;   Register overhead:     ~133 cycles
-;;   Bulk copy (dominant):  ~753K read-in + ~15K×k writeback
+;;   Bulk copy (dominant):  ~753K read-in + ~753K writeback = ~1.5M cycles
 ;;
 ;;   The bulk copy dominates. A DMA controller would reduce this
-;;   dramatically, transferring 1 byte/cycle (~50K cycles for
-;;   49 cells, vs. ~753K in software).
+;;   dramatically, transferring 1 byte/cycle (~100K cycles total
+;;   for read-in + writeback, vs. ~1.5M in software).
 ;;
 ;;   On undo (I flag set): writeback is skipped entirely, saving
-;;   ~15K × k cycles. Read-in still required for the new cell.
+;;   ~753K cycles. Read-in still required for the new cell.
 ;;
 ;; ── BRK operations ─────────────────────────────────────────
 ;;
@@ -784,8 +709,12 @@ check_dirty:
 ;; ── Key insight ────────────────────────────────────────────
 ;;
 ;; Every interrupt (timer or BRK) pays the context switch cost:
-;; writeback of dirty cells and read-in of the new neighborhood.
+;; writeback of all 49 cells and read-in of the new neighborhood.
 ;; The BRK-specific costs (swap: ~55, copy: ~14,380) are ADDED
 ;; to this shared base cost. The shadow window is the single bus
 ;; through which all storage access flows — reads, writebacks,
 ;; noisy copies, and (indirectly via page table) swaps.
+;;
+;; No dirty-tracking hardware is needed. The writeback is
+;; unconditional (all 49 cells) unless the I flag is set, in
+;; which case the entire writeback is skipped (atomic abort).
