@@ -233,26 +233,22 @@ describe('BoardController', () => {
         });
     });
 
-    describe('nSwapCycles', () => {
-        it('defaults to 0', () => {
-            const ctrl = new BoardController();
-            expect(ctrl.noiseParams.nSwapCycles).toBe(0);
-        });
-
-        it('nSwapCycles very large prevents all BRK copies', () => {
-            // Set nSwapCycles larger than any scheduling quantum so BRK always fails
-            const ctrl = new BoardController(undefined, { pBitNoise: 0, nSwapCycles: 999999 });
+    describe('BRK cycle cost enforcement', () => {
+        it('BRK copy fails when scheduling quantum is too short', () => {
+            // Copy costs 14400 cycles. Set nextCycles to 100 so there's
+            // not enough time after the BRK's 7-cycle decode.
+            const ctrl = new BoardController(undefined, { pBitNoise: 0 });
             const mem = ctrl.memory;
             mem.orientation = 0;
             mem.iOrig = 0;
             mem.jOrig = 0;
-            mem.nextCycles = 100000;
+            mem.nextCycles = 100;  // way too short for copy (14400 cycles)
 
             // Write a known byte at origin cell byte 0x200
             const srcByteIdx = mem.ijbToByteIndex(0, 0, 0x200);
             mem.setByteWithoutUndo(srcByteIdx, 0x42);
 
-            // Write BRK $31 (copy to cell 1) at origin byte 0
+            // Write BRK 49 (copy to cell 1) at origin byte 0
             const byteIdx = mem.ijbToByteIndex(0, 0, 0);
             mem.setByteWithoutUndo(byteIdx, 0x00);     // BRK
             mem.setByteWithoutUndo(byteIdx + 1, 49);    // operand 49 = copy to cell 1
@@ -272,13 +268,13 @@ describe('BoardController', () => {
             expect(mem.getByte(destByteIdx)).toBe(0x00);
         });
 
-        it('nSwapCycles=0 allows BRK copies normally', () => {
-            const ctrl = new BoardController(undefined, { pBitNoise: 0, nSwapCycles: 0 });
+        it('BRK copy succeeds with sufficient cycles', () => {
+            const ctrl = new BoardController(undefined, { pBitNoise: 0 });
             const mem = ctrl.memory;
             mem.orientation = 0;
             mem.iOrig = 0;
             mem.jOrig = 0;
-            mem.nextCycles = 100000;
+            mem.nextCycles = 100000;  // plenty for copy (14400 cycles)
 
             const srcByteIdx = mem.ijbToByteIndex(0, 0, 0x200);
             mem.setByteWithoutUndo(srcByteIdx, 0x42);
@@ -298,12 +294,36 @@ describe('BoardController', () => {
             expect(mem.getByte(destByteIdx)).toBe(0x42);
         });
 
-        it('serializes and deserializes nSwapCycles', () => {
-            const ctrl = new BoardController(undefined, { nSwapCycles: 14336 });
-            const saved = ctrl.state;
-            const ctrl2 = new BoardController();
-            ctrl2.state = saved;
-            expect(ctrl2.noiseParams.nSwapCycles).toBe(14336);
+        it('BRK swap succeeds with short quantum (low cycle cost)', () => {
+            // Swap costs only 49 cycles — should work even with short quantum
+            const ctrl = new BoardController(undefined, { pBitNoise: 0 });
+            const mem = ctrl.memory;
+            mem.orientation = 0;
+            mem.iOrig = 0;
+            mem.jOrig = 0;
+            mem.nextCycles = 200;  // enough for swap (49 cycles) but not copy (14400)
+
+            // Write distinct bytes in cell 0 and cell 1 (using storage directly)
+            const byte0 = mem.ijbToByteIndex(0, 0, 0x200);
+            const byte1 = mem.ijbToByteIndex(0, 1, 0x200);
+            mem.setByteWithoutUndo(byte0, 0x11);
+            mem.setByteWithoutUndo(byte1, 0x22);
+
+            // Write BRK 1 (swap cell 0 with cell 1)
+            const byteIdx = mem.ijbToByteIndex(0, 0, 0);
+            mem.setByteWithoutUndo(byteIdx, 0x00);     // BRK
+            mem.setByteWithoutUndo(byteIdx + 1, 1);     // operand 1 = swap with cell 1
+
+            ctrl.sfotty.PC = 0;
+            ctrl.sfotty.setP(0);
+            ctrl.sfotty.S = 0xFF;
+            mem.resetUndoHistory();
+
+            ctrl.runToNextInterrupt();
+
+            // After swap: read from storage (not memory map, which moved)
+            expect(mem.getByte(byte0)).toBe(0x22);
+            expect(mem.getByte(byte1)).toBe(0x11);
         });
     });
 
@@ -526,7 +546,6 @@ describe('BoardController', () => {
         it('has all default params with correct values', () => {
             const ctrl = new BoardController();
             expect(ctrl.boardParams.pBitNoise).toBeCloseTo(1 / 2048);
-            expect(ctrl.boardParams.nSwapCycles).toBe(0);
             expect(ctrl.boardParams.pBitNoiseZero).toBe(0.5);
             expect(ctrl.boardParams.hasCompass).toBe(false);
             // BRK ops registry
@@ -547,7 +566,6 @@ describe('BoardController', () => {
         it('save/restore preserves all params via brkOps', () => {
             const ctrl = new BoardController(undefined, {
                 pBitNoise: 0.123,
-                nSwapCycles: 14336,
                 pBitNoiseZero: 0.8,
                 hasCompass: true,
                 implementsMove: false,
@@ -559,7 +577,6 @@ describe('BoardController', () => {
             const ctrl2 = new BoardController();
             ctrl2.state = saved;
             expect(ctrl2.boardParams.pBitNoise).toBeCloseTo(0.123);
-            expect(ctrl2.boardParams.nSwapCycles).toBe(14336);
             expect(ctrl2.boardParams.pBitNoiseZero).toBeCloseTo(0.8);
             expect(ctrl2.boardParams.hasCompass).toBe(true);
             expect(ctrl2.boardParams.brkOps.swap.enabled).toBe(false);

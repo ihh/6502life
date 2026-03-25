@@ -177,25 +177,18 @@ $y=-3$ & 47 & 41 & 33 & 27 & 32 & 40 & 46
       If a BRK operand's operation is not enabled in \texttt{brkOps} (or is not
       registered at all), the BRK simply yields to the scheduler with no effect.
 
-      \subsubsection*{Cycle costs and \texttt{nSwapCycles}}
+      \subsubsection*{Cycle costs}
 
-      BRK operations that manipulate cell data (swap and noisy copy) require
-      the Shadow OS (Section~\ref{sec:shadow-os}) to perform work on the
-      program's behalf. The \texttt{nSwapCycles} hyperparameter sets the
-      minimum number of scheduler cycles that must remain before the next
-      timer interrupt for the operation to succeed; if fewer cycles remain,
-      the BRK simply yields with no effect.
+      Each BRK operation has a cycle cost determined by the Shadow OS
+      (Section~\ref{sec:shadow-os}). If fewer scheduler cycles remain
+      before the next timer interrupt than the operation requires, the
+      BRK silently fails (yields with no effect). This is always enforced.
 
-      Swap is an $O(1)$ operation: the Shadow OS remaps page-table entries
-      in the paged storage hardware, exchanging the two cells without
-      copying data.
+      Swap is $O(1)$: the Shadow OS remaps page-table entries, exchanging
+      two cells without copying data ($\sim$49 cycles).
       Noisy copy is $O(M)$: each of the $M = 1024$ bytes must be streamed
-      through the noise gate.
-      As a result, swap has a lower cycle cost than noisy copy.
-      A reasonable default might be \texttt{nSwapCycles}~$\approx 15{,}000$
-      (slightly above the copy cost of $\sim$14{,}400 Shadow OS cycles),
-      but the reference implementation defaults to~0 (no gating) for
-      backwards compatibility.
+      through the noise gate ($\sim$14{,}400 cycles).
+      Reset and interrupt requests are cheap ($\sim$12--24 cycles).
 
       \subsubsection*{Noisy copy model}
 
@@ -224,7 +217,6 @@ $y=-3$ & 47 & 41 & 33 & 27 & 32 & 40 & 46
         Parameter & Default & Description \\ \hline
         \texttt{pBitNoise} & 1/2048 & Per-bit resampling probability on BRK noisy copy ($\varepsilon$) \\
         \texttt{pBitNoiseZero} & 0.5 & $P(\text{resampled bit} = 0)$; 0.5 = fair coin, 1 = erasure ($q$) \\
-        \texttt{nSwapCycles} & 0 & Minimum remaining scheduler cycles for BRK copy/swap to succeed (0 = no limit) \\
         \texttt{hasCompass} & false & Write orientation to \$FA (shifted left 2 bits)
       \end{tabular}
 
@@ -623,10 +615,11 @@ versus $\sim$14{,}400 for copy---a ratio of roughly 300:1, reflecting
 the fundamental difference between pointer manipulation and bulk data
 transfer.
 
-For \texttt{nSwapCycles} gating, the reference implementation applies
-a single threshold for both operations. An alternative would be separate
-thresholds (e.g.\ $\sim$100 for swap, $\sim$15{,}000 for copy), but the
-single-threshold approach keeps the hyperparameter space small.
+Each BRK operation's cycle cost is defined in the \texttt{BRK\_OP\_REGISTRY}
+and enforced at dispatch time. Swap costs $\sim$49 cycles, copy costs
+$\sim$14{,}400 cycles, and lightweight operations (reset, sync/async
+requests) cost $\sim$12--24 cycles. A BRK that cannot be completed
+within the remaining quantum silently yields.
 
 \section{Hardware implementations}
 \label{sec:hardware}

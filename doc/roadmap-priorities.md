@@ -71,8 +71,9 @@ This is the critical blocker for interesting biology.
   Programs can detect absolute orientation, breaking rotational symmetry.
 - **Feature flags**: `implementsMove`, `implementsCopy`, `implementsSync`,
   `implementsAsync` allow disabling specific BRK operations for experiments.
-- **`nSwapCycles`**: probability that a BRK copy/swap silently fails (no
-  effect), creating selective pressure for multi-copy strategies.
+- **Per-op cycle costs**: each BRK operation has its own cycle cost (from
+  `BRK_OP_REGISTRY`). If fewer scheduler cycles remain than the op requires,
+  the BRK silently fails, creating selective pressure for multi-copy strategies.
 
 ## Additional questions
 

@@ -230,7 +230,6 @@ The `BoardController` accepts a `boardParams` dictionary with the following defa
 |-----------|---------|-------------|
 | `pBitNoise` | 1/2048 | Per-bit resampling probability on BRK noisy copy (ε) |
 | `pBitNoiseZero` | 0.5 | P(resampled bit = 0); 0.5 = fair coin, 1 = erasure (q) |
-| `nSwapCycles` | 0 | Cycle budget for BRK copy/swap; fails if fewer cycles remain (0 = no limit) |
 | `hasCompass` | false | If true, scheduler writes orientation to $FA (shifted left 2 bits) |
 | `implementsMove` | true | Enable BRK 1–244 swap operations |
 | `implementsCopy` | true | Enable BRK 245–252 noisy copy |

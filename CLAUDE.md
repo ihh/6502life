@@ -220,7 +220,7 @@ Colors encode cell activity using HSV with exponential decay of write/move recen
 - **Register save area** at 0xF9-0xFF: PCHI, PCLO, P, A, X, Y, S
 - **RNG** at 0xFC-0xFF: 4 bytes of pseudorandom numbers, refreshed each interrupt
 - **Compass**: if enabled (`boardParams.hasCompass`), the scheduler writes the current orientation to $FA (shifted left 2 bits). Programs can read $FA to detect their absolute orientation. Disabled by default (writes 0).
-- **Board hyperparameters** (`boardParams`): scalar params `pBitNoise` (default 1/2048), `pBitNoiseZero` (default 0.5, P(resampled bit=0)), `nSwapCycles` (default 0, minimum remaining scheduler cycles for BRK copy/swap to succeed), `hasCompass` (default false). The `brkOps` registry (see below) controls which BRK operands are enabled.
+- **Board hyperparameters** (`boardParams`): scalar params `pBitNoise` (default 1/2048), `pBitNoiseZero` (default 0.5, P(resampled bit=0)), `hasCompass` (default false). The `brkOps` registry (see below) controls which BRK operands are enabled. Each BRK op has a cycle cost from the Shadow OS; if fewer cycles remain before the next timer IRQ than the op requires, the BRK silently fails.
 - **BRK operand registry** (`boardParams.brkOps`): maps operation names to `{ range: [lo, hi], enabled: bool }`. The code-side `BRK_OP_REGISTRY` adds cycle costs, address encoding, and handler functions. A 256-entry dispatch table is built at construction time for O(1) lookup. Default entries:
   - `reset`: range [0, 0], enabled=true, 12 cycles. Reset PC to 0, yield.
   - `swap`: range [1, 48], enabled=true, 49 cycles. Swap cell 0 with cell b. O(1) via page-table remap.

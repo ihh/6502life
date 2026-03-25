@@ -37,7 +37,6 @@ impl WasmBoard {
         size: usize,
         seed: u32,
         p_bit_noise: f64,
-        n_swap_cycles: u32,
         p_bit_noise_zero: f64,
         has_compass: bool,
         implements_move: bool,
@@ -48,7 +47,6 @@ impl WasmBoard {
         let memory = BoardMemory::new(seed, size);
         let params = BoardParams {
             p_bit_noise,
-            n_swap_cycles,
             p_bit_noise_zero,
             has_compass,
             implements_move,
@@ -68,14 +66,6 @@ impl WasmBoard {
 
     pub fn set_p_bit_noise(&mut self, val: f64) {
         self.controller.board_params.p_bit_noise = val;
-    }
-
-    pub fn get_n_swap_cycles(&self) -> u32 {
-        self.controller.board_params.n_swap_cycles
-    }
-
-    pub fn set_n_swap_cycles(&mut self, val: u32) {
-        self.controller.board_params.n_swap_cycles = val;
     }
 
     pub fn get_p_bit_noise_zero(&self) -> f64 {

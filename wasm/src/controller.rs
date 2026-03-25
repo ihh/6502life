@@ -19,8 +19,6 @@ const RNG_ADDR: usize = 0xFC;
 pub struct BoardParams {
     /// Per-bit noise on BRK noisy copy
     pub p_bit_noise: f64,
-    /// Cycle budget for BRK copy/swap (0 = no limit)
-    pub n_swap_cycles: u32,
     /// P(resampled bit = 0); 0.5 = fair coin, 1.0 = erasure
     pub p_bit_noise_zero: f64,
     /// Write orientation to $FA if true
@@ -39,7 +37,6 @@ impl Default for BoardParams {
     fn default() -> Self {
         BoardParams {
             p_bit_noise: 1.0 / 2048.0,
-            n_swap_cycles: 0,
             p_bit_noise_zero: 0.5,
             has_compass: false,
             implements_move: true,
@@ -288,10 +285,8 @@ impl BoardController {
                     if is_brk {
                         let operand = brk_operand;
                         let bp = &self.board_params;
-                        // nSwapCycles: BRK copy/swap fails if fewer cycles remain
-                        let brk_fails = bp.n_swap_cycles > 0
-                            && (scheduler_cycles - cpu_cycles) < bp.n_swap_cycles as usize;
-                        if !brk_fails {
+                        // TODO: per-operand cycle cost enforcement (matching JS BRK_OP_REGISTRY)
+                        {
                             // Clone board_params fields we need to avoid borrow issues
                             let implements_move = bp.implements_move;
                             let implements_copy = bp.implements_copy;
@@ -479,14 +474,10 @@ mod tests {
     }
 
     #[test]
-    fn test_swap_cycle_budget() {
+    fn test_basic_execution() {
         let mem = BoardMemory::new(42, 8);
-        let params = BoardParams {
-            n_swap_cycles: 999999, // always fail (budget exceeds any quantum)
-            ..Default::default()
-        };
-        let mut ctrl = BoardController::with_params(mem, params);
-        // Should still run without panicking
+        let mut ctrl = BoardController::new(mem);
+        // Should run without panicking
         for _ in 0..50 {
             ctrl.run_to_next_interrupt();
         }

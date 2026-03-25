@@ -254,7 +254,6 @@ class BoardController {
         // Board hyperparameters
         this.boardParams = Object.assign({
             pBitNoise: 1 / 2048,     // per-bit noise on BRK noisy copy
-            nSwapCycles: 0,          // cycle budget for BRK copy/swap (0 = no limit)
             pBitNoiseZero: 0.5,      // P(resampled bit = 0); 0.5 = fair coin, 1 = erasure
             hasCompass: false,       // write orientation to $FA if true
         }, boardParams);
@@ -295,7 +294,9 @@ class BoardController {
     }
 
     // Build the 256-entry BRK dispatch table from boardParams.brkOps.
-    // Each entry is either null (yield/no-op) or a handler function.
+    // Each entry is either null (yield/no-op) or {handler, cycles}.
+    // The cycles field is the Shadow OS cost; if fewer cycles remain
+    // before the next timer IRQ, the BRK silently fails (yields).
     _buildBrkDispatch() {
         this._brkDispatch = new Array(256).fill(null);
         const ops = this.boardParams.brkOps;
@@ -305,7 +306,7 @@ class BoardController {
             if (!reg) continue;  // unknown op type — skip (future extension point)
             const [lo, hi] = desc.range;
             for (let op = lo; op <= hi; op++) {
-                this._brkDispatch[op] = reg.handler;
+                this._brkDispatch[op] = { handler: reg.handler, cycles: reg.cycles };
             }
         }
         // Cache whether any interrupt-request ops are enabled
@@ -364,7 +365,7 @@ class BoardController {
         const incoming = s.boardParams || s.noiseParams;
         if (incoming) {
             // Copy scalar params
-            for (const key of ['pBitNoise', 'nSwapCycles', 'pBitNoiseZero', 'hasCompass']) {
+            for (const key of ['pBitNoise', 'pBitNoiseZero', 'hasCompass']) {
                 if (incoming[key] !== undefined) this.boardParams[key] = incoming[key];
             }
             // Restore brkOps: prefer brkOps if present, else synthesize from legacy flags
@@ -1453,14 +1454,15 @@ class BoardController {
                         // so the child inherits the pre-BRK register state
                         // stored at $F9-$FF from the previous scheduling.
                         const operand = brkOperand;
-                        // nSwapCycles: BRK copy/swap fails if fewer than this
-                        // many cycles remain before the next interrupt.
-                        const bp = this.boardParams;
-                        const brkFails = bp.nSwapCycles > 0
-                            && (schedulerCycles - cpuCycles) < bp.nSwapCycles;
-                        if (!brkFails) {
-                            const handler = this._brkDispatch[operand];
-                            if (handler) handler(this, operand);
+                        const entry = this._brkDispatch[operand];
+                        if (entry) {
+                            // Each BRK op has a cycle cost (from the Shadow OS).
+                            // If fewer cycles remain before the next timer IRQ
+                            // than the op requires, it silently fails (yields).
+                            const remaining = schedulerCycles - cpuCycles;
+                            if (remaining >= entry.cycles) {
+                                entry.handler(this, operand);
+                            }
                         }
                     }
                     this.commitWrites();

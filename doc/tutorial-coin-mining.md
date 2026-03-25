@@ -330,7 +330,6 @@ board hyperparameters:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `pBitNoise` | float | 1/2048 | Per-bit noise on BRK noisy copy |
-| `nSwapCycles` | float | 0 | Probability BRK copy/swap silently fails |
 | `hasCompass` | bool | false | Write cell orientation to $FA each interrupt |
 | `implementsMove` | bool | true | Enable BRK 1-244 swap operations |
 | `implementsCopy` | bool | true | Enable BRK 245-252 noisy copy |

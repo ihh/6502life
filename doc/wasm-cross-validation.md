@@ -101,13 +101,14 @@ The JS controller explicitly resets Sfotty's internal `operations` array to forc
 fresh decode on the next cycle. The Rust CPU has no equivalent internal state; its
 `pending_op` is cleared when `cycle_counter` reaches 0.
 
-#### 3. `nSwapCycles` Parameter
+#### 3. Per-Op Cycle Costs (BRK_OP_REGISTRY)
 
-**JS:** The controller supports `noiseParams.nSwapCycles`, a probability that BRK
-copy/swap silently fails (no effect). This creates selective pressure for multi-copy
-strategies.
+**JS:** The controller uses `BRK_OP_REGISTRY` to assign each BRK operation its own
+cycle cost. If fewer scheduler cycles remain than the op requires, the BRK silently
+fails (no effect). This creates selective pressure for multi-copy strategies.
 
-**Rust:** This parameter is not implemented. All BRK copy/swap operations always succeed.
+**Rust:** Per-op cycle costs are not implemented. All BRK copy/swap operations always
+succeed regardless of remaining cycles.
 
 #### 4. `randomize()` RNG Source
 
@@ -202,7 +203,7 @@ To achieve bit-compatibility:
    Sfotty's microcode-based cycle-accurate model. A faithful port would need to
    replicate Sfotty's `decode()` -> `operations[]` pipeline.
 
-2. **Add `nSwapCycles` support** to the Rust controller.
+2. **Add per-op cycle cost support** (`BRK_OP_REGISTRY`) to the Rust controller.
 
 3. **Match the `randomize()` default** behavior (though this is a caller issue, not
    an engine issue -- the WASM wrapper could default to using `Math.random()`).
