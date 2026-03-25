@@ -612,13 +612,18 @@ hardware beyond a stock CPU:
   translation ROM and bank-select latches.
 
   \textbf{Write tracking.} During execution, all stores to
-  \$0000--\$BFFF are logged in a small hardware write FIFO that records
-  (address, old\_value) pairs. On commit (BRK or timer with I clear),
-  the log is simply discarded---$O(1)$. On atomic abort (timer with I
-  set), the log is replayed backwards to restore original values---$O(k)$
-  where $k$ is the number of bytes written, typically small for a single
-  scheduling quantum. This matches the \texttt{undoHistory} mechanism in
-  the reference JS implementation.
+  \$0000--\$BFFF are logged in a preallocated hardware write FIFO that
+  records (address, old\_value) pairs. The FIFO has a hard upper bound
+  derived from the scheduling quantum: a 6502 \texttt{STA} takes at
+  minimum 3~cycles, so a quantum of $C$~cycles produces at most
+  $\lfloor C/3 \rfloor$ writes. With a mean quantum of 4096~cycles,
+  that is $\leq 1365$ entries $\times$ 4~bytes (16-bit address $+$
+  old value $+$ flags) $= 5.5$\,KB worst case. On commit (BRK or
+  timer with I clear), the FIFO pointer is simply reset---$O(1)$.
+  On atomic abort (timer with I set), the log is replayed backwards
+  to restore original values---$O(k)$ where $k$ is the number of
+  bytes actually written. This matches the \texttt{undoHistory}
+  mechanism in the reference JS implementation.
 
 \item \textbf{Shadow window.}
   A second 1\,KB bank at \$C000, selected by writing to the
