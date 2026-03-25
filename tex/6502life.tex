@@ -147,7 +147,7 @@ $y=-3$ & 47 & 41 & 33 & 27 & 32 & 40 & 46
     \item The operand byte $b$ selects an operation.
       Swap operations exchange the origin cell (cell~0) with any of the 48 other
       cells in the $7 \times 7$ neighborhood.
-      Noisy copy duplicates the origin cell to a neighbor through a noise gate.
+      Noisy copy duplicates the origin cell to a neighbor with per-bit noise.
 
       \begin{tabular}{l|p{.65\textwidth}}
         Operand $b$ & Operation \\ \hline
@@ -186,8 +186,8 @@ $y=-3$ & 47 & 41 & 33 & 27 & 32 & 40 & 46
 
       Swap is $O(1)$: the Shadow OS remaps page-table entries, exchanging
       two cells without copying data ($\sim$49 cycles).
-      Noisy copy is $O(M)$: each of the $M = 1024$ bytes must be streamed
-      through the noise gate ($\sim$14{,}400 cycles).
+      Noisy copy is $O(M)$: each of the $M = 1024$ bytes is XOR'd with
+      a mostly-zero hardware noise byte ($\sim$6{,}000 cycles).
       Reset and interrupt requests are cheap ($\sim$12--24 cycles).
 
       \subsubsection*{Noisy copy model}
@@ -526,11 +526,14 @@ only during OS execution:
   \$D000 & \texttt{SHADOW\_BANK} & Write: maps neighborhood cell $n$ into the
     shadow window at \$C000--\$C3FF. \\
   \$D001 & \texttt{NOISE\_BYTE} & Read: returns next byte from hardware LFSR,
-    then clocks the shift register. Used for the RNG bytes at \$FC--\$FF.
-    (The noisy copy uses the hardware noise gate on the shadow window write
-    path, not this register.) \\
+    then clocks the shift register. Used for the RNG bytes at \$FC--\$FF. \\
   \$D002 & \texttt{TIMER\_LO} & Read/write: interrupt countdown timer, low byte. \\
-  \$D003 & \texttt{TIMER\_HI} & Read/write: interrupt countdown timer, high byte.
+  \$D003 & \texttt{TIMER\_HI} & Read/write: interrupt countdown timer, high byte. \\
+  \$D004 & \texttt{NOISE\_XOR} & Read: returns a mostly-zero noise byte. Each bit
+    is independently 1 with probability $\varepsilon$, biased toward 0 with
+    probability $q$. The Shadow OS XORs source bytes with this register
+    during noisy copy: \texttt{dest = src EOR NOISE\_XOR}. When
+    $\varepsilon = 0$, always returns \$00 (exact copy).
 \end{tabular}
 
 The shadow window at \$C000--\$C3FF is a second 1\,KB bank selected by
@@ -589,16 +592,12 @@ dispatches:
 \item \textbf{Operands 49--96} (noisy copy): look up the target cell
   and write its board index to \texttt{SHADOW\_BANK}, mapping it into the
   shadow window at \$C000. Copy all $M = 1024$ bytes from cell~0
-  (\$0000--\$03FF) to the shadow window (\$C000--\$C3FF). The hardware
-  noise gate on the shadow window's write path automatically applies the
-  per-bit noise model---the CPU performs a plain \texttt{STA}, and the
-  hardware XORs each bit with the LFSR output at probability
-  $\varepsilon$. This is an $O(M)$ operation: every byte must pass
-  through the noise gate. Set the B flag.
-  Yield to scheduler.
-  Cost: $\sim$14{,}400 cycles ($\sim$14 per byte: \texttt{LDA abs,Y}
-  $+$ \texttt{STA abs,Y} $+$ \texttt{INY} $+$ \texttt{BNE} $=$ $4 + 5 +
-  2 + 3 = 14$ cycles, times 1024 bytes, plus setup).
+  (\$0000--\$03FF) to the shadow window (\$C000--\$C3FF), XOR'ing each
+  byte with \texttt{NOISE\_XOR} to apply per-bit noise.
+  Set the B flag. Yield to scheduler.
+  Cost: $\sim$6{,}000 cycles (the emulator budget; the Shadow OS
+  reference implementation takes $\sim$18{,}400 cycles at 18 cycles/byte,
+  but real hardware would use DMA or wider buses).
 
 \item \textbf{Operand 97} (sync interrupt): read X and Y from the user's
   saved registers, write to the timer hardware.
@@ -610,14 +609,14 @@ dispatches:
 
 The key asymmetry: swap is $O(1)$ because paged storage allows remapping
 without data movement, while noisy copy is inherently $O(M)$ because
-every byte must pass through the noise gate. Swap costs $\sim$49 cycles
-versus $\sim$14{,}400 for copy---a ratio of roughly 300:1, reflecting
-the fundamental difference between pointer manipulation and bulk data
-transfer.
+every byte must be XOR'd with a noise byte and written to storage.
+Swap costs $\sim$49 cycles versus $\sim$6{,}000 for copy---a ratio of
+roughly 120:1, reflecting the fundamental difference between pointer
+manipulation and bulk data transfer.
 
 Each BRK operation's cycle cost is defined in the \texttt{BRK\_OP\_REGISTRY}
 and enforced at dispatch time. Swap costs $\sim$49 cycles, copy costs
-$\sim$14{,}400 cycles, and lightweight operations (reset, sync/async
+$\sim$6{,}000 cycles, and lightweight operations (reset, sync/async
 requests) cost $\sim$12--24 cycles. A BRK that cannot be completed
 within the remaining quantum silently yields.
 
@@ -655,8 +654,7 @@ hardware beyond a stock CPU:
   The address space at \$0000--\$BFFF is fast working SRAM, not
   directly mapped to storage. The Shadow OS explicitly copies data
   between working RAM and paged storage using exact (noiseless) copies
-  through the shadow window---the same hardware path as the noisy copy,
-  but with the noise gate disabled ($\varepsilon = 0$).
+  through the shadow window (plain \texttt{LDA}/\texttt{STA}, no noise XOR).
 
   \emph{Before execution:} the Shadow OS copies the 49 neighborhood
   cells from storage into working RAM (the ``read''). With paged
@@ -686,20 +684,19 @@ hardware beyond a stock CPU:
   multiplexing, but only modestly---it reuses the same page table and
   storage bus, adding one extra latch and mux stage.
 
-\item \textbf{Noise LFSR and noise gate.}
+\item \textbf{Noise hardware.}
   A free-running 16-bit Galois LFSR (two 74HC flipflop chips plus an XOR
-  gate, $\sim$3 TTL packages). Reading \$D001 latches and returns the
-  low 8 bits, then clocks the register.
+  gate, $\sim$3 TTL packages). Reading \texttt{NOISE\_BYTE} (\$D001) latches
+  and returns the low 8 bits, then clocks the register.
 
-  The noise gate sits on the data bus between the CPU and the shadow
-  window's backing storage. On any write to \$C000--\$C3FF, the gate
-  applies per-bit resampling: each bit of the written byte independently
-  passes through or is replaced by an LFSR bit, controlled by a
-  comparator against the $\varepsilon$ threshold. With $\varepsilon = 0$,
-  all bits pass through (perfect copy). This adds a single XOR gate and
-  comparator latch to the write path ($\sim$2 extra TTL packages) but
-  makes noisy copy transparent to the CPU---the Shadow OS executes a
-  plain \texttt{STA} and the hardware applies the noise.
+  Reading \texttt{NOISE\_XOR} (\$D004) returns a mostly-zero byte: each
+  bit is independently 1 with probability $\varepsilon$, biased toward 0
+  with probability $q$ (\texttt{pBitNoiseZero}). This is implemented as a
+  comparator per bit against the $\varepsilon$ threshold, gated by the
+  LFSR output ($\sim$2 TTL packages). The Shadow OS XORs each source
+  byte with \texttt{NOISE\_XOR} during BRK copy (\texttt{LDA src; EOR
+  NOISE\_XOR; STA dest}), applying noise in software. When
+  $\varepsilon = 0$, \texttt{NOISE\_XOR} always returns \$00.
 
 \item \textbf{Interrupt timer.}
   A 16-bit countdown register at \$D002--\$D003, triggering NMI on

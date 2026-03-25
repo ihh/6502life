@@ -224,7 +224,7 @@ Colors encode cell activity using HSV with exponential decay of write/move recen
 - **BRK operand registry** (`boardParams.brkOps`): maps operation names to `{ range: [lo, hi], enabled: bool }`. The code-side `BRK_OP_REGISTRY` adds cycle costs, address encoding, and handler functions. A 256-entry dispatch table is built at construction time for O(1) lookup. Default entries:
   - `reset`: range [0, 0], enabled=true, 12 cycles. Reset PC to 0, yield.
   - `swap`: range [1, 48], enabled=true, 49 cycles. Swap cell 0 with cell b. O(1) via page-table remap.
-  - `copy`: range [49, 96], enabled=true, 14400 cycles. Noisy copy cell 0 to cell (b-48). O(M) through noise gate.
+  - `copy`: range [49, 96], enabled=true, 6000 cycles. Noisy copy cell 0 to cell (b-48). O(M), each byte XOR'd with NOISE_XOR.
   - `sync`: range [97, 97], enabled=false, 24 cycles. Sync interrupt request; X,Y = period in cycles.
   - `async`: range [98, 98], enabled=false, 24 cycles. Async interrupt request; X,Y = delay in cycles.
   - Operands 99-255 are unassigned (yield). Board owners can extend the registry with custom operations in this range.

@@ -171,9 +171,9 @@ const BRK_OP_REGISTRY = {
     copy: {
         defaultRange: [49, 96],
         defaultEnabled: true,
-        cycles: 14400,
+        cycles: 6000,
         addressEncoding: 'operand-offset',  // cell index = operand - rangeStart + 1
-        description: 'Noisy copy cell 0 to cell N-48 (O(M) through noise gate)',
+        description: 'Noisy copy cell 0 to cell N-48',
         handler(ctrl, operand) {
             const dest = operand - 48;
             ctrl.copyCellWithNoise(dest);

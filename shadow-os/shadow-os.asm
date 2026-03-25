@@ -31,16 +31,15 @@
 ;;    to working RAM ($0000) and one storage cell ($C000).
 ;;    Used for: read-in, writeback, BRK noisy copy, and BRK swap.
 ;;
-;; 4. Hardware noise gate on the shadow window WRITE path.
-;;    Any STA to $C000-$C3FF can optionally apply the board's
-;;    noise model: each bit is independently resampled with
-;;    probability epsilon, using the hardware LFSR as entropy.
-;;    When epsilon=0, bytes pass through unchanged (exact copy).
-;;    The OS uses exact mode for read-in/writeback and noisy mode
-;;    for BRK copy operations.
-;;
-;; 5. NOISE_BYTE at $D001: reading returns the next byte from the
+;; 4. NOISE_BYTE at $D001: reading returns the next byte from the
 ;;    hardware LFSR (used for RNG bytes written to $FC-$FF).
+;;
+;; 5. NOISE_XOR at $D004: reading returns a mostly-zero noise byte.
+;;    Each bit is independently 1 with probability epsilon
+;;    (pBitNoise), biased toward zero with probability q
+;;    (pBitNoiseZero). Used by the OS to apply copy noise:
+;;    destination = source XOR NOISE_XOR. When epsilon=0,
+;;    NOISE_XOR always returns 0x00 (exact copy).
 ;;
 ;; 6. Countdown timer at $D002-$D003, triggers NMI on underflow.
 ;;
@@ -66,7 +65,7 @@
 ;;   Context switch writeback (k cells):  ~14K × k cycles
 ;;   BRK 0 (reset PC, yield):             ~12 cycles
 ;;   BRK 1-48 (swap via page table):      ~49 cycles
-;;   BRK 49-96 (noisy copy, 1024 bytes):  ~14,400 cycles
+;;   BRK 49-96 (noisy copy, 1024 bytes):  ~18,400 cycles (6,000 in emulator)
 ;;   BRK 97 (sync interrupt setup):       ~24 cycles
 ;;   BRK 98 (async interrupt setup):      ~24 cycles
 ;;
@@ -78,6 +77,7 @@ SHADOW_BANK = $D000     ; Write: map board cell N into $C000-$C3FF
 NOISE_BYTE  = $D001     ; Read: next byte from hardware LFSR
 TIMER_LO    = $D002     ; Read/write: countdown timer low byte
 TIMER_HI    = $D003     ; Read/write: countdown timer high byte
+NOISE_XOR   = $D004     ; Read: mostly-zero noise byte (each bit=1 with prob epsilon)
 
 ;; ── Cell layout constants ───────────────────────────────────
 
@@ -129,7 +129,7 @@ OS_TEMP_Y    = $F037    ; Temp: saved Y during interrupt entry
 ;;
 ;; The writeback and read-in use exact (noiseless) copies through
 ;; the shadow window — the same hardware path as BRK noisy copy,
-;; but with the noise gate disabled. The shadow window is just a
+;; but with the no noise XOR. The shadow window is just a
 ;; bus to the board's paged storage.
 ;; ================================================================
 
@@ -179,7 +179,7 @@ nmi_handler:
 
     ;; Commit: write back all 49 cells to storage.
     ;; Each cell's 1KB is copied from working RAM ($0000+n*$400)
-    ;; to storage via shadow window (exact copy, noise gate off).
+    ;; to storage via shadow window (exact copy, no noise XOR).
     ;; Cost: 49 × ~15K = ~753K cycles.
     JSR writeback_all       ; 6 + subroutine cost
     JMP @writeback_done     ; 3
@@ -308,7 +308,8 @@ brk_handler:
     CMP #97                 ; 2
     BCS @not_copy           ; 2/3
 
-    ;; Cost: ~14,400 cycles
+    ;; Cost: ~5,960 cycles (reference implementation)
+    ;; The emulator uses 6,000 as the enforced cycle budget.
     SEC                     ; 2
     SBC #48                 ; 2  A = target neighbor index (1-48)
     TAX                     ; 2
@@ -316,20 +317,23 @@ brk_handler:
     STA SHADOW_BANK         ; 4  map into shadow window at $C000
     ;; 20 cycles setup
 
-    ;; Copy 4 pages from cell 0 to shadow window.
-    ;; The hardware noise gate on the shadow window write path
-    ;; automatically applies per-bit noise (pBitNoise, pBitNoiseZero).
-    ;; From the CPU's perspective this is a plain memcpy.
+    ;; Copy 4 pages from cell 0 to shadow window, XORing each byte
+    ;; with NOISE_XOR to apply per-bit noise. NOISE_XOR returns a
+    ;; mostly-zero byte: each bit is 1 with probability epsilon.
+    ;; When epsilon=0, NOISE_XOR always returns 0x00 (exact copy).
     ;;
-    ;; Per byte: LDA abs,Y (4) + STA abs,Y (5) + INY (2) + BNE (3) = 14
-    ;; Per page: 255 * 14 + 1 * 13 + 2 (LDY) = 3,585 cycles
-    ;; Four pages: 4 * 3,585 = 14,340 cycles
+    ;; Per byte: LDA abs,Y (4) + EOR abs (4) + STA abs,Y (5)
+    ;;           + INY (2) + BNE (3) = 18 cycles
+    ;; Per page: 255 * 18 + 1 * 17 + 2 (LDY) = 4,609 cycles
+    ;; Four pages: 4 * 4,609 = 18,436 cycles (Shadow OS reference)
+    ;; The emulator budgets 6,000 cycles assuming faster hardware.
 
-    ;; Page 0: $0000-$00FF → $C000-$C0FF
+    ;; Page 0: $0000-$00FF → $C000-$C0FF (with noise)
     LDY #$00                ; 2
 @p0:
-    LDA $0000,Y             ; 4
-    STA $C000,Y             ; 5  (noise gate applies on write)
+    LDA $0000,Y             ; 4  source byte
+    EOR NOISE_XOR           ; 4  apply noise (mostly zero → mostly exact)
+    STA $C000,Y             ; 5  write to storage
     INY                     ; 2
     BNE @p0                 ; 3/2
 
@@ -337,6 +341,7 @@ brk_handler:
     LDY #$00                ; 2
 @p1:
     LDA $0100,Y             ; 4
+    EOR NOISE_XOR           ; 4
     STA $C100,Y             ; 5
     INY                     ; 2
     BNE @p1                 ; 3/2
@@ -345,6 +350,7 @@ brk_handler:
     LDY #$00                ; 2
 @p2:
     LDA $0200,Y             ; 4
+    EOR NOISE_XOR           ; 4
     STA $C200,Y             ; 5
     INY                     ; 2
     BNE @p2                 ; 3/2
@@ -353,14 +359,15 @@ brk_handler:
     LDY #$00                ; 2
 @p3:
     LDA $0300,Y             ; 4
+    EOR NOISE_XOR           ; 4
     STA $C300,Y             ; 5
     INY                     ; 2
     BNE @p3                 ; 3/2
 
-    ;; 14,340 cycles for the copy loop
+    ;; 18,436 cycles for the copy loop (Shadow OS reference)
+    ;; Emulator enforces 6,000-cycle budget (assumes DMA or faster hw)
 
     JMP brk_set_b_and_yield ; 3
-    ;; Total copy: 20 + 14,340 + 3 + B flag = ~14,374 cycles
 
 @not_copy:
     ;; ── Operand 97: sync interrupt request ─────────────
@@ -507,7 +514,7 @@ advance_scheduler:
 ;; writeback_all — Copy all 49 cells from working RAM to storage
 ;; ================================================================
 ;; Unconditionally copies every mapped cell's 1KB from working RAM
-;; to storage via the shadow window (exact copy, noise gate disabled).
+;; to storage via the shadow window (exact copy, no noise XOR).
 ;; No dirty tracking needed — if I flag was set, we skip writeback
 ;; entirely; otherwise we write back everything.
 ;;
@@ -698,11 +705,12 @@ readin_neighborhood:
 ;; BRK 49-96 (noisy copy):
 ;;   Dispatch:           12 cycles
 ;;   Setup:              20 cycles
-;;   Copy loop:      14,340 cycles (1024 bytes × 14 cyc, noise gate)
+;;   Copy+XOR loop:  18,436 cycles (1024 bytes × 18 cyc, LDA+EOR+STA)
 ;;   B flag:              8 cycles
 ;;   Writeback + read-in: same as context switch
 ;;   ─────────────────────────
-;;   Copy-specific cost: ~14,380 cycles (O(M), excludes ctx switch)
+;;   Shadow OS cost:  ~18,476 cycles (O(M), excludes ctx switch)
+;;   Emulator budget:  6,000 cycles (assumes faster hardware, e.g. DMA)
 ;;
 ;; BRK 97/98 (sync/async):
 ;;   Dispatch + timer:   ~33 cycles
@@ -712,7 +720,7 @@ readin_neighborhood:
 ;;
 ;; Every interrupt (timer or BRK) pays the context switch cost:
 ;; writeback of all 49 cells and read-in of the new neighborhood.
-;; The BRK-specific costs (swap: ~55, copy: ~14,380) are ADDED
+;; The BRK-specific costs (swap: ~55, copy: ~18,476) are ADDED
 ;; to this shared base cost. The shadow window is the single bus
 ;; through which all storage access flows — reads, writebacks,
 ;; noisy copies, and (indirectly via page table) swaps.
