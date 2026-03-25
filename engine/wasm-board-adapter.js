@@ -46,16 +46,18 @@ export function createWasmBoardAdapter(size = 32, seed = 42, boardParams) {
     const { WasmBoard } = wasmModule;
     let inner;
     if (boardParams) {
+        // Extract booleans from brkOps if present, else fall back to legacy flags
+        const ops = boardParams.brkOps;
         inner = WasmBoard.new_with_params(
             size, seed,
             boardParams.pBitNoise ?? 1 / 2048,
             boardParams.nSwapCycles ?? 0,
             boardParams.pBitNoiseZero ?? 0.5,
             boardParams.hasCompass ?? false,
-            boardParams.implementsMove ?? true,
-            boardParams.implementsCopy ?? true,
-            boardParams.implementsSync ?? false,
-            boardParams.implementsAsync ?? false,
+            ops?.swap?.enabled  ?? boardParams.implementsMove ?? true,
+            ops?.copy?.enabled  ?? boardParams.implementsCopy ?? true,
+            ops?.sync?.enabled  ?? boardParams.implementsSync ?? false,
+            ops?.async?.enabled ?? boardParams.implementsAsync ?? false,
         );
     } else {
         inner = new WasmBoard(size, seed);
@@ -176,6 +178,14 @@ export function createWasmBoardAdapter(size = 32, seed = 42, boardParams) {
                     nSwapCycles: inner.get_n_swap_cycles(),
                     pBitNoiseZero: inner.get_p_bit_noise_zero(),
                     hasCompass: inner.get_has_compass(),
+                    brkOps: {
+                        reset: { range: [0, 0],    enabled: true },
+                        swap:  { range: [1, 48],   enabled: inner.get_implements_move() },
+                        copy:  { range: [49, 96],  enabled: inner.get_implements_copy() },
+                        sync:  { range: [97, 97],  enabled: inner.get_implements_sync() },
+                        async: { range: [98, 98],  enabled: inner.get_implements_async() },
+                    },
+                    // Legacy flags for backward compat
                     implementsMove: inner.get_implements_move(),
                     implementsCopy: inner.get_implements_copy(),
                     implementsSync: inner.get_implements_sync(),

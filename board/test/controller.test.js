@@ -529,15 +529,22 @@ describe('BoardController', () => {
             expect(ctrl.boardParams.nSwapCycles).toBe(0);
             expect(ctrl.boardParams.pBitNoiseZero).toBe(0.5);
             expect(ctrl.boardParams.hasCompass).toBe(false);
-            expect(ctrl.boardParams.implementsMove).toBe(true);
-            expect(ctrl.boardParams.implementsCopy).toBe(true);
-            expect(ctrl.boardParams.implementsSync).toBe(false);
-            expect(ctrl.boardParams.implementsAsync).toBe(false);
+            // BRK ops registry
+            expect(ctrl.boardParams.brkOps.reset.enabled).toBe(true);
+            expect(ctrl.boardParams.brkOps.reset.range).toEqual([0, 0]);
+            expect(ctrl.boardParams.brkOps.swap.enabled).toBe(true);
+            expect(ctrl.boardParams.brkOps.swap.range).toEqual([1, 48]);
+            expect(ctrl.boardParams.brkOps.copy.enabled).toBe(true);
+            expect(ctrl.boardParams.brkOps.copy.range).toEqual([49, 96]);
+            expect(ctrl.boardParams.brkOps.sync.enabled).toBe(false);
+            expect(ctrl.boardParams.brkOps.sync.range).toEqual([97, 97]);
+            expect(ctrl.boardParams.brkOps.async.enabled).toBe(false);
+            expect(ctrl.boardParams.brkOps.async.range).toEqual([98, 98]);
         });
     });
 
     describe('boardParams serialization', () => {
-        it('save/restore preserves all params', () => {
+        it('save/restore preserves all params via brkOps', () => {
             const ctrl = new BoardController(undefined, {
                 pBitNoise: 0.123,
                 nSwapCycles: 14336,
@@ -555,10 +562,44 @@ describe('BoardController', () => {
             expect(ctrl2.boardParams.nSwapCycles).toBe(14336);
             expect(ctrl2.boardParams.pBitNoiseZero).toBeCloseTo(0.8);
             expect(ctrl2.boardParams.hasCompass).toBe(true);
-            expect(ctrl2.boardParams.implementsMove).toBe(false);
-            expect(ctrl2.boardParams.implementsCopy).toBe(false);
-            expect(ctrl2.boardParams.implementsSync).toBe(true);
-            expect(ctrl2.boardParams.implementsAsync).toBe(true);
+            expect(ctrl2.boardParams.brkOps.swap.enabled).toBe(false);
+            expect(ctrl2.boardParams.brkOps.copy.enabled).toBe(false);
+            expect(ctrl2.boardParams.brkOps.sync.enabled).toBe(true);
+            expect(ctrl2.boardParams.brkOps.async.enabled).toBe(true);
+        });
+
+        it('serialized state includes legacy implements* flags for backward compat', () => {
+            const ctrl = new BoardController(undefined, {
+                implementsMove: false,
+                implementsSync: true,
+            });
+            const saved = ctrl.state;
+            // Legacy flags should be in the serialized output
+            expect(saved.boardParams.implementsMove).toBe(false);
+            expect(saved.boardParams.implementsCopy).toBe(true);
+            expect(saved.boardParams.implementsSync).toBe(true);
+            expect(saved.boardParams.implementsAsync).toBe(false);
+            // brkOps should also be present
+            expect(saved.boardParams.brkOps.swap.enabled).toBe(false);
+            expect(saved.boardParams.brkOps.sync.enabled).toBe(true);
+        });
+
+        it('loading legacy state without brkOps synthesizes from implements* flags', () => {
+            // Simulate a legacy state file
+            const ctrl = new BoardController();
+            const legacyState = ctrl.state;
+            delete legacyState.boardParams.brkOps;
+            legacyState.boardParams.implementsMove = false;
+            legacyState.boardParams.implementsCopy = true;
+            legacyState.boardParams.implementsSync = true;
+            legacyState.boardParams.implementsAsync = false;
+
+            const ctrl2 = new BoardController();
+            ctrl2.state = legacyState;
+            expect(ctrl2.boardParams.brkOps.swap.enabled).toBe(false);
+            expect(ctrl2.boardParams.brkOps.copy.enabled).toBe(true);
+            expect(ctrl2.boardParams.brkOps.sync.enabled).toBe(true);
+            expect(ctrl2.boardParams.brkOps.async.enabled).toBe(false);
         });
     });
 
