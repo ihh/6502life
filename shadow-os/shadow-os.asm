@@ -13,7 +13,7 @@
 ;;
 ;; ── Hardware assumptions ────────────────────────────────────
 ;;
-;; 1. Paged cell storage with a page table at $0500.
+;; 1. Paged cell storage with a page table in OS ROM space.
 ;;    Each cell's 1KB occupies a physical page; swap is implemented
 ;;    by exchanging page-table entries (O(1), no data movement).
 ;;
@@ -47,13 +47,12 @@
 ;; ── Memory map during Shadow OS execution ───────────────────
 ;;
 ;;   $0000-$BFFF  Working SRAM (49 cells, used by both OS and programs)
-;;   $0400-$04FF  OS scratch page (overlaps cell 1 working area;
-;;                only used during OS execution, restored before resume)
-;;   $0500-$05FF  Page table (256 entries for B<=16 boards)
 ;;   $C000-$C3FF  Shadow window (one storage cell via SHADOW_BANK)
 ;;   $D000-$D003  Hardware registers
 ;;   $E000-$EEFF  Geometric lookup tables (shared with programs)
-;;   $EF00-$FDFF  Shadow OS code (this file)
+;;   $EF00-$EFFF  Page table (256 entries, one per board cell)
+;;   $F000-$F037  Shadow OS data (neighbor map, scratch variables)
+;;   $F038-$FDFF  Shadow OS code
 ;;   $FE00-$FFFF  Vectors and boot
 ;;
 ;; During user program execution, $C000-$FFFF is unmapped.
@@ -91,27 +90,30 @@ REG_X       = $FD       ; Saved X register
 REG_Y       = $FE       ; Saved Y register
 REG_S       = $FF       ; Saved stack pointer
 
-;; ── OS working storage ($0400-$04FF) ────────────────────────
+;; ── OS data area ($EF00-$EFFF) ─────────────────────────────
+;; Lives in the OS ROM space, outside working RAM. Programs cannot
+;; see or corrupt this area.
 
-OS_OPERAND  = $0400     ; BRK operand byte
-OS_I_ORIG   = $0401     ; Current cell board row
-OS_J_ORIG   = $0402     ; Current cell board column
-OS_ORIENT   = $0403     ; Current orientation (0-3)
-OS_TEMP_A   = $0404     ; Temp: saved A during interrupt entry
-OS_TEMP_X   = $0405     ; Temp: saved X during interrupt entry
-OS_TEMP_Y   = $0406     ; Temp: saved Y during interrupt entry
+;; Page table: maps logical board cell index → physical storage page.
+;; For a 16x16 board (256 cells), each entry is one byte.
+;; Swap is implemented by exchanging two entries.
+PAGE_TABLE   = $EF00    ; 256 bytes: $EF00-$EFFF
 
 ;; Neighbor-to-board-cell lookup table, populated during scheduling.
 ;; NEIGHBOR_MAP[n] = board cell index for neighborhood cell n.
 ;; 49 entries (0-48), rebuilt each time a new cell is scheduled.
-NEIGHBOR_MAP = $0410    ; 49 bytes: $0410-$0440
+NEIGHBOR_MAP = $F000    ; 49 bytes: $F000-$F030
 
-;; ── Page table ($0500-$05FF) ────────────────────────────────
-;; Maps logical board cell index → physical storage page number.
-;; For a 16x16 board (256 cells), each entry is one byte.
-;; Swap is implemented by exchanging two entries.
-
-PAGE_TABLE  = $0500
+;; OS scratch variables
+OS_OPERAND   = $F031    ; BRK operand byte
+OS_I_ORIG    = $F032    ; Current cell board row
+OS_J_ORIG    = $F033    ; Current cell board column
+OS_ORIENT    = $F034    ; Current orientation (0-3)
+OS_TEMP_A    = $F035    ; Temp: saved A during interrupt entry
+OS_TEMP_X    = $F036    ; Temp: saved X during interrupt entry
+OS_TEMP_Y    = $F037    ; Temp: saved Y during interrupt entry
+;; $F038-$F0FF: available for future OS data
+;; $F100+: Shadow OS code
 
 
 ;; ================================================================
