@@ -520,15 +520,28 @@ diminishing returns.
 \subsection{Shadow OS routines}
 
 \paragraph{Timer interrupt (NMI).}
-The timer fires an NMI. The Shadow OS saves the user's registers (A, X,
-Y, S, P, PC) to the cell's register save area (\$F9--\$FF), clears the
-B flag, writes four pseudorandom bytes from \texttt{NOISE\_BYTE} to
-\$FC--\$FF, optionally writes the compass orientation to \$FA, advances
-the scheduler to the next cell, restores that cell's registers, and
-executes RTI.
-Cost: $\sim$95 cycles for save and RNG (59 save + 8 clear B + 28 RNG),
-plus $\sim$38 to restore the next cell's registers, plus scheduler
-overhead.
+The timer fires an NMI. The Shadow OS:
+\begin{enumerate}
+\item Saves the user's registers (A, X, Y, S, P, PC) to the cell's
+  register save area (\$F9--\$FF). Clears the B flag. ($\sim$67 cycles.)
+\item If I is clear, writes back dirty cells from working RAM to storage
+  using exact copies through the shadow window ($O(k \cdot M)$ cycles,
+  where $k$ is the number of dirty cells). If I is set, skips writeback
+  (atomic abort, $O(1)$).
+\item Writes four pseudorandom bytes from \texttt{NOISE\_BYTE} to
+  \$FC--\$FF. ($\sim$28 cycles.)
+\item Advances the scheduler: selects the next cell, samples a new
+  orientation and timer duration.
+\item Reads the new cell's 49-cell neighborhood from storage into working
+  RAM using exact copies through the shadow window ($49 \times M$
+  bytes).
+\item Restores the new cell's registers and executes RTI. ($\sim$38
+  cycles.)
+\end{enumerate}
+The register save/restore and RNG cost $\sim$133 cycles. The bulk of the
+context switch cost is the read-in and writeback copies, which use the
+same shadow-window hardware path as BRK noisy copy (but with the noise
+gate disabled). A DMA controller can accelerate these transfers.
 
 \paragraph{BRK dispatch.}
 On BRK, the OS extracts the operand byte ($\sim$41 cycles of stack
@@ -611,19 +624,35 @@ hardware beyond a stock CPU:
   most complex piece of custom logic: a combination of address
   translation ROM and bank-select latches.
 
-  \textbf{Write tracking.} During execution, all stores to
-  \$0000--\$BFFF are logged in a preallocated hardware write FIFO that
-  records (address, old\_value) pairs. The FIFO has a hard upper bound
-  derived from the scheduling quantum: a 6502 \texttt{STA} takes at
-  minimum 3~cycles, so a quantum of $C$~cycles produces at most
-  $\lfloor C/3 \rfloor$ writes. With a mean quantum of 4096~cycles,
-  that is $\leq 1365$ entries $\times$ 4~bytes (16-bit address $+$
-  old value $+$ flags) $= 5.5$\,KB worst case. On commit (BRK or
-  timer with I clear), the FIFO pointer is simply reset---$O(1)$.
-  On atomic abort (timer with I set), the log is replayed backwards
-  to restore original values---$O(k)$ where $k$ is the number of
-  bytes actually written. This matches the \texttt{undoHistory}
-  mechanism in the reference JS implementation.
+  \textbf{Read/write and undo.}
+  The address space at \$0000--\$BFFF is fast working SRAM, not
+  directly mapped to storage. The Shadow OS explicitly copies data
+  between working RAM and paged storage using exact (noiseless) copies
+  through the shadow window---the same hardware path as the noisy copy,
+  but with the noise gate disabled ($\varepsilon = 0$).
+
+  \emph{Before execution:} the Shadow OS copies the 49 neighborhood
+  cells from storage into working RAM (the ``read''). With paged
+  storage, this is 49 sequential shadow-window copies; a DMA controller
+  can overlap the transfer with other work.
+
+  \emph{On commit} (BRK, or timer with I clear): the Shadow OS copies
+  modified cells from working RAM back to storage (the ``write'').
+  A per-cell dirty bit (set by the memory mapper on first write to each
+  cell's address range) allows the OS to skip unmodified cells,
+  making writeback $O(k \cdot M)$ where $k$ is the number of
+  cells actually written---typically 1--3 per quantum.
+
+  \emph{On undo} (timer with I set): the Shadow OS simply skips the
+  writeback and resets the dirty bits. The storage retains its
+  pre-quantum state. This is $O(1)$.
+
+  This is a realistic mechanism that uses no special write-tracking
+  hardware---just the Shadow OS's own copy primitives, the same shadow
+  window used for BRK operations, and a 49-bit dirty register. The
+  reference JS implementation models this with an \texttt{undoHistory}
+  hash map, which has the same commit/undo semantics but tracks
+  individual bytes rather than whole cells.
 
 \item \textbf{Shadow window.}
   A second 1\,KB bank at \$C000, selected by writing to the
