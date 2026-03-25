@@ -144,42 +144,62 @@ $y=-3$ & 47 & 41 & 33 & 27 & 32 & 40 & 46
     \item The operand byte $b$ (the byte following BRK) is examined \emph{before} registers are saved. Copy and swap operations (below) use the cell's pre-interrupt state. This means a BRK copy produces a child that inherits the \emph{previous} scheduling's saved registers, not the post-BRK state.
     \item The B flag (bit 4) is set in the saved P, following the 6502 convention that BRK and PHP set B while IRQ and NMI clear it. This enables fork detection: after a BRK copy, the child inherits B=0 (pre-BRK state) while the parent gets B=1. Programs can read byte 0xFB and test bit 4.
     \item BRK with operand 0 resets PC to 0x0000 (preventing zero-filled cells from marching their PC into the RNG region). All other operands advance PC past the BRK+operand as usual.
-    \item The operand byte $b$ selects an operation:
-      The memory-mapped neighborhood has $N^2 = 49$ cells. The 5 inner cells
-      (origin plus 4 cardinal neighbors, indices 0--4) may be used as swap sources.
+    \item The operand byte $b$ selects an operation.
+      Swap operations exchange the origin cell (cell~0) with any of the 48 other
+      cells in the $7 \times 7$ neighborhood.
+      Noisy copy duplicates the origin cell to a neighbor through a noise gate.
 
       \begin{tabular}{l|p{.65\textwidth}}
         Operand $b$ & Operation \\ \hline
         0 & Resets PC to 0x0000. Yields to scheduler. \\
-        $1 \leq b < 245$ & Swap cells: source $= \lfloor b/49 \rfloor$ (cells 0--4),
-          destination $= b \bmod 49$ (cells 0--48).
-          Self-swaps (src $=$ dest) update move times but do not copy data.
-          Feature-gated by \texttt{implementsMove}.
+        $1 \leq b \leq 48$ & Swap cell~0 with cell~$b$.
+          Gated by \texttt{brkOps.swap.enabled}.
           Yields to scheduler. \\
-        $245 \leq b \leq 252$ & Noisy copy: origin cell is copied to cell $b - 244$ (cells 1--8),
-          subject to the noise model (see below).
-          Feature-gated by \texttt{implementsCopy}.
+        $49 \leq b \leq 96$ & Noisy copy: origin cell is copied to cell $b - 48$
+          (cells 1--48), subject to the noise model (see below).
+          Gated by \texttt{brkOps.copy.enabled}.
           Yields to scheduler. \\
-        $253$ & Sync interrupt request: X and Y registers specify the period
+        $97$ & Sync interrupt request: X and Y registers specify the period
           in cycles (X = low byte, Y = high byte). The next interrupt for this
           cell is scheduled at the nearest future absolute multiple of the period,
           computed from the global board time.
-          Feature-gated by \texttt{implementsSync}.
+          Gated by \texttt{brkOps.sync.enabled}.
           Yields to scheduler. \\
-        $254$ & Async interrupt request: X and Y registers specify the delay
+        $98$ & Async interrupt request: X and Y registers specify the delay
           in cycles (X = low byte, Y = high byte). The next interrupt for this
           cell is scheduled after that many cycles from the current time.
-          Feature-gated by \texttt{implementsAsync}.
+          Gated by \texttt{brkOps.async.enabled}.
           Yields to scheduler. \\
-        $255$ & Reserved (no operation). Yields to scheduler.
+        $99$--$255$ & Unassigned by default (no operation). Extensible via
+          \texttt{brkOps} registry. Yields to scheduler.
       \end{tabular}
 
-      If a BRK operand's feature flag is not enabled (e.g.\ \texttt{implementsMove} is false),
-      the BRK simply yields to the scheduler with no effect.
+      If a BRK operand's operation is not enabled in \texttt{brkOps} (or is not
+      registered at all), the BRK simply yields to the scheduler with no effect.
+
+      \subsubsection*{Cycle costs and \texttt{nSwapCycles}}
+
+      BRK operations that manipulate cell data (swap and noisy copy) require
+      the Shadow OS (Section~\ref{sec:shadow-os}) to perform work on the
+      program's behalf. The \texttt{nSwapCycles} hyperparameter sets the
+      minimum number of scheduler cycles that must remain before the next
+      timer interrupt for the operation to succeed; if fewer cycles remain,
+      the BRK simply yields with no effect.
+
+      Swap is an $O(1)$ operation: the Shadow OS remaps page-table entries
+      in the paged storage hardware, exchanging the two cells without
+      copying data.
+      Noisy copy is $O(M)$: each of the $M = 1024$ bytes must be streamed
+      through the noise gate.
+      As a result, swap has a lower cycle cost than noisy copy.
+      A reasonable default might be \texttt{nSwapCycles}~$\approx 15{,}000$
+      (slightly above the copy cost of $\sim$14{,}400 Shadow OS cycles),
+      but the reference implementation defaults to~0 (no gating) for
+      backwards compatibility.
 
       \subsubsection*{Noisy copy model}
 
-      The noisy copy operation (operands 245--252) copies all 1024 bytes of the
+      The noisy copy operation (operands 49--96) copies all 1024 bytes of the
       origin cell to the destination. Each bit is independently resampled
       with probability $\varepsilon$ (\texttt{pBitNoise}), and faithfully
       copied with probability $1-\varepsilon$. When a bit is resampled,
@@ -194,19 +214,53 @@ $y=-3$ & 47 & 41 & 33 & 27 & 32 & 40 & 46
 
       \subsubsection*{Board hyperparameters}
 
-      The controller accepts a \texttt{boardParams} dictionary with the following defaults:
+      The controller accepts a \texttt{boardParams} dictionary with scalar
+      parameters and a \texttt{brkOps} registry that describes every BRK
+      operand the board supports.
+
+      \paragraph{Scalar parameters.}
 
       \begin{tabular}{l|l|p{.45\textwidth}}
         Parameter & Default & Description \\ \hline
         \texttt{pBitNoise} & 1/2048 & Per-bit resampling probability on BRK noisy copy ($\varepsilon$) \\
         \texttt{pBitNoiseZero} & 0.5 & $P(\text{resampled bit} = 0)$; 0.5 = fair coin, 1 = erasure ($q$) \\
-        \texttt{nSwapCycles} & 0 & Cycle budget for BRK copy/swap; fails if fewer cycles remain before next interrupt (0 = no limit) \\
-        \texttt{hasCompass} & false & Write orientation to \$FA (shifted left 2 bits) \\
-        \texttt{implementsMove} & true & Enable BRK 1--244 swap operations \\
-        \texttt{implementsCopy} & true & Enable BRK 245--252 noisy copy \\
-        \texttt{implementsSync} & false & Enable BRK 253 sync interrupt request \\
-        \texttt{implementsAsync} & false & Enable BRK 254 async interrupt request
+        \texttt{nSwapCycles} & 0 & Minimum remaining scheduler cycles for BRK copy/swap to succeed (0 = no limit) \\
+        \texttt{hasCompass} & false & Write orientation to \$FA (shifted left 2 bits)
       \end{tabular}
+
+      \paragraph{BRK operand registry (\texttt{brkOps}).}
+      The \texttt{brkOps} dictionary maps operation names to descriptors.
+      Each descriptor specifies the operand range and whether the operation
+      is enabled on this board.  The code-side registry adds non-serialized
+      metadata: cycle costs, address encoding, and handler functions.
+
+      \begin{tabular}{l|l|l|l|l|p{.25\textwidth}}
+        Name & Range & Enabled & Cycles & Addr.\ encoding & Description \\ \hline
+        \texttt{reset} & $[0, 0]$ & true & 12 & none & Reset PC to 0, yield \\
+        \texttt{swap}  & $[1, 48]$ & true & 49 & operand & Swap cell~0 with cell~$b$ ($O(1)$) \\
+        \texttt{copy}  & $[49, 96]$ & true & 14{,}400 & operand$-$48 & Noisy copy to cell~$b-48$ ($O(M)$) \\
+        \texttt{sync}  & $[97, 97]$ & false & 24 & X,Y registers & Sync interrupt request \\
+        \texttt{async} & $[98, 98]$ & false & 24 & X,Y registers & Async interrupt request
+      \end{tabular}
+
+      Operands 99--255 are unassigned by default and yield with no effect.
+      Board owners can extend the registry by adding entries in this range,
+      registering a handler function and cycle cost in the code-side
+      \texttt{BRK\_OP\_REGISTRY}.  Programs that issue an unrecognized
+      operand simply yield; programs that use a new operand get the new
+      capability on boards that support it and degrade gracefully on boards
+      that don't.
+
+      At construction time, the controller builds a 256-entry dispatch table
+      from \texttt{brkOps}: each entry is either the handler for the
+      operation covering that operand, or null (yield).  Dispatch is a
+      single array lookup---no range comparisons at runtime.
+
+      For serialization, the state includes both \texttt{brkOps} and
+      legacy \texttt{implementsMove}/\texttt{implementsCopy}/\texttt{implementsSync}/\texttt{implementsAsync}
+      boolean flags (derived from \texttt{brkOps}) for backward
+      compatibility with older readers.  When loading state, \texttt{brkOps}
+      takes precedence; if absent, the legacy flags are used to synthesize it.
 
       The guiding principle when considering adding more software interrupts,
       or expanding the OS in any way, should be to not add any functionality that can't be justified as ``physics''.
@@ -391,6 +445,331 @@ implementation, and IDE documentation. Bold terms are normative.
     untranslated/unrotated view of Board Storage. The Cursor Cell and
     the Active Cell are highlighted.
 \end{itemize}
+
+\section{Shadow OS}
+\label{sec:shadow-os}
+
+The scheduler, interrupt handling, and BRK operations described above are
+implemented in the reference software as fast-path native code (JavaScript
+or Rust). However, all of these operations \emph{could} be implemented as
+a 6502 program running on the same emulated CPU, given a small amount of
+dedicated hardware. We call this notional 6502 program the \textbf{Shadow OS}.
+
+The Shadow OS is invisible to user programs. It occupies a separate address
+space that is mapped in only during interrupt servicing and BRK dispatch.
+Programs cannot read, write, or detect the Shadow OS; they see only the
+neighborhood RAM (\$0000--\$BFFF) and the geometric lookup tables
+(\$E000--\$EEFF). The only interface between programs and the OS is the
+BRK operand byte.
+
+A reference 6502 implementation of the Shadow OS is provided in
+\texttt{shadow-os/shadow-os.asm}. It is not used by the JS or Rust
+reference implementations (which fast-path all BRK operations as native
+code), but serves to verify the cycle costs and prove that the OS is
+implementable on a real 6502 with the described hardware.
+
+\subsection{Shadow OS contract}
+
+The Shadow OS has a minimal and precisely bounded contract with
+user programs:
+
+\begin{enumerate}
+\item \textbf{Transparent local topology.}
+  The OS implements the $7 \times 7$ neighborhood seamlessly via the
+  memory map. Each scheduling quantum, it maps 49 cells of Board
+  Storage into the program's address space (\$0000--\$BFFF), with a
+  random origin and random rotation. The program sees a contiguous,
+  coherent address space; it does not need to know that the underlying
+  storage is a toroidal grid, or that the mapping changes each interrupt.
+
+\item \textbf{Minimal geometry API.}
+  The only ``help'' the OS provides is a set of read-only lookup tables
+  at \$E000--\$EEFF. These tables encode the local symmetry group of the
+  neighborhood: vector addition (translations), rotations ($90^\circ$,
+  $180^\circ$, $270^\circ$), reflections, and coordinate lookups (cell
+  index $\leftrightarrow$ $(x,y)$). These are purely geometric---they
+  describe the group-like structure of the local topology and nothing
+  else. They help programs reason about \emph{where} things are, not
+  \emph{what} to do about them.
+
+\item \textbf{No computational or strategic assistance.}
+  The OS offers no arithmetic helpers, no pattern matching, no
+  communication primitives, no memory management. It does not
+  interpret cell contents or favor any program over another.
+  All intelligence must emerge from the programs themselves.
+
+\item \textbf{Opaque BRK interface.}
+  Programs interact with the OS exclusively through BRK operands.
+  They set registers and issue BRK; the OS performs the requested
+  operation (move, copy, timer setup) and yields. Programs cannot
+  observe how the operation is performed, only its effects.
+\end{enumerate}
+
+\subsection{Shadow OS memory map}
+
+During Shadow OS execution, the 6502 address space is remapped:
+
+\begin{tabular}{l|l}
+  Address range & Contents \\ \hline
+  \$0000--\$03FF & Current cell (cell 0), read/write \\
+  \$0400--\$04FF & OS scratch page (256 bytes, private) \\
+  \$C000--\$C3FF & Shadow window: target cell, selected by \texttt{SHADOW\_BANK} \\
+  \$D000--\$D003 & Hardware registers (see below) \\
+  \$E000--\$EEFF & Geometric lookup tables (shared with user programs) \\
+  \$EF00--\$FDFF & Shadow OS code (ROM) \\
+  \$FE00--\$FFFF & Vectors and boot code (ROM)
+\end{tabular}
+
+During user program execution, the \$C000--\$FFFF region is unmapped
+(returns open-bus values or zero). Programs never see the Shadow OS code,
+the shadow window, or the hardware registers.
+
+\subsection{Shadow hardware registers}
+
+The Shadow OS requires four memory-mapped hardware registers, accessible
+only during OS execution:
+
+\begin{tabular}{l|l|p{.5\textwidth}}
+  Address & Name & Function \\ \hline
+  \$D000 & \texttt{SHADOW\_BANK} & Write: maps neighborhood cell $n$ into the
+    shadow window at \$C000--\$C3FF. \\
+  \$D001 & \texttt{NOISE\_BYTE} & Read: returns next byte from hardware LFSR,
+    then clocks the shift register. Used for the RNG bytes at \$FC--\$FF.
+    (The noisy copy uses the hardware noise gate on the shadow window write
+    path, not this register.) \\
+  \$D002 & \texttt{TIMER\_LO} & Read/write: interrupt countdown timer, low byte. \\
+  \$D003 & \texttt{TIMER\_HI} & Read/write: interrupt countdown timer, high byte.
+\end{tabular}
+
+The shadow window at \$C000--\$C3FF is a second 1\,KB bank selected by
+writing a cell index (0--48) to \texttt{SHADOW\_BANK}. This is the only
+piece of address bus multiplexing beyond the neighborhood mapper that
+already exists for user programs. The necessity of this second bus---giving
+the Shadow OS simultaneous access to cell~0 (at \$0000) and one partner
+cell (at \$C000)---is as good an argument as any for restricting fast
+memory operations (swap and noisy copy) to only ever involve the active
+cell and one other partner. A hypothetical three-way swap would require a
+\emph{third} shadow window, further complicating the address bus, with
+diminishing returns.
+
+\subsection{Shadow OS routines}
+
+\paragraph{Timer interrupt (NMI).}
+The timer fires an NMI. The Shadow OS:
+\begin{enumerate}
+\item Saves the user's registers (A, X, Y, S, P, PC) to the cell's
+  register save area (\$F9--\$FF). Clears the B flag. ($\sim$67 cycles.)
+\item If I is clear, writes back dirty cells from working RAM to storage
+  using exact copies through the shadow window ($O(k \cdot M)$ cycles,
+  where $k$ is the number of dirty cells). If I is set, skips writeback
+  (atomic abort, $O(1)$).
+\item Writes four pseudorandom bytes from \texttt{NOISE\_BYTE} to
+  \$FC--\$FF. ($\sim$28 cycles.)
+\item Advances the scheduler: selects the next cell, samples a new
+  orientation and timer duration.
+\item Reads the new cell's 49-cell neighborhood from storage into working
+  RAM using exact copies through the shadow window ($49 \times M$
+  bytes).
+\item Restores the new cell's registers and executes RTI. ($\sim$38
+  cycles.)
+\end{enumerate}
+The register save/restore and RNG cost $\sim$133 cycles. The bulk of the
+context switch cost is the read-in and writeback copies, which use the
+same shadow-window hardware path as BRK noisy copy (but with the noise
+gate disabled). A DMA controller can accelerate these transfers.
+
+\paragraph{BRK dispatch.}
+On BRK, the OS extracts the operand byte ($\sim$41 cycles of stack
+manipulation, which could be reduced by a hardware operand latch) and
+dispatches:
+
+\begin{itemize}
+\item \textbf{Operand 0} (reset): set PC to 0, jump to scheduler.
+  Cost: $\sim$11 cycles.
+
+\item \textbf{Operands 1--48} (swap): look up the target's board cell
+  index from a precomputed neighbor table, then exchange the page-table
+  entries for cell~0 and the target cell. This is an $O(1)$ operation
+  regardless of cell size---no data is copied. Set the B flag in the
+  parent's saved P. Yield to scheduler.
+  Cost: $\sim$49 cycles (12 for neighbor lookup, 26 for page-table
+  swap, 11 for B flag and yield).
+
+\item \textbf{Operands 49--96} (noisy copy): look up the target cell
+  and write its board index to \texttt{SHADOW\_BANK}, mapping it into the
+  shadow window at \$C000. Copy all $M = 1024$ bytes from cell~0
+  (\$0000--\$03FF) to the shadow window (\$C000--\$C3FF). The hardware
+  noise gate on the shadow window's write path automatically applies the
+  per-bit noise model---the CPU performs a plain \texttt{STA}, and the
+  hardware XORs each bit with the LFSR output at probability
+  $\varepsilon$. This is an $O(M)$ operation: every byte must pass
+  through the noise gate. Set the B flag.
+  Yield to scheduler.
+  Cost: $\sim$14{,}400 cycles ($\sim$14 per byte: \texttt{LDA abs,Y}
+  $+$ \texttt{STA abs,Y} $+$ \texttt{INY} $+$ \texttt{BNE} $=$ $4 + 5 +
+  2 + 3 = 14$ cycles, times 1024 bytes, plus setup).
+
+\item \textbf{Operand 97} (sync interrupt): read X and Y from the user's
+  saved registers, write to the timer hardware.
+  Cost: $\sim$24 cycles.
+
+\item \textbf{Operand 98} (async interrupt): read X and Y, write delay
+  to the timer hardware. Cost: $\sim$24 cycles.
+\end{itemize}
+
+The key asymmetry: swap is $O(1)$ because paged storage allows remapping
+without data movement, while noisy copy is inherently $O(M)$ because
+every byte must pass through the noise gate. Swap costs $\sim$49 cycles
+versus $\sim$14{,}400 for copy---a ratio of roughly 300:1, reflecting
+the fundamental difference between pointer manipulation and bulk data
+transfer.
+
+For \texttt{nSwapCycles} gating, the reference implementation applies
+a single threshold for both operations. An alternative would be separate
+thresholds (e.g.\ $\sim$100 for swap, $\sim$15{,}000 for copy), but the
+single-threshold approach keeps the hyperparameter space small.
+
+\section{Hardware implementations}
+\label{sec:hardware}
+
+The VM can be implemented in hardware at various scales. We sketch three
+approaches: a minimal 6502-based board, and ARM-based emulator boards at
+three board sizes.
+
+\subsection{Minimal 6502 hardware}
+
+A physical 6502 running the Shadow OS requires the following custom
+hardware beyond a stock CPU:
+
+\begin{enumerate}
+\item \textbf{Paged cell storage.}
+  Each cell's 1\,KB occupies a page in external storage.
+  A page table maps logical cell indices to physical page addresses.
+  Swap is implemented by exchanging page-table entries.
+  For a $16 \times 16$ board: 256 cells $\times$ 1\,KB = 256\,KB SRAM,
+  plus a 256-entry page table (256 bytes if entries are single-byte page numbers).
+
+\item \textbf{Neighborhood mapper.}
+  On each scheduling event, the mapper configures 49 bank-select
+  registers to present the new cell's $7 \times 7$ neighborhood in the
+  6502's \$0000--\$BFFF address space, applying the random rotation.
+  With paged storage, this is $O(N^2)$ pointer setups ($\sim$49 register
+  writes), not $O(N^2 M)$ byte copies---the data stays in place in
+  physical storage and only the address translation changes. This is the
+  most complex piece of custom logic: a combination of address
+  translation ROM and bank-select latches.
+
+  \textbf{Read/write and undo.}
+  The address space at \$0000--\$BFFF is fast working SRAM, not
+  directly mapped to storage. The Shadow OS explicitly copies data
+  between working RAM and paged storage using exact (noiseless) copies
+  through the shadow window---the same hardware path as the noisy copy,
+  but with the noise gate disabled ($\varepsilon = 0$).
+
+  \emph{Before execution:} the Shadow OS copies the 49 neighborhood
+  cells from storage into working RAM (the ``read''). With paged
+  storage, this is 49 sequential shadow-window copies; a DMA controller
+  can overlap the transfer with other work.
+
+  \emph{On commit} (BRK, or timer with I clear): the Shadow OS copies
+  modified cells from working RAM back to storage (the ``write'').
+  A per-cell dirty bit (set by the memory mapper on first write to each
+  cell's address range) allows the OS to skip unmodified cells,
+  making writeback $O(k \cdot M)$ where $k$ is the number of
+  cells actually written---typically 1--3 per quantum.
+
+  \emph{On undo} (timer with I set): the Shadow OS simply skips the
+  writeback and resets the dirty bits. The storage retains its
+  pre-quantum state. This is $O(1)$.
+
+  This is a realistic mechanism that uses no special write-tracking
+  hardware---just the Shadow OS's own copy primitives, the same shadow
+  window used for BRK operations, and a 49-bit dirty register. The
+  reference JS implementation models this with an \texttt{undoHistory}
+  hash map, which has the same commit/undo semantics but tracks
+  individual bytes rather than whole cells.
+
+\item \textbf{Shadow window.}
+  A second 1\,KB bank at \$C000, selected by writing to the
+  \texttt{SHADOW\_BANK} register. This is a multiplexer on the address
+  bus: when A15:A14~=~11 and A11:A10~=~00, route the low 10 address bits
+  through the page table using the \texttt{SHADOW\_BANK} index.
+  This second shadow bus complicates the scheduler's address bus
+  multiplexing, but only modestly---it reuses the same page table and
+  storage bus, adding one extra latch and mux stage.
+
+\item \textbf{Noise LFSR and noise gate.}
+  A free-running 16-bit Galois LFSR (two 74HC flipflop chips plus an XOR
+  gate, $\sim$3 TTL packages). Reading \$D001 latches and returns the
+  low 8 bits, then clocks the register.
+
+  The noise gate sits on the data bus between the CPU and the shadow
+  window's backing storage. On any write to \$C000--\$C3FF, the gate
+  applies per-bit resampling: each bit of the written byte independently
+  passes through or is replaced by an LFSR bit, controlled by a
+  comparator against the $\varepsilon$ threshold. With $\varepsilon = 0$,
+  all bits pass through (perfect copy). This adds a single XOR gate and
+  comparator latch to the write path ($\sim$2 extra TTL packages) but
+  makes noisy copy transparent to the CPU---the Shadow OS executes a
+  plain \texttt{STA} and the hardware applies the noise.
+
+\item \textbf{Interrupt timer.}
+  A 16-bit countdown register at \$D002--\$D003, triggering NMI on
+  underflow. One 74HC4520 dual counter or equivalent.
+\end{enumerate}
+
+Total additional hardware: $\sim$10--15 TTL/CMOS chips beyond the 6502,
+ROM, and SRAM. Feasible as a wire-wrap prototype or a small PCB.
+
+\subsection{ARM emulator boards}
+
+An ARM processor running a 6502 emulator replaces all custom hardware
+with software. The ``Shadow OS'' becomes native ARM code in the BRK
+handler---swap and copy are direct memory operations on the DRAM cell
+array, and the cycle counter is advanced by the Shadow OS cost to
+maintain timing fidelity.
+
+\paragraph{Emulator architecture.}
+The ARM stores all cell data in DRAM. For each scheduling quantum:
+(1)~set up an address-translation table mapping 6502 addresses to DRAM
+pointers (49 entries, one per neighborhood cell, pre-rotated);
+(2)~run the 6502 emulator for $N$ cycles, translating each memory access
+through the table;
+(3)~on BRK or timer interrupt, execute the operation as native ARM code
+(e.g.\ a 1\,KB \texttt{memcpy} for copy, or a page-table swap for
+move);
+(4)~advance the emulated cycle counter by the Shadow OS cost.
+
+Each 6502 instruction costs $\sim$15--25 ARM instructions (address
+translation + opcode dispatch + execution). At 8\,MHz, this yields
+$\sim$400k emulated 6502 cycles per second.
+
+\paragraph{Scaling.}
+
+\begin{tabular}{l|r|l|l|r}
+  Board & Cells & RAM & ARM chip & Cell visits/sec \\ \hline
+  $16 \times 16$  & 256   & 256\,KB & ARM2 @ 8\,MHz (1987)  & $\sim$8/cell/s \\
+  $32 \times 32$  & 1024  & 1\,MB   & ARM2 @ 8\,MHz (1988)  & $\sim$2/cell/s \\
+  $64 \times 64$  & 4096  & 4\,MB   & ARM3 @ 25\,MHz (1989) & $\sim$1.5/cell/s
+\end{tabular}
+
+\medskip\noindent
+The $16 \times 16$ board fits comfortably in an Acorn Archimedes A305
+(512\,KB RAM, 1987). Each cell is visited $\sim$8 times per second---fast
+enough for interactive visualization.
+
+The $32 \times 32$ board requires 1\,MB (Archimedes A440 or equivalent).
+Cells are visited $\sim$2 times per second. Evolution proceeds at
+one-quarter the rate of the $16 \times 16$ board in wall-clock time.
+
+The $64 \times 64$ board needs 4\,MB of DRAM, expensive but feasible by
+1989. The ARM3 at 25\,MHz recovers most of the per-cell throughput lost
+to the larger board.
+
+In all cases, BRK swap and copy execute as native ARM code in
+microseconds, but the emulated cycle counter is advanced by the full
+Shadow OS cost ($\sim$49 cycles for swap, $\sim$14{,}400 for noisy copy),
+preserving the timing semantics that programs experience.
 
 \section{Links}
 \begin{itemize}

@@ -3,6 +3,6 @@
 ; Uses BNE/BEQ for unconditional loop (CLC/BCC has a Sfotty bug).
 @start:
 BRK
-.byte $F5
+.byte $31
 BNE @start
 BEQ @start

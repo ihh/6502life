@@ -252,10 +252,10 @@ describe('BoardController', () => {
             const srcByteIdx = mem.ijbToByteIndex(0, 0, 0x200);
             mem.setByteWithoutUndo(srcByteIdx, 0x42);
 
-            // Write BRK $F5 (copy to cell 1) at origin byte 0
+            // Write BRK $31 (copy to cell 1) at origin byte 0
             const byteIdx = mem.ijbToByteIndex(0, 0, 0);
             mem.setByteWithoutUndo(byteIdx, 0x00);     // BRK
-            mem.setByteWithoutUndo(byteIdx + 1, 245);   // operand 245 = copy to cell 1
+            mem.setByteWithoutUndo(byteIdx + 1, 49);    // operand 49 = copy to cell 1
 
             ctrl.sfotty.PC = 0;
             ctrl.sfotty.setP(0);
@@ -285,7 +285,7 @@ describe('BoardController', () => {
 
             const byteIdx = mem.ijbToByteIndex(0, 0, 0);
             mem.setByteWithoutUndo(byteIdx, 0x00);     // BRK
-            mem.setByteWithoutUndo(byteIdx + 1, 245);   // copy to cell 1
+            mem.setByteWithoutUndo(byteIdx + 1, 49);    // copy to cell 1
 
             ctrl.sfotty.PC = 0;
             ctrl.sfotty.setP(0);
@@ -366,7 +366,7 @@ describe('BoardController', () => {
             // Write BRK with operand 245 at origin byte 0
             const byteIdx = mem.ijbToByteIndex(0, 0, 0);
             mem.setByteWithoutUndo(byteIdx, 0x00);     // BRK
-            mem.setByteWithoutUndo(byteIdx + 1, 245);   // operand 245 = copy to cell 1
+            mem.setByteWithoutUndo(byteIdx + 1, 49);    // operand 49 = copy to cell 1
 
             ctrl.sfotty.PC = 0;
             ctrl.sfotty.setP(0);
@@ -381,7 +381,7 @@ describe('BoardController', () => {
             expect(mem.getByte(destByteIdx)).toBe(0x42);
         });
 
-        it('BRK operand 253+ is reserved (no-op)', () => {
+        it('BRK operand 99+ is reserved (no-op)', () => {
             const ctrl = new BoardController();
             const mem = ctrl.memory;
             mem.orientation = 0;
@@ -391,7 +391,7 @@ describe('BoardController', () => {
 
             const byteIdx = mem.ijbToByteIndex(0, 0, 0);
             mem.setByteWithoutUndo(byteIdx, 0x00);     // BRK
-            mem.setByteWithoutUndo(byteIdx + 1, 253);   // reserved
+            mem.setByteWithoutUndo(byteIdx + 1, 99);    // reserved
 
             ctrl.sfotty.PC = 0;
             ctrl.sfotty.setP(0);
@@ -466,13 +466,13 @@ describe('BoardController', () => {
             mem.orientation = 0;
             mem.nextCycles = 100000;
 
-            // Program: clear B in $FB, then BRK $F5 (copy to cell 1)
-            // LDA #$00 / STA $FB / BRK / .byte $F5
+            // Program: clear B in $FB, then BRK $31 (copy to cell 1)
+            // LDA #$00 / STA $FB / BRK / .byte $31
             const srcBase = mem.neighborCellStorageBase(0);
             mem.storage[srcBase + 0] = 0xA9; // LDA #$00
             mem.storage[srcBase + 1] = 0x00; // ... wait, $00 is BRK!
 
-            // Use: LDA $FB / AND #$EF / STA $FB / BRK / .byte $F5
+            // Use: LDA $FB / AND #$EF / STA $FB / BRK / .byte $31
             mem.storage[srcBase + 0] = 0xA5; // LDA $FB
             mem.storage[srcBase + 1] = 0xFB;
             mem.storage[srcBase + 2] = 0x29; // AND #$EF (clear bit 4)
@@ -480,7 +480,7 @@ describe('BoardController', () => {
             mem.storage[srcBase + 4] = 0x85; // STA $FB
             mem.storage[srcBase + 5] = 0xFB;
             mem.storage[srcBase + 6] = 0x00; // BRK
-            mem.storage[srcBase + 7] = 0xF5; // operand: copy to cell 1
+            mem.storage[srcBase + 7] = 0x31; // operand 49: copy to cell 1
 
             // Set initial P with B set (from a previous BRK)
             mem.storage[srcBase + 0xFB] = 0x10;
@@ -529,15 +529,22 @@ describe('BoardController', () => {
             expect(ctrl.boardParams.nSwapCycles).toBe(0);
             expect(ctrl.boardParams.pBitNoiseZero).toBe(0.5);
             expect(ctrl.boardParams.hasCompass).toBe(false);
-            expect(ctrl.boardParams.implementsMove).toBe(true);
-            expect(ctrl.boardParams.implementsCopy).toBe(true);
-            expect(ctrl.boardParams.implementsSync).toBe(false);
-            expect(ctrl.boardParams.implementsAsync).toBe(false);
+            // BRK ops registry
+            expect(ctrl.boardParams.brkOps.reset.enabled).toBe(true);
+            expect(ctrl.boardParams.brkOps.reset.range).toEqual([0, 0]);
+            expect(ctrl.boardParams.brkOps.swap.enabled).toBe(true);
+            expect(ctrl.boardParams.brkOps.swap.range).toEqual([1, 48]);
+            expect(ctrl.boardParams.brkOps.copy.enabled).toBe(true);
+            expect(ctrl.boardParams.brkOps.copy.range).toEqual([49, 96]);
+            expect(ctrl.boardParams.brkOps.sync.enabled).toBe(false);
+            expect(ctrl.boardParams.brkOps.sync.range).toEqual([97, 97]);
+            expect(ctrl.boardParams.brkOps.async.enabled).toBe(false);
+            expect(ctrl.boardParams.brkOps.async.range).toEqual([98, 98]);
         });
     });
 
     describe('boardParams serialization', () => {
-        it('save/restore preserves all params', () => {
+        it('save/restore preserves all params via brkOps', () => {
             const ctrl = new BoardController(undefined, {
                 pBitNoise: 0.123,
                 nSwapCycles: 14336,
@@ -555,10 +562,44 @@ describe('BoardController', () => {
             expect(ctrl2.boardParams.nSwapCycles).toBe(14336);
             expect(ctrl2.boardParams.pBitNoiseZero).toBeCloseTo(0.8);
             expect(ctrl2.boardParams.hasCompass).toBe(true);
-            expect(ctrl2.boardParams.implementsMove).toBe(false);
-            expect(ctrl2.boardParams.implementsCopy).toBe(false);
-            expect(ctrl2.boardParams.implementsSync).toBe(true);
-            expect(ctrl2.boardParams.implementsAsync).toBe(true);
+            expect(ctrl2.boardParams.brkOps.swap.enabled).toBe(false);
+            expect(ctrl2.boardParams.brkOps.copy.enabled).toBe(false);
+            expect(ctrl2.boardParams.brkOps.sync.enabled).toBe(true);
+            expect(ctrl2.boardParams.brkOps.async.enabled).toBe(true);
+        });
+
+        it('serialized state includes legacy implements* flags for backward compat', () => {
+            const ctrl = new BoardController(undefined, {
+                implementsMove: false,
+                implementsSync: true,
+            });
+            const saved = ctrl.state;
+            // Legacy flags should be in the serialized output
+            expect(saved.boardParams.implementsMove).toBe(false);
+            expect(saved.boardParams.implementsCopy).toBe(true);
+            expect(saved.boardParams.implementsSync).toBe(true);
+            expect(saved.boardParams.implementsAsync).toBe(false);
+            // brkOps should also be present
+            expect(saved.boardParams.brkOps.swap.enabled).toBe(false);
+            expect(saved.boardParams.brkOps.sync.enabled).toBe(true);
+        });
+
+        it('loading legacy state without brkOps synthesizes from implements* flags', () => {
+            // Simulate a legacy state file
+            const ctrl = new BoardController();
+            const legacyState = ctrl.state;
+            delete legacyState.boardParams.brkOps;
+            legacyState.boardParams.implementsMove = false;
+            legacyState.boardParams.implementsCopy = true;
+            legacyState.boardParams.implementsSync = true;
+            legacyState.boardParams.implementsAsync = false;
+
+            const ctrl2 = new BoardController();
+            ctrl2.state = legacyState;
+            expect(ctrl2.boardParams.brkOps.swap.enabled).toBe(false);
+            expect(ctrl2.boardParams.brkOps.copy.enabled).toBe(true);
+            expect(ctrl2.boardParams.brkOps.sync.enabled).toBe(true);
+            expect(ctrl2.boardParams.brkOps.async.enabled).toBe(false);
         });
     });
 
@@ -609,7 +650,7 @@ describe('BoardController', () => {
     });
 
     describe('implementsMove=false', () => {
-        it('BRK swap operand (1-244) yields without swapping', () => {
+        it('BRK swap operand (1-48) yields without swapping', () => {
             const ctrl = new BoardController(undefined, { pBitNoise: 0, implementsMove: false });
             const mem = ctrl.memory;
             mem.iOrig = 0; mem.jOrig = 0; mem.orientation = 0;
@@ -638,7 +679,7 @@ describe('BoardController', () => {
     });
 
     describe('implementsCopy=false', () => {
-        it('BRK copy operand (245-252) yields without copying', () => {
+        it('BRK copy operand (49-96) yields without copying', () => {
             const ctrl = new BoardController(undefined, { pBitNoise: 0, implementsCopy: false });
             const mem = ctrl.memory;
             mem.iOrig = 0; mem.jOrig = 0; mem.orientation = 0;
@@ -652,9 +693,9 @@ describe('BoardController', () => {
             const base1 = mem.neighborCellStorageBase(1);
             mem.storage[base1 + 0x200] = 0x00;
 
-            // BRK with operand 245 (copy to cell 1)
+            // BRK with operand 49 (copy to cell 1)
             mem.storage[base0] = 0x00;  // BRK
-            mem.storage[base0 + 1] = 245;  // operand 245
+            mem.storage[base0 + 1] = 49;   // operand 49
             mem.resetUndoHistory();
             ctrl.sfotty.PC = 0;
             ctrl.sfotty.crashed = false;
@@ -667,7 +708,7 @@ describe('BoardController', () => {
         });
     });
 
-    describe('BRK 253 (sync interrupt request)', () => {
+    describe('BRK 97 (sync interrupt request)', () => {
         it('sets nextRequestedInterrupt to next multiple of period when implementsSync=true', () => {
             const ctrl = new BoardController(undefined, { pBitNoise: 0, implementsSync: true });
             const mem = ctrl.memory;
@@ -676,7 +717,7 @@ describe('BoardController', () => {
 
             const base = mem.neighborCellStorageBase(0);
             mem.storage[base] = 0x00;  // BRK
-            mem.storage[base + 1] = 253;  // sync
+            mem.storage[base + 1] = 97;   // sync
             // Period = 0x0100 = 256, set via X (low) and Y (high)
             ctrl.sfotty.X = 0x00;  // low byte
             ctrl.sfotty.Y = 0x01;  // high byte
@@ -703,7 +744,7 @@ describe('BoardController', () => {
 
             const base = mem.neighborCellStorageBase(0);
             mem.storage[base] = 0x00;  // BRK
-            mem.storage[base + 1] = 253;  // sync
+            mem.storage[base + 1] = 97;   // sync
             ctrl.sfotty.X = 0x00;
             ctrl.sfotty.Y = 0x01;
             mem.resetUndoHistory();
@@ -719,7 +760,7 @@ describe('BoardController', () => {
         });
     });
 
-    describe('BRK 254 (async interrupt request)', () => {
+    describe('BRK 98 (async interrupt request)', () => {
         it('sets nextRequestedInterrupt to totalCycles + delay when implementsAsync=true', () => {
             const ctrl = new BoardController(undefined, { pBitNoise: 0, implementsAsync: true });
             const mem = ctrl.memory;
@@ -728,7 +769,7 @@ describe('BoardController', () => {
 
             const base = mem.neighborCellStorageBase(0);
             mem.storage[base] = 0x00;  // BRK
-            mem.storage[base + 1] = 254;  // async
+            mem.storage[base + 1] = 98;   // async
             // Delay = 0x0200 = 512
             ctrl.sfotty.X = 0x00;  // low byte
             ctrl.sfotty.Y = 0x02;  // high byte

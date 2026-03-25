@@ -130,8 +130,8 @@ function noiseTransitionMatrix(eps) {
  * Per epoch, each cell is scheduled once.  When scheduled:
  *   - Dead cells: execute BRK 0, loop.  No copy.  No self-modification.
  *   - BRK-active cells: execute BRK n.
- *       Copy rate: r_b = 8/255 (prob operand ∈ [245,252])
- *       Swap rate: 244/255 (neutral in mean-field for fractions)
+ *       Copy rate: r_b = 48/255 (prob operand ∈ [49,96])
+ *       Swap rate: 48/255 (neutral in mean-field for fractions)
  *       After BRK n, PC=2 → subsequent schedulings run from PC=2
  *       (modeled via self-modification parameters)
  *   - Alive cells: execute real code.
@@ -153,11 +153,11 @@ function noiseTransitionMatrix(eps) {
  */
 function derivatives(d, b, a, T, params) {
     const { ra, crash, selfwrite } = params;
-    // BRK-active copy rate.  Naively 8/255 (prob byte[1] ∈ [245,252]),
+    // BRK-active copy rate.  Naively 48/255 (prob byte[1] ∈ [49,96]),
     // but this only applies on the FIRST scheduling when PC=0.  After
     // that, PC=2 and the cell runs random code (effective rate ≈ r_a).
-    // Use --rbeff to override.  Default 8/255 is the upper bound.
-    const rb = params.rbeff ?? 8 / 255;
+    // Use --rbeff to override.  Default 48/255 is the upper bound.
+    const rb = params.rbeff ?? 48 / 255;
 
     // Total copy rate per cell per epoch (mean-field)
     const R = b * rb + a * ra;

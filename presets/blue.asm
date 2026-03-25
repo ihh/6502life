@@ -4,6 +4,6 @@ LDA #$AA
 STA $03FF
 @start:
 BRK
-.byte $F5
+.byte $31
 BNE @start
 BEQ @start

@@ -4,7 +4,7 @@
 ; Repair index at $40, temp at $41 (outside code range).
 @top:
 BRK
-.byte $F5           ; copy to forward neighbor — fires every scheduling
+.byte $31           ; copy to forward neighbor — fires every scheduling
 ; Repair N bytes in a loop
 LDX #20             ; repair counter
 @outer:

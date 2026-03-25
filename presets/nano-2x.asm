@@ -2,8 +2,8 @@
 ; Copies to cell 1 (forward) and cell 2 (right) on alternating schedulings.
 @start:
 BRK
-.byte $F5
+.byte $31
 BRK
-.byte $F6
+.byte $32
 BNE @start
 BEQ @start

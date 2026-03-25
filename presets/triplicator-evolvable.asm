@@ -8,7 +8,7 @@
 ; Repair index at $40, temp at $41, N at $42.
 @top:
 BRK
-.byte $F5           ; copy to forward neighbor — fires every scheduling
+.byte $31           ; copy to forward neighbor — fires every scheduling
 ; Load evolvable repair count
 LDX $42             ; N stored at byte $42
 BEQ @skip           ; if N=0, skip repair entirely

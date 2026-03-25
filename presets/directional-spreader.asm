@@ -10,13 +10,13 @@
 @start:
 ; Step 1: noisy copy self to forward neighbor
 BRK
-.byte $F5       ; noisy copy origin → cell 1 (forward)
+.byte $31       ; noisy copy origin → cell 1 (forward)
 ; Step 2: swap self with forward neighbor (move forward)
 BRK
 .byte $01       ; swap origin ↔ cell 1 (we move into the copy)
 ; Step 3: do another copy forward from new position
 BRK
-.byte $F5
+.byte $31
 ; Loop
 BNE @start
 BEQ @start

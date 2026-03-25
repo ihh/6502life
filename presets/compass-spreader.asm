@@ -4,10 +4,10 @@
 ; Sets hue=42 (orange) at 0x3FF for visual tracking.
 ;
 ; Orientation mapping (which mapped cell reaches physical (0,+1)):
-;   orientation 0 ($FA=0):  mapped cell 1 -> BRK $F5
-;   orientation 1 ($FA=4):  mapped cell 2 -> BRK $F6
-;   orientation 2 ($FA=8):  mapped cell 3 -> BRK $F7
-;   orientation 3 ($FA=12): mapped cell 4 -> BRK $F8
+;   orientation 0 ($FA=0):  mapped cell 1 -> BRK $31
+;   orientation 1 ($FA=4):  mapped cell 2 -> BRK $32
+;   orientation 2 ($FA=8):  mapped cell 3 -> BRK $33
+;   orientation 3 ($FA=12): mapped cell 4 -> BRK $34
 LDA #$2A
 STA $03FF           ; hue = 42 (orange)
 @start:
@@ -19,21 +19,21 @@ CMP #$08
 BEQ @ori2           ; orientation 2: use cell 3
 ; orientation 3: use cell 4
 BRK
-.byte $F8           ; copy to mapped cell 4 -> physical (0,+1)
+.byte $34           ; copy to mapped cell 4 -> physical (0,+1)
 BNE @start
 BEQ @start
 @ori0:
 BRK
-.byte $F5           ; copy to mapped cell 1 -> physical (0,+1)
+.byte $31           ; copy to mapped cell 1 -> physical (0,+1)
 BNE @start
 BEQ @start
 @ori1:
 BRK
-.byte $F6           ; copy to mapped cell 2 -> physical (0,+1)
+.byte $32           ; copy to mapped cell 2 -> physical (0,+1)
 BNE @start
 BEQ @start
 @ori2:
 BRK
-.byte $F7           ; copy to mapped cell 3 -> physical (0,+1)
+.byte $33           ; copy to mapped cell 3 -> physical (0,+1)
 BNE @start
 BEQ @start

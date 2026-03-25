@@ -156,18 +156,14 @@ while (totalInterrupts < TARGET_INTERRUPTS) {
 
                 if (isBRK) {
                     const operand = brkOperand;
-                    const nDestCells = mem.Nsquared;
-                    const nSrcCells = 5;
                     const tBrk0 = performance.now();
-                    if (operand > 0 && operand < nSrcCells * nDestCells) {
-                        const src = Math.floor(operand / nDestCells);
-                        const dest = operand % nDestCells;
-                        controller.commitMove(src, dest);
+                    if (operand >= 1 && operand <= 48) {
+                        controller.commitMove(0, operand);
                         nBrkSwap++;
                         const tBrk1s = performance.now();
                         tBrkSwapOnly += (tBrk1s - tBrk0);
-                    } else if (operand >= 245 && operand <= 252) {
-                        const dest = operand - 244;
+                    } else if (operand >= 49 && operand <= 96) {
+                        const dest = operand - 48;
                         controller.copyCellWithNoise(dest);
                         controller.lastMoveTime[0] = controller.totalCycles;
                         controller.lastMoveTime[dest] = controller.totalCycles;

@@ -4,7 +4,7 @@
 ; Repair index at $40, temp at $41 (outside code range $00-$3F).
 @top:
 BRK
-.byte $F5           ; copy to forward neighbor — fires every scheduling
+.byte $31           ; copy to forward neighbor — fires every scheduling
 ; Repair one byte (parent continues here after BRK yields)
 DEC $40
 BPL @go

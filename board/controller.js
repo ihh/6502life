@@ -143,6 +143,99 @@ const UNDOCUMENTED_OPCODES = (() => {
     return table;
 })();
 
+// BRK operand registry: defines the built-in operation types.
+// Each entry has metadata (cycle costs, address encoding) and a handler function.
+// The handler receives (controller, operand) and performs the operation.
+const BRK_OP_REGISTRY = {
+    reset: {
+        defaultRange: [0, 0],
+        defaultEnabled: true,
+        cycles: 12,
+        addressEncoding: 'none',
+        description: 'Reset PC to 0, yield',
+        handler(ctrl, operand) {
+            // PC already set to 0 by BRK decode; nothing else to do
+        },
+    },
+    swap: {
+        defaultRange: [1, 48],
+        defaultEnabled: true,
+        cycles: 49,
+        addressEncoding: 'operand',  // cell index = operand
+        description: 'Swap cell 0 with cell N (O(1) page-table remap)',
+        handler(ctrl, operand) {
+            ctrl.commitMove(0, operand);
+            if (ctrl.onBrkEvent) ctrl.onBrkEvent('swap', 0, operand);
+        },
+    },
+    copy: {
+        defaultRange: [49, 96],
+        defaultEnabled: true,
+        cycles: 14400,
+        addressEncoding: 'operand-offset',  // cell index = operand - rangeStart + 1
+        description: 'Noisy copy cell 0 to cell N-48 (O(M) through noise gate)',
+        handler(ctrl, operand) {
+            const dest = operand - 48;
+            ctrl.copyCellWithNoise(dest);
+            const originCellIdx = ctrl.memory.ijToCellIndex(ctrl.memory.iOrig, ctrl.memory.jOrig);
+            ctrl.lastMoveTime[originCellIdx] = ctrl.totalCycles;
+            const [di, dj] = ctrl.memory.addrToCellCoords(dest * ctrl.memory.M);
+            const destCellIdx = ctrl.memory.ijToCellIndex(di, dj);
+            ctrl.lastMoveTime[destCellIdx] = ctrl.totalCycles;
+            if (ctrl.onBrkEvent) ctrl.onBrkEvent('copy', 0, dest);
+        },
+    },
+    sync: {
+        defaultRange: [97, 97],
+        defaultEnabled: false,
+        cycles: 24,
+        addressEncoding: 'xy-registers',
+        description: 'Sync interrupt request (X,Y = period in cycles)',
+        handler(ctrl, operand) {
+            const period = ctrl.sfotty.X | (ctrl.sfotty.Y << 8);
+            if (period > 0) {
+                const nextTime = (Math.floor(ctrl.totalCycles / period) + 1) * period;
+                const cellIdx = ctrl.memory.ijToCellIndex(ctrl.memory.iOrig, ctrl.memory.jOrig);
+                ctrl.nextRequestedInterrupt[cellIdx] = nextTime;
+            }
+        },
+    },
+    async: {
+        defaultRange: [98, 98],
+        defaultEnabled: false,
+        cycles: 24,
+        addressEncoding: 'xy-registers',
+        description: 'Async interrupt request (X,Y = delay in cycles)',
+        handler(ctrl, operand) {
+            const delay = ctrl.sfotty.X | (ctrl.sfotty.Y << 8);
+            if (delay > 0) {
+                const cellIdx = ctrl.memory.ijToCellIndex(ctrl.memory.iOrig, ctrl.memory.jOrig);
+                ctrl.nextRequestedInterrupt[cellIdx] = ctrl.totalCycles + delay;
+            }
+        },
+    },
+};
+
+// Build default brkOps from registry
+function defaultBrkOps() {
+    const ops = {};
+    for (const [name, reg] of Object.entries(BRK_OP_REGISTRY)) {
+        ops[name] = { range: [...reg.defaultRange], enabled: reg.defaultEnabled };
+    }
+    return ops;
+}
+
+// Synthesize brkOps from legacy implements* flags
+function brkOpsFromLegacyFlags(bp) {
+    return {
+        reset: { range: [0, 0],    enabled: true },
+        swap:  { range: [1, 48],   enabled: bp.implementsMove ?? true },
+        copy:  { range: [49, 96],  enabled: bp.implementsCopy ?? true },
+        sync:  { range: [97, 97],  enabled: bp.implementsSync ?? false },
+        async: { range: [98, 98],  enabled: bp.implementsAsync ?? false },
+    };
+}
+
 // board controller
 class BoardController {
     constructor (memory, boardParams) {
@@ -164,11 +257,32 @@ class BoardController {
             nSwapCycles: 0,          // cycle budget for BRK copy/swap (0 = no limit)
             pBitNoiseZero: 0.5,      // P(resampled bit = 0); 0.5 = fair coin, 1 = erasure
             hasCompass: false,       // write orientation to $FA if true
-            implementsMove: true,    // BRK 1-244 swap operations
-            implementsCopy: true,    // BRK 245-252 noisy copy
-            implementsSync: false,   // BRK 253 sync interrupt request
-            implementsAsync: false,  // BRK 254 async interrupt request
         }, boardParams);
+        // BRK operand registry
+        if (this.boardParams.brkOps) {
+            // Merge with defaults so new op types get their defaults
+            const defs = defaultBrkOps();
+            for (const [name, def] of Object.entries(defs)) {
+                if (!this.boardParams.brkOps[name]) {
+                    this.boardParams.brkOps[name] = def;
+                }
+            }
+        } else if (boardParams && (boardParams.implementsMove !== undefined
+                || boardParams.implementsCopy !== undefined
+                || boardParams.implementsSync !== undefined
+                || boardParams.implementsAsync !== undefined)) {
+            // Legacy: construct brkOps from implements* flags
+            this.boardParams.brkOps = brkOpsFromLegacyFlags(boardParams);
+        } else {
+            this.boardParams.brkOps = defaultBrkOps();
+        }
+        // Clean up legacy flags from boardParams (now represented in brkOps)
+        delete this.boardParams.implementsMove;
+        delete this.boardParams.implementsCopy;
+        delete this.boardParams.implementsSync;
+        delete this.boardParams.implementsAsync;
+        // Build dispatch table
+        this._buildBrkDispatch();
         // Backward compatibility: accept noiseParams as alias for boardParams
         this.noiseParams = this.boardParams;
         // Per-cell requested interrupt time (for sync/async)
@@ -178,6 +292,24 @@ class BoardController {
         this.newSfotty();
         this.readRegisters();
         this.writeRng();
+    }
+
+    // Build the 256-entry BRK dispatch table from boardParams.brkOps.
+    // Each entry is either null (yield/no-op) or a handler function.
+    _buildBrkDispatch() {
+        this._brkDispatch = new Array(256).fill(null);
+        const ops = this.boardParams.brkOps;
+        for (const [name, desc] of Object.entries(ops)) {
+            if (!desc.enabled) continue;
+            const reg = BRK_OP_REGISTRY[name];
+            if (!reg) continue;  // unknown op type — skip (future extension point)
+            const [lo, hi] = desc.range;
+            for (let op = lo; op <= hi; op++) {
+                this._brkDispatch[op] = reg.handler;
+            }
+        }
+        // Cache whether any interrupt-request ops are enabled
+        this._hasRequestedInterrupts = !!(ops.sync?.enabled || ops.async?.enabled);
     }
 
     // Zero-page register store. Where the state of the processor is cached on interrupt
@@ -191,6 +323,19 @@ class BoardController {
     get regAddrS() { return 0xFF }  // 0xFF = S
 
     get state() {
+        // Serialize boardParams with both brkOps and legacy implements* flags
+        const bp = this.boardParams;
+        const serializedBp = Object.assign({}, bp);
+        // Deep-copy brkOps
+        serializedBp.brkOps = {};
+        for (const [name, desc] of Object.entries(bp.brkOps)) {
+            serializedBp.brkOps[name] = { range: [...desc.range], enabled: desc.enabled };
+        }
+        // Emit legacy flags for backward compat with old readers
+        serializedBp.implementsMove  = bp.brkOps.swap?.enabled ?? true;
+        serializedBp.implementsCopy  = bp.brkOps.copy?.enabled ?? true;
+        serializedBp.implementsSync  = bp.brkOps.sync?.enabled ?? false;
+        serializedBp.implementsAsync = bp.brkOps.async?.enabled ?? false;
         return { memory: this.memory.state,
                  S: this.sfotty.S,
                  A: this.sfotty.A,
@@ -198,7 +343,7 @@ class BoardController {
                  Y: this.sfotty.Y,
                  P: this.sfotty.P,
                  PC: this.sfotty.PC,
-                 boardParams: Object.assign({}, this.boardParams),
+                 boardParams: serializedBp,
                  totalCycles: this.totalCycles,
                  lastWriteTime: this.lastWriteTime,
                  lastMoveTime: this.lastMoveTime,
@@ -216,10 +361,27 @@ class BoardController {
         this.sfotty.Y = s.Y;
         this.sfotty.P = s.P;
         this.sfotty.PC = s.PC;
-        if (s.boardParams)
-            Object.assign(this.boardParams, s.boardParams);
-        else if (s.noiseParams)
-            Object.assign(this.boardParams, s.noiseParams);
+        const incoming = s.boardParams || s.noiseParams;
+        if (incoming) {
+            // Copy scalar params
+            for (const key of ['pBitNoise', 'nSwapCycles', 'pBitNoiseZero', 'hasCompass']) {
+                if (incoming[key] !== undefined) this.boardParams[key] = incoming[key];
+            }
+            // Restore brkOps: prefer brkOps if present, else synthesize from legacy flags
+            if (incoming.brkOps) {
+                this.boardParams.brkOps = incoming.brkOps;
+                // Merge with defaults so new op types get their defaults
+                const defs = defaultBrkOps();
+                for (const [name, def] of Object.entries(defs)) {
+                    if (!this.boardParams.brkOps[name]) {
+                        this.boardParams.brkOps[name] = def;
+                    }
+                }
+            } else {
+                this.boardParams.brkOps = brkOpsFromLegacyFlags(incoming);
+            }
+            this._buildBrkDispatch();
+        }
         if (s.totalCycles !== undefined)
             this.totalCycles = s.totalCycles;
         if (s.lastWriteTime)
@@ -1192,7 +1354,7 @@ class BoardController {
             this.totalCycles += cpuCycles;
             // Still need to schedule next cell
             this.memory.sampleNextMove();
-            if (this.boardParams.implementsSync || this.boardParams.implementsAsync) {
+            if (this._hasRequestedInterrupts) {
                 this._checkPendingInterrupts();
             }
             this.readRegisters();
@@ -1250,7 +1412,7 @@ class BoardController {
                     this.totalCycles += elapsedCycles;
                     this.memory.resetUndoHistory();
                     this.memory.sampleNextMove();
-                    if (this.boardParams.implementsSync || this.boardParams.implementsAsync) {
+                    if (this._hasRequestedInterrupts) {
                         this._checkPendingInterrupts();
                     }
                     this.readRegisters();
@@ -1291,47 +1453,14 @@ class BoardController {
                         // so the child inherits the pre-BRK register state
                         // stored at $F9-$FF from the previous scheduling.
                         const operand = brkOperand;
-                        const nDestCells = this.memory.Nsquared;  // 49
-                        const nSrcCells = 5;
                         // nSwapCycles: BRK copy/swap fails if fewer than this
                         // many cycles remain before the next interrupt.
                         const bp = this.boardParams;
                         const brkFails = bp.nSwapCycles > 0
                             && (schedulerCycles - cpuCycles) < bp.nSwapCycles;
                         if (!brkFails) {
-                            if (operand > 0 && operand < nSrcCells * nDestCells && bp.implementsMove) {
-                                const src = Math.floor(operand / nDestCells);
-                                const dest = operand % nDestCells;
-                                this.commitMove (src, dest);
-                                if (this.onBrkEvent) this.onBrkEvent('swap', src, dest);
-                            } else if (operand >= 245 && operand <= 252 && bp.implementsCopy) {
-                                const dest = operand - 244;
-                                this.copyCellWithNoise (dest);
-                                // Update move times using board cell indices (not neighborhood indices)
-                                const originCellIdx = this.memory.ijToCellIndex(this.memory.iOrig, this.memory.jOrig);
-                                this.lastMoveTime[originCellIdx] = this.totalCycles;
-                                const [di, dj] = this.memory.addrToCellCoords(dest * this.memory.M);
-                                const destCellIdx = this.memory.ijToCellIndex(di, dj);
-                                this.lastMoveTime[destCellIdx] = this.totalCycles;
-                                if (this.onBrkEvent) this.onBrkEvent('copy', 0, dest);
-                            } else if (operand === 253 && bp.implementsSync) {
-                                // Sync interrupt request: X,Y = LSB,MSB of period.
-                                // Round down to nearest absolute multiple of period.
-                                const period = this.sfotty.X | (this.sfotty.Y << 8);
-                                if (period > 0) {
-                                    const nextTime = (Math.floor(this.totalCycles / period) + 1) * period;
-                                    const cellIdx = this.memory.ijToCellIndex(this.memory.iOrig, this.memory.jOrig);
-                                    this.nextRequestedInterrupt[cellIdx] = nextTime;
-                                }
-                            } else if (operand === 254 && bp.implementsAsync) {
-                                // Async interrupt request: X,Y = LSB,MSB of delay.
-                                const delay = this.sfotty.X | (this.sfotty.Y << 8);
-                                if (delay > 0) {
-                                    const cellIdx = this.memory.ijToCellIndex(this.memory.iOrig, this.memory.jOrig);
-                                    this.nextRequestedInterrupt[cellIdx] = this.totalCycles + delay;
-                                }
-                            }
-                            // Operand 255 or unimplemented: just yield (no operation)
+                            const handler = this._brkDispatch[operand];
+                            if (handler) handler(this, operand);
                         }
                     }
                     this.commitWrites();
@@ -1357,7 +1486,7 @@ class BoardController {
                 // sampleNextMove picks a random cell, orientation, and timer.
                 this.memory.sampleNextMove();
                 // Check for pending sync/async interrupt requests.
-                if (this.boardParams.implementsSync || this.boardParams.implementsAsync) {
+                if (this._hasRequestedInterrupts) {
                     this._checkPendingInterrupts();
                 }
                 this.readRegisters();
@@ -1461,4 +1590,4 @@ class BoardController {
     }
 };
 
-export { BoardController, UNDOCUMENTED_OPCODES };
+export { BoardController, UNDOCUMENTED_OPCODES, BRK_OP_REGISTRY };
