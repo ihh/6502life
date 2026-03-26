@@ -49,6 +49,9 @@ class BoardMemory {
         this.mt = new MersenneTwister (seed);
         this.sampleNextMove();
         this.resetUndoHistory();
+        // Feature flags (set by controller from boardParams)
+        this.orientedRegistersEnabled = true;
+        this.lookupTablesEnabled = true;
     }
 
     get B() { return this._B }  // cells per dimension (X,Y)
@@ -191,11 +194,11 @@ class BoardMemory {
     }
 
     doRotateTopBits (addr, val) {
-        return this.addrIsInVectorRange(addr) && this.valIsInVectorRange(val);
+        return this.orientedRegistersEnabled && this.addrIsInVectorRange(addr) && this.valIsInVectorRange(val);
     }
 
     read (addr) {
-        if (addr >= this.firstLookupTableAddr && addr <= this.lastLookupTableAddr) {
+        if (this.lookupTablesEnabled && addr >= this.firstLookupTableAddr && addr <= this.lastLookupTableAddr) {
             const nRow = (addr - this.firstLookupTableAddr) >> 6;
             const nCol = addr & 63;
             if (nRow < transformLookupTable.length && nCol < transformLookupTable[nRow].length)

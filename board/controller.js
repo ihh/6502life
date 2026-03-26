@@ -256,6 +256,10 @@ class BoardController {
             pBitNoise: 1 / 2048,     // per-bit noise on BRK noisy copy
             pBitNoiseZero: 0.5,      // P(resampled bit = 0); 0.5 = fair coin, 1 = erasure
             hasCompass: false,       // write orientation to $FA if true
+            hasAtomicWrites: true,   // I flag enables undo on timer interrupt
+            hasLookupTables: true,   // geometry ROM at $E000-$EE3F
+            hasOrientedRegisters: true, // $F0-$F9 auto-rotate top 6 bits
+            hasRNG: true,            // 4 random bytes at $FC-$FF each quantum
         }, boardParams);
         // BRK operand registry
         if (this.boardParams.brkOps) {
@@ -284,6 +288,9 @@ class BoardController {
         this._buildBrkDispatch();
         // Backward compatibility: accept noiseParams as alias for boardParams
         this.noiseParams = this.boardParams;
+        // Propagate feature flags to memory object
+        this.memory.orientedRegistersEnabled = this.boardParams.hasOrientedRegisters !== false;
+        this.memory.lookupTablesEnabled = this.boardParams.hasLookupTables !== false;
         // Per-cell requested interrupt time (for sync/async)
         this.nextRequestedInterrupt = this.newCellArray(() => Infinity);
         // Hook for BRK copy/swap events
@@ -365,7 +372,8 @@ class BoardController {
         const incoming = s.boardParams || s.noiseParams;
         if (incoming) {
             // Copy scalar params
-            for (const key of ['pBitNoise', 'pBitNoiseZero', 'hasCompass']) {
+            for (const key of ['pBitNoise', 'pBitNoiseZero', 'hasCompass',
+                               'hasAtomicWrites', 'hasLookupTables', 'hasOrientedRegisters', 'hasRNG']) {
                 if (incoming[key] !== undefined) this.boardParams[key] = incoming[key];
             }
             // Restore brkOps: prefer brkOps if present, else synthesize from legacy flags
@@ -397,6 +405,9 @@ class BoardController {
             this.lastWriter = s.lastWriter;
         if (s.boardOwner !== undefined)
             this.boardOwner = s.boardOwner;
+        // Re-propagate feature flags to memory
+        this.memory.orientedRegistersEnabled = this.boardParams.hasOrientedRegisters !== false;
+        this.memory.lookupTablesEnabled = this.boardParams.hasLookupTables !== false;
     }
 
     newCellArray(initializer) {
@@ -1248,6 +1259,7 @@ class BoardController {
     }
 
     writeRng() {
+        if (!this.boardParams.hasRNG) return;
         const base = this.memory.neighborCellStorageBase(0);
         const s = this.memory.storage;
         const rnd = this.memory.nextRnd;
@@ -1446,7 +1458,7 @@ class BoardController {
                 // Pre-emptive scheduling is conceptually IRQ (maskable by SEI)
                 // followed by NMI (unmaskable context switch). Memory writeback
                 // happens between the IRQ and NMI if the I flag allows it.
-                if (isTimerInterrupt && this.sfotty.I)  // masked interrupt (I set)?
+                if (isTimerInterrupt && this.sfotty.I && this.boardParams.hasAtomicWrites)
                     this.memory.undoWrites();            // revert all writes (atomic abort)
                 else {
                     if (isBRK) {
