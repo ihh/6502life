@@ -51,6 +51,11 @@ class BoardMemory {
         this._N = 7;  // neighborhood dimension (2, 3, 5, or 7)
         this.storage = new Uint8Array (this.storageSize);
         this.mt = new MersenneTwister (seed);
+        // Scheduler mode: 'random' (default) or 'checkerboard'
+        this.schedulerMode = 'random';
+        this._checkerboardIndex = 0;
+        this._checkerboardPass = 0;
+        this._checkerboardCells = null;  // lazily built
         this.sampleNextMove();
         this.resetUndoHistory();
         // Feature flags (set by controller from boardParams)
@@ -111,7 +116,10 @@ class BoardMemory {
                             orientation: this.orientation,
                             nextCycles: this.nextCycles,
                             mt: this.mt.mt,
-                            mti: this.mt.mti } }
+                            mti: this.mt.mti,
+                            schedulerMode: this.schedulerMode,
+                            _checkerboardIndex: this._checkerboardIndex,
+                            _checkerboardPass: this._checkerboardPass } }
     set state(s) {
         this.storage = new Uint8Array(Array.isArray(s.storage) ? s.storage : new TextEncoder().encode(s.storage));
         this.iOrig = s.iOrig;
@@ -120,6 +128,10 @@ class BoardMemory {
         this.nextCycles = s.nextCycles;
         this.mt.mt = s.mt;
         this.mt.mti = s.mti;
+        if (s.schedulerMode !== undefined) this.schedulerMode = s.schedulerMode;
+        if (s._checkerboardIndex !== undefined) this._checkerboardIndex = s._checkerboardIndex;
+        if (s._checkerboardPass !== undefined) this._checkerboardPass = s._checkerboardPass;
+        if (this.schedulerMode === 'checkerboard') this._buildCheckerboardCells();
     }
 
     // Convert a neighborhood cell index (0-48) to a storage byte offset.
@@ -237,28 +249,62 @@ class BoardMemory {
         return (val & 3) | (this.unrotate(val >> 2) << 2);
     }
 
-    // randomly sample next move
-    sampleNextMove() {
-        const rv1 = this.mt.int();  // new origin and orientation
-        const rv2 = this.mt.int();  // transformed into the log part of the waiting time to the next interrupt
-        const rv3 = this.mt.real();  // transformed into the fractional part of the waiting time to the next interrupt
-        const rv4 = this.mt.int();  // stored in nextRnd, retrieved and written back to the board by the controller
-        this.iOrig = rv1 % this.B;
-        this.jOrig = ((rv1 >> 8) & 0xFFFF) % this.B;
-        this.orientation = (rv1 >> 16) & 3;
-        // These constants are tweaked to give an expected cycle count of mean 256*C, min 75*C, max 3136*C where C=cycleMultiplier
-        // We want a change of being able to copy an entire 1k cell in an atomic operation, which takes ~19*1024 = 19456 cycles
-        // So the longest cycle count between interrupts (3136*C) should be around 2x that: C = 2*19456/3136 ~= 12
-        const halfLife = 177;  // (1-p)**halfLife ~= 0.5
-        const cycleMultiplier = 16;  // so max time between interrupts is comfortably 2x atomic copy time
+    // Build the checkerboard cell lists for the current board size.
+    _buildCheckerboardCells() {
+        const B = this.B;
+        this._checkerboardCells = [[], []];  // [pass0 (even), pass1 (odd)]
+        for (let i = 0; i < B; i++) {
+            for (let j = 0; j < B; j++) {
+                this._checkerboardCells[(i + j) % 2].push([i, j]);
+            }
+        }
+    }
+
+    // Sample the Poisson timer duration from the MT RNG.
+    _sampleTimerAndRnd() {
+        const rv2 = this.mt.int();  // log part of waiting time
+        const rv3 = this.mt.real();  // fractional part of waiting time
+        const rv4 = this.mt.int();  // stored in nextRnd
+        const halfLife = 177;
+        const cycleMultiplier = 16;
         let r = rv2;
         let nHalfLives = 0;
         while (nHalfLives < 32 && (r & 1)) {
             r = r >> 1;
             ++nHalfLives;
         }
-        this.nextCycles = Math.ceil (cycleMultiplier * halfLife * (nHalfLives + rv3));
+        this.nextCycles = Math.ceil(cycleMultiplier * halfLife * (nHalfLives + rv3));
         this.nextRnd = rv4;
+    }
+
+    // randomly sample next move
+    sampleNextMove() {
+        if (this.schedulerMode === 'checkerboard') {
+            // Checkerboard mode: deterministic cell order, random orientation and timer
+            if (!this._checkerboardCells) this._buildCheckerboardCells();
+            const pass = this._checkerboardPass;
+            const idx = this._checkerboardIndex;
+            const cell = this._checkerboardCells[pass][idx];
+            this.iOrig = cell[0];
+            this.jOrig = cell[1];
+            // Still consume rv1 from MT to keep RNG consumption consistent
+            const rv1 = this.mt.int();
+            this.orientation = (rv1 >> 16) & 3;
+            this._sampleTimerAndRnd();
+            // Advance index
+            this._checkerboardIndex++;
+            if (this._checkerboardIndex >= this._checkerboardCells[pass].length) {
+                this._checkerboardIndex = 0;
+                this._checkerboardPass = 1 - this._checkerboardPass;
+            }
+        } else {
+            // Random mode: original behavior
+            const rv1 = this.mt.int();  // new origin and orientation
+            this.iOrig = rv1 % this.B;
+            this.jOrig = ((rv1 >> 8) & 0xFFFF) % this.B;
+            this.orientation = (rv1 >> 16) & 3;
+            this._sampleTimerAndRnd();
+        }
     }
 };
 

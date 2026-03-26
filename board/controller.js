@@ -263,6 +263,7 @@ class BoardController {
             hasOrientedRegisters: true, // $F0-$F9 auto-rotate top 6 bits
             hasRNG: true,            // 4 random bytes at $FC-$FF each quantum
             neighborhoodSize: 7,    // neighborhood dimension: 2, 3, 5, or 7
+            schedulerMode: 'random', // 'random' or 'checkerboard'
         }, boardParams);
         // BRK operand registry
         if (this.boardParams.brkOps) {
@@ -296,6 +297,14 @@ class BoardController {
         this.memory.lookupTablesEnabled = this.boardParams.hasLookupTables !== false;
         if (this.boardParams.neighborhoodSize && BoardMemory.MAPPED_CELLS[this.boardParams.neighborhoodSize] !== undefined) {
             this.memory._N = this.boardParams.neighborhoodSize;
+        }
+        // Propagate scheduler mode to memory
+        this.memory.schedulerMode = this.boardParams.schedulerMode || 'random';
+        if (this.memory.schedulerMode === 'checkerboard') {
+            this.memory._buildCheckerboardCells();
+            // Re-sample so the first cell uses checkerboard order
+            // (the constructor's sampleNextMove ran before mode was set)
+            this.memory.sampleNextMove();
         }
         // Per-cell requested interrupt time (for sync/async)
         this.nextRequestedInterrupt = this.newCellArray(() => Infinity);
@@ -380,7 +389,7 @@ class BoardController {
             // Copy scalar params
             for (const key of ['pBitNoise', 'pBitNoiseZero', 'hasCompass',
                                'hasAtomicWrites', 'hasLookupTables', 'hasOrientedRegisters', 'hasRNG',
-                               'neighborhoodSize']) {
+                               'neighborhoodSize', 'schedulerMode']) {
                 if (incoming[key] !== undefined) this.boardParams[key] = incoming[key];
             }
             // Restore brkOps: prefer brkOps if present, else synthesize from legacy flags
@@ -417,6 +426,11 @@ class BoardController {
         this.memory.lookupTablesEnabled = this.boardParams.hasLookupTables !== false;
         if (this.boardParams.neighborhoodSize && BoardMemory.MAPPED_CELLS[this.boardParams.neighborhoodSize] !== undefined) {
             this.memory._N = this.boardParams.neighborhoodSize;
+        }
+        // Re-propagate scheduler mode to memory
+        this.memory.schedulerMode = this.boardParams.schedulerMode || 'random';
+        if (this.memory.schedulerMode === 'checkerboard') {
+            this.memory._buildCheckerboardCells();
         }
     }
 
