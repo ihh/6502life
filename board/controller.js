@@ -248,6 +248,10 @@ class BoardController {
         this.lastWriteTimeForByte = this.newCellArray(()=>this.newCellByteArray(()=>0));
         // Per-cell halted state (JAM opcode freezes the cell)
         this.halted = this.newCellArray(() => false);
+        // Per-cell execution profile: rolling hash of instruction-fetch addresses.
+        // Updated every quantum from the cell's PC trace. Used for behavioral
+        // fingerprinting (the "hot address signature").
+        this.execProfile = this.newCellArray(() => 0);
         // Per-cell lastWriter: wallet ID of the board that last wrote to this cell.
         // NOT in cell memory — programs cannot read or tamper with it.
         this.lastWriter = this.newCellArray(() => '');
@@ -264,6 +268,9 @@ class BoardController {
             hasRNG: true,            // 4 random bytes at $FC-$FF each quantum
             neighborhoodSize: 7,    // neighborhood dimension: 2, 3, 5, or 7
             schedulerMode: 'random', // 'random' or 'checkerboard'
+            decayRate: 0,            // random bytes zeroed per quantum (0 = off)
+            diversityBonus: false,   // neighborhood diversity affects quantum length
+            similarityCopyNoise: false, // BRK copy noise scales with src/dest similarity
         }, boardParams);
         // BRK operand registry
         if (this.boardParams.brkOps) {
@@ -389,7 +396,8 @@ class BoardController {
             // Copy scalar params
             for (const key of ['pBitNoise', 'pBitNoiseZero', 'hasCompass',
                                'hasAtomicWrites', 'hasLookupTables', 'hasOrientedRegisters', 'hasRNG',
-                               'neighborhoodSize', 'schedulerMode']) {
+                               'neighborhoodSize', 'schedulerMode',
+                               'decayRate', 'diversityBonus', 'similarityCopyNoise']) {
                 if (incoming[key] !== undefined) this.boardParams[key] = incoming[key];
             }
             // Restore brkOps: prefer brkOps if present, else synthesize from legacy flags
@@ -1314,8 +1322,22 @@ class BoardController {
     copyCellWithNoise (dest) {
         const mem = this.memory;
         const mt = mem.mt;
-        const eps = this.noiseParams.pBitNoise;
+        let eps = this.noiseParams.pBitNoise;
         const q = this.noiseParams.pBitNoiseZero ?? 0.5;
+
+        // Similarity-based copy noise: if source and dest are similar,
+        // amplify noise. Compute byte-level similarity (0-1), then scale
+        // eps up to 4x when similarity is high.
+        if (this.boardParams.similarityCopyNoise && eps > 0) {
+            const srcBase = mem.neighborCellStorageBase(0);
+            const dstBase = mem.neighborCellStorageBase(dest);
+            let same = 0;
+            for (let b = 0; b < 64; b++) {  // sample first 64 bytes for speed
+                if (mem.storage[srcBase + b] === mem.storage[dstBase + b]) same++;
+            }
+            const similarity = same / 64;  // 0 = completely different, 1 = identical
+            eps = eps * (1 + 3 * similarity);  // 1x at 0% similar, 4x at 100%
+        }
         const storage = mem.storage;
         const srcBase = mem.neighborCellStorageBase(0);  // origin cell
         const dstBase = mem.neighborCellStorageBase(dest);
@@ -1524,6 +1546,10 @@ class BoardController {
                 if (this._hasRequestedInterrupts) {
                     this._checkPendingInterrupts();
                 }
+                // ── Diversity bonus: scale quantum by neighborhood diversity ──
+                if (this.boardParams.diversityBonus) {
+                    this._applyDiversityBonus();
+                }
                 this.readRegisters();
                 this.writeRng();
                 // Compass: write orientation to $FA (PCLO register area)
@@ -1541,6 +1567,23 @@ class BoardController {
                 this.sfotty.resetPending = false;
                 this.sfotty.cycleCounter = 0;
                 this.sfotty.operations = [() => this.sfotty.decode()];
+                // ── Update execution profile: mix PC into rolling hash ──
+                {
+                    const pc = this.sfotty.PC;
+                    const profile = this.execProfile[cellIdx];
+                    // FNV-1a-like hash: xor then multiply
+                    this.execProfile[cellIdx] = ((profile ^ pc) * 16777619) >>> 0;
+                }
+
+                // ── Decay: zero random bytes in board storage ("cosmic rays") ──
+                if (this.boardParams.decayRate > 0) {
+                    const mt = this.memory.mt;
+                    const storageSize = this.memory.storageSize;
+                    for (let d = 0; d < this.boardParams.decayRate; d++) {
+                        const addr = mt.int() % storageSize;
+                        this.memory.storage[addr] = 0;
+                    }
+                }
                 break;
             }
         }
@@ -1567,6 +1610,34 @@ class BoardController {
             // Clear the pending interrupt
             this.nextRequestedInterrupt[pick] = Infinity;
         }
+    }
+
+    // Compute a 32-bit signature from the first 4 bytes of a cell
+    _cellSignature(cellIdx) {
+        const base = cellIdx * this.memory.M;
+        const s = this.memory.storage;
+        return s[base] | (s[base + 1] << 8) | (s[base + 2] << 16) | (s[base + 3] << 24);
+    }
+
+    // Diversity bonus: scale quantum by how many distinct signatures are
+    // in the origin cell's cardinal neighborhood. 4 unique neighbors = full
+    // quantum. All identical = quantum halved.
+    _applyDiversityBonus() {
+        const B = this.memory.B;
+        const i = this.memory.iOrig;
+        const j = this.memory.jOrig;
+        const sigs = new Set();
+        const neighbors = [
+            [(i - 1 + B) % B, j], [(i + 1) % B, j],
+            [i, (j - 1 + B) % B], [i, (j + 1) % B],
+        ];
+        for (const [ni, nj] of neighbors) {
+            sigs.add(this._cellSignature(this.memory.ijToCellIndex(ni, nj)));
+        }
+        // Scale: 1 unique sig → 0.5x, 4 unique → 1.0x, linear between
+        const diversity = sigs.size; // 1-4
+        const scale = 0.5 + 0.5 * (diversity - 1) / 3;
+        this.memory.nextCycles = Math.ceil(this.memory.nextCycles * scale);
     }
 
     commitWrites() {
