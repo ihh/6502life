@@ -43,8 +43,12 @@ const transformLookupTable = transformations.map(makeTransformLookupTableRow).co
 // with connectivity persisting only until the next interrupt, at which a single undo is performed if
 // and only if the software interrupt flag (I) is set at the time of the interrupt.
 class BoardMemory {
+    // Number of mapped cells for each neighborhood dimension
+    static MAPPED_CELLS = { 2: 2, 3: 9, 5: 25, 7: 49 };
+
     constructor(seed = 42, boardSize = 256) {
         this._B = boardSize;
+        this._N = 7;  // neighborhood dimension (2, 3, 5, or 7)
         this.storage = new Uint8Array (this.storageSize);
         this.mt = new MersenneTwister (seed);
         this.sampleNextMove();
@@ -56,12 +60,12 @@ class BoardMemory {
 
     get B() { return this._B }  // cells per dimension (X,Y)
     get M() { return 1024 }  // memory in bytes per cell
-    get N() { return 7 }  // memory-mapped neighorhood size per dimension
-    get Nsquared() { return 49 }  // memory-mapped neighorhood size
+    get N() { return this._N }  // memory-mapped neighborhood dimension (2, 3, 5, or 7)
+    get Nsquared() { return BoardMemory.MAPPED_CELLS[this._N] || 49 }  // mapped cell count
     get log2M() { return 10 }  // = log_2(M)
     get sqrtM() { return 32 }  // = sqrt(M)
     get storageSize() { return this.B * this.B * this.M; }  // 64Mb
-    get neighborhoodSize() { return this.N * this.N * this.M; }  // 49Kb
+    get neighborhoodSize() { return this.Nsquared * this.M; }  // mapped bytes
     get byteOffsetMask() { return this.M - 1 }  // 0x3FF
 
     // 1. Memory map - RAM

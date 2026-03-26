@@ -164,6 +164,7 @@ const BRK_OP_REGISTRY = {
         addressEncoding: 'operand',  // cell index = operand
         description: 'Swap cell 0 with cell N (O(1) page-table remap)',
         handler(ctrl, operand) {
+            if (operand >= ctrl.memory.Nsquared) return; // target outside neighborhood
             ctrl.commitMove(0, operand);
             if (ctrl.onBrkEvent) ctrl.onBrkEvent('swap', 0, operand);
         },
@@ -176,6 +177,7 @@ const BRK_OP_REGISTRY = {
         description: 'Noisy copy cell 0 to cell N-48',
         handler(ctrl, operand) {
             const dest = operand - 48;
+            if (dest >= ctrl.memory.Nsquared) return; // target outside neighborhood
             ctrl.copyCellWithNoise(dest);
             const originCellIdx = ctrl.memory.ijToCellIndex(ctrl.memory.iOrig, ctrl.memory.jOrig);
             ctrl.lastMoveTime[originCellIdx] = ctrl.totalCycles;
@@ -260,6 +262,7 @@ class BoardController {
             hasLookupTables: true,   // geometry ROM at $E000-$EE3F
             hasOrientedRegisters: true, // $F0-$F9 auto-rotate top 6 bits
             hasRNG: true,            // 4 random bytes at $FC-$FF each quantum
+            neighborhoodSize: 7,    // neighborhood dimension: 2, 3, 5, or 7
         }, boardParams);
         // BRK operand registry
         if (this.boardParams.brkOps) {
@@ -291,6 +294,9 @@ class BoardController {
         // Propagate feature flags to memory object
         this.memory.orientedRegistersEnabled = this.boardParams.hasOrientedRegisters !== false;
         this.memory.lookupTablesEnabled = this.boardParams.hasLookupTables !== false;
+        if (this.boardParams.neighborhoodSize && BoardMemory.MAPPED_CELLS[this.boardParams.neighborhoodSize] !== undefined) {
+            this.memory._N = this.boardParams.neighborhoodSize;
+        }
         // Per-cell requested interrupt time (for sync/async)
         this.nextRequestedInterrupt = this.newCellArray(() => Infinity);
         // Hook for BRK copy/swap events
@@ -373,7 +379,8 @@ class BoardController {
         if (incoming) {
             // Copy scalar params
             for (const key of ['pBitNoise', 'pBitNoiseZero', 'hasCompass',
-                               'hasAtomicWrites', 'hasLookupTables', 'hasOrientedRegisters', 'hasRNG']) {
+                               'hasAtomicWrites', 'hasLookupTables', 'hasOrientedRegisters', 'hasRNG',
+                               'neighborhoodSize']) {
                 if (incoming[key] !== undefined) this.boardParams[key] = incoming[key];
             }
             // Restore brkOps: prefer brkOps if present, else synthesize from legacy flags
@@ -408,6 +415,9 @@ class BoardController {
         // Re-propagate feature flags to memory
         this.memory.orientedRegistersEnabled = this.boardParams.hasOrientedRegisters !== false;
         this.memory.lookupTablesEnabled = this.boardParams.hasLookupTables !== false;
+        if (this.boardParams.neighborhoodSize && BoardMemory.MAPPED_CELLS[this.boardParams.neighborhoodSize] !== undefined) {
+            this.memory._N = this.boardParams.neighborhoodSize;
+        }
     }
 
     newCellArray(initializer) {
