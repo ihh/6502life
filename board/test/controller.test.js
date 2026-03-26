@@ -1181,84 +1181,92 @@ describe('BoardController', () => {
             expect(ctrl.memory.schedulerMode).toBe('random');
         });
 
-        it('checkerboard mode visits all cells in two passes', () => {
+        it('checkerboard pass covers exactly B²/2 cells', () => {
+            const B = 4;
+            const mem = new BoardMemory(42, B);
+            const ctrl = new BoardController(mem, { schedulerMode: 'checkerboard' });
+            const pairsPerPass = (B * B) / 2;
+            const visited = new Set();
+            for (let n = 0; n < pairsPerPass; n++) {
+                visited.add(`${ctrl.memory.iOrig},${ctrl.memory.jOrig}`);
+                ctrl.runToNextInterrupt();
+            }
+            expect(visited.size).toBe(pairsPerPass);
+        });
+
+        it('many checkerboard passes eventually visit all cells', () => {
             const B = 4;
             const mem = new BoardMemory(42, B);
             const ctrl = new BoardController(mem, { schedulerMode: 'checkerboard' });
             const visited = new Set();
-            const totalCells = B * B;
-            // Run B*B interrupts — should visit every cell exactly once
-            for (let n = 0; n < totalCells; n++) {
-                const i = ctrl.memory.iOrig;
-                const j = ctrl.memory.jOrig;
-                visited.add(`${i},${j}`);
+            // Run enough passes that all cells are covered (each pass covers B²/2)
+            for (let n = 0; n < B * B * 4; n++) {
+                visited.add(`${ctrl.memory.iOrig},${ctrl.memory.jOrig}`);
                 ctrl.runToNextInterrupt();
             }
-            expect(visited.size).toBe(totalCells);
-            // Verify every (i,j) pair is present
-            for (let i = 0; i < B; i++) {
-                for (let j = 0; j < B; j++) {
-                    expect(visited.has(`${i},${j}`)).toBe(true);
-                }
-            }
+            expect(visited.size).toBe(B * B);
         });
 
-        it('checkerboard mode cells in same pass do not share cardinal neighbors', () => {
+        it('no two active cells in same pass share any memory-mapped cells', () => {
+            // Each active cell sees itself + 1 neighbor. No overlap allowed.
             const B = 8;
             const mem = new BoardMemory(42, B);
-            const ctrl = new BoardController(mem, { schedulerMode: 'checkerboard' });
-            // Check that cells in pass 0 (even parity) have no cardinal neighbors in the same pass
-            const cells0 = ctrl.memory._checkerboardCells[0];
-            const cells1 = ctrl.memory._checkerboardCells[1];
-            for (const cellSet of [cells0, cells1]) {
-                const coordSet = new Set(cellSet.map(([i, j]) => `${i},${j}`));
-                for (const [i, j] of cellSet) {
-                    // Cardinal neighbors (with wrapping)
-                    const neighbors = [
-                        [(i - 1 + B) % B, j],
-                        [(i + 1) % B, j],
-                        [i, (j - 1 + B) % B],
-                        [i, (j + 1) % B],
-                    ];
-                    for (const [ni, nj] of neighbors) {
-                        expect(coordSet.has(`${ni},${nj}`)).toBe(false);
-                    }
-                }
+            mem.schedulerMode = 'checkerboard';
+            mem._buildCheckerboardPass();
+            const pairs = mem._checkerboardPairs;
+            const claimed = new Set();
+            for (const [ai, aj, ni, nj] of pairs) {
+                const activeKey = `${ai},${aj}`;
+                const neighKey = `${ni},${nj}`;
+                expect(claimed.has(activeKey)).toBe(false);
+                expect(claimed.has(neighKey)).toBe(false);
+                claimed.add(activeKey);
+                claimed.add(neighKey);
+            }
+            // Should have claimed exactly B² cells
+            expect(claimed.size).toBe(B * B);
+        });
+
+        it('orientation maps cell 1 to the paired neighbor', () => {
+            const B = 4;
+            const mem = new BoardMemory(42, B);
+            const ctrl = new BoardController(mem, { schedulerMode: 'checkerboard', neighborhoodSize: 2 });
+            // Run one pass and verify each pair's orientation is correct
+            const pairsPerPass = (B * B) / 2;
+            for (let n = 0; n < pairsPerPass; n++) {
+                const i = ctrl.memory.iOrig;
+                const j = ctrl.memory.jOrig;
+                const orient = ctrl.memory.orientation;
+                // Cell 1 in spiral at orientation 0=N(0,+1), 1=E(+1,0), 2=S(0,-1), 3=W(-1,0)
+                const pair = ctrl.memory._checkerboardPairs[n];
+                const [ai, aj, ni, nj] = pair;
+                expect(ai).toBe(i);
+                expect(aj).toBe(j);
+                // Verify the neighbor is reachable via the orientation
+                const deltas = [[0, 1], [1, 0], [0, -1], [-1, 0]]; // N, E, S, W
+                const [di, dj] = deltas[orient];
+                expect((i + di + B) % B).toBe(ni);
+                expect((j + dj + B) % B).toBe(nj);
+                ctrl.runToNextInterrupt();
             }
         });
 
-        it('checkerboard mode consumes same number of RNG draws per step as random mode', () => {
-            // Both modes should consume exactly 4 MT draws per sampleNextMove call
-            const mem1 = new BoardMemory(42, 4);
-            mem1.schedulerMode = 'random';
-            const mem2 = new BoardMemory(42, 4);
-            mem2.schedulerMode = 'checkerboard';
-            mem2._buildCheckerboardCells();
-            // After construction, both consumed one sampleNextMove. Reset to same state.
-            // Just check that after N more calls, mti matches
-            for (let n = 0; n < 16; n++) {
-                mem1.sampleNextMove();
-                mem2.sampleNextMove();
-            }
-            expect(mem1.mt.mti).toBe(mem2.mt.mti);
-        });
-
-        it('serialization preserves schedulerMode and checkerboard state', () => {
+        it('serialization preserves checkerboard state', () => {
             const B = 4;
             const mem = new BoardMemory(42, B);
             const ctrl = new BoardController(mem, { schedulerMode: 'checkerboard' });
-            // Advance a few steps
-            for (let n = 0; n < 5; n++) {
-                ctrl.runToNextInterrupt();
-            }
+            for (let n = 0; n < 5; n++) ctrl.runToNextInterrupt();
             const saved = ctrl.state;
             const ctrl2 = new BoardController(new BoardMemory(1, B));
             ctrl2.state = saved;
             expect(ctrl2.boardParams.schedulerMode).toBe('checkerboard');
             expect(ctrl2.memory.schedulerMode).toBe('checkerboard');
-            expect(ctrl2.memory._checkerboardIndex).toBe(ctrl.memory._checkerboardIndex);
-            expect(ctrl2.memory._checkerboardPass).toBe(ctrl.memory._checkerboardPass);
-            // Verify the restored controller produces the same next cell
+            // Pairs and index are serialized, so next cell should match
+            expect(ctrl2.memory.iOrig).toBe(ctrl.memory.iOrig);
+            expect(ctrl2.memory.jOrig).toBe(ctrl.memory.jOrig);
+            // Running one more interrupt on both should produce same next cell
+            ctrl.runToNextInterrupt();
+            ctrl2.runToNextInterrupt();
             expect(ctrl2.memory.iOrig).toBe(ctrl.memory.iOrig);
             expect(ctrl2.memory.jOrig).toBe(ctrl.memory.jOrig);
         });

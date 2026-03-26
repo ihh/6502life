@@ -301,7 +301,7 @@ class BoardController {
         // Propagate scheduler mode to memory
         this.memory.schedulerMode = this.boardParams.schedulerMode || 'random';
         if (this.memory.schedulerMode === 'checkerboard') {
-            this.memory._buildCheckerboardCells();
+            this.memory._buildCheckerboardPass();
             // Re-sample so the first cell uses checkerboard order
             // (the constructor's sampleNextMove ran before mode was set)
             this.memory.sampleNextMove();
@@ -427,11 +427,8 @@ class BoardController {
         if (this.boardParams.neighborhoodSize && BoardMemory.MAPPED_CELLS[this.boardParams.neighborhoodSize] !== undefined) {
             this.memory._N = this.boardParams.neighborhoodSize;
         }
-        // Re-propagate scheduler mode to memory
+        // Re-propagate scheduler mode to memory (pairs are restored from serialized state)
         this.memory.schedulerMode = this.boardParams.schedulerMode || 'random';
-        if (this.memory.schedulerMode === 'checkerboard') {
-            this.memory._buildCheckerboardCells();
-        }
     }
 
     newCellArray(initializer) {

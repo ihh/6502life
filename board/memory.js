@@ -54,8 +54,7 @@ class BoardMemory {
         // Scheduler mode: 'random' (default) or 'checkerboard'
         this.schedulerMode = 'random';
         this._checkerboardIndex = 0;
-        this._checkerboardPass = 0;
-        this._checkerboardCells = null;  // lazily built
+        this._checkerboardPairs = null;  // built at start of each pass
         this.sampleNextMove();
         this.resetUndoHistory();
         // Feature flags (set by controller from boardParams)
@@ -119,7 +118,7 @@ class BoardMemory {
                             mti: this.mt.mti,
                             schedulerMode: this.schedulerMode,
                             _checkerboardIndex: this._checkerboardIndex,
-                            _checkerboardPass: this._checkerboardPass } }
+                            _checkerboardPairs: this._checkerboardPairs } }
     set state(s) {
         this.storage = new Uint8Array(Array.isArray(s.storage) ? s.storage : new TextEncoder().encode(s.storage));
         this.iOrig = s.iOrig;
@@ -130,8 +129,7 @@ class BoardMemory {
         this.mt.mti = s.mti;
         if (s.schedulerMode !== undefined) this.schedulerMode = s.schedulerMode;
         if (s._checkerboardIndex !== undefined) this._checkerboardIndex = s._checkerboardIndex;
-        if (s._checkerboardPass !== undefined) this._checkerboardPass = s._checkerboardPass;
-        if (this.schedulerMode === 'checkerboard') this._buildCheckerboardCells();
+        if (s._checkerboardPairs !== undefined) this._checkerboardPairs = s._checkerboardPairs;
     }
 
     // Convert a neighborhood cell index (0-48) to a storage byte offset.
@@ -249,17 +247,6 @@ class BoardMemory {
         return (val & 3) | (this.unrotate(val >> 2) << 2);
     }
 
-    // Build the checkerboard cell lists for the current board size.
-    _buildCheckerboardCells() {
-        const B = this.B;
-        this._checkerboardCells = [[], []];  // [pass0 (even), pass1 (odd)]
-        for (let i = 0; i < B; i++) {
-            for (let j = 0; j < B; j++) {
-                this._checkerboardCells[(i + j) % 2].push([i, j]);
-            }
-        }
-    }
-
     // Sample the Poisson timer duration from the MT RNG.
     _sampleTimerAndRnd() {
         const rv2 = this.mt.int();  // log part of waiting time
@@ -277,26 +264,76 @@ class BoardMemory {
         this.nextRnd = rv4;
     }
 
+    // Build the pair list for one checkerboard pass.
+    // Random bits per pass:
+    //   1 bit: tiling direction (X=pair along i-axis, Y=pair along j-axis)
+    //   1 bit: i-axis translation offset (0 or 1)
+    //   1 bit: j-axis translation offset (0 or 1)
+    //   B²/2 bits: role assignment (which cell in each pair is active)
+    //
+    // The translation offsets ensure all possible cell pairings are
+    // covered over time (without them, certain pairs would never occur).
+    //
+    // Each pair: [activeI, activeJ, neighborI, neighborJ, orientation].
+    _buildCheckerboardPass() {
+        const B = this.B;
+        const rv = this.mt.int();
+        const tiling = rv & 1;         // 0=X, 1=Y
+        const offsetI = (rv >> 1) & 1; // translation in i-axis
+        const offsetJ = (rv >> 2) & 1; // translation in j-axis
+        const pairs = [];
+
+        if (tiling === 0) {
+            // X tiling: pair along i-axis
+            for (let k = 0; k < Math.floor(B / 2); k++) {
+                for (let j = 0; j < B; j++) {
+                    const roleBit = this.mt.int() & 1;
+                    const i0 = (2 * k + offsetI) % B;
+                    const i1 = (2 * k + 1 + offsetI) % B;
+                    const jj = (j + offsetJ) % B;
+                    if (roleBit === 0) {
+                        pairs.push([i0, jj, i1, jj, 1]); // east
+                    } else {
+                        pairs.push([i1, jj, i0, jj, 3]); // west
+                    }
+                }
+            }
+        } else {
+            // Y tiling: pair along j-axis
+            for (let i = 0; i < B; i++) {
+                for (let k = 0; k < Math.floor(B / 2); k++) {
+                    const roleBit = this.mt.int() & 1;
+                    const ii = (i + offsetI) % B;
+                    const j0 = (2 * k + offsetJ) % B;
+                    const j1 = (2 * k + 1 + offsetJ) % B;
+                    if (roleBit === 0) {
+                        pairs.push([ii, j0, ii, j1, 0]); // north
+                    } else {
+                        pairs.push([ii, j1, ii, j0, 2]); // south
+                    }
+                }
+            }
+        }
+
+        this._checkerboardPairs = pairs;
+        this._checkerboardIndex = 0;
+    }
+
     // randomly sample next move
     sampleNextMove() {
         if (this.schedulerMode === 'checkerboard') {
-            // Checkerboard mode: deterministic cell order, random orientation and timer
-            if (!this._checkerboardCells) this._buildCheckerboardCells();
-            const pass = this._checkerboardPass;
-            const idx = this._checkerboardIndex;
-            const cell = this._checkerboardCells[pass][idx];
-            this.iOrig = cell[0];
-            this.jOrig = cell[1];
-            // Still consume rv1 from MT to keep RNG consumption consistent
-            const rv1 = this.mt.int();
-            this.orientation = (rv1 >> 16) & 3;
-            this._sampleTimerAndRnd();
-            // Advance index
-            this._checkerboardIndex++;
-            if (this._checkerboardIndex >= this._checkerboardCells[pass].length) {
-                this._checkerboardIndex = 0;
-                this._checkerboardPass = 1 - this._checkerboardPass;
+            // Checkerboard mode: tiled pairs, guaranteed non-overlapping.
+            // At start of each pass, build pairs (1 tiling bit + B²/2 role bits).
+            // Then step through pairs, each getting its own timer.
+            if (!this._checkerboardPairs || this._checkerboardIndex >= this._checkerboardPairs.length) {
+                this._buildCheckerboardPass();
             }
+            const pair = this._checkerboardPairs[this._checkerboardIndex];
+            this.iOrig = pair[0];
+            this.jOrig = pair[1];
+            this.orientation = pair[4];
+            this._sampleTimerAndRnd();
+            this._checkerboardIndex++;
         } else {
             // Random mode: original behavior
             const rv1 = this.mt.int();  // new origin and orientation
