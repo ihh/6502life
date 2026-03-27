@@ -55,17 +55,23 @@
                 '  ' + sim.totalQuanta + 'q' +
                 '  ' + qps.toFixed(0) + 'q/s';
 
-            // Hash non-volatile parts of each cell (skip $F0-$FF registers, $100-$1FF stack)
-            // Use pages 0 ($00-$EF), 2 ($200-$2FF), 3 ($300-$3FF)
+            // Build grid with colored highlights for inspected cell pair
             let grid = '';
             for (let j = B - 1; j >= 0; j--) {
                 for (let i = 0; i < B; i++) {
-                    const ch = c.cellChars[i * B + j];
-                    grid += String.fromCharCode(ch);
+                    const ch = String.fromCharCode(c.cellChars[i * B + j]);
+                    const escaped = ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : ch === '&' ? '&amp;' : ch;
+                    if (i === inspectI && j === inspectJ) {
+                        grid += '<span style="color:#0ff">' + escaped + '</span>';
+                    } else if (i === inspectNI && j === inspectNJ) {
+                        grid += '<span style="color:#06a">' + escaped + '</span>';
+                    } else {
+                        grid += escaped;
+                    }
                 }
                 grid += '\n';
             }
-            gridEl.textContent = grid;
+            gridEl.innerHTML = grid;
         }
 
         async function tryGPU() {
@@ -137,6 +143,7 @@
 
         // Cell inspector: 4x2 pixels per byte, 32x32 bytes per cell, 2 cells
         let inspectI = 0, inspectJ = 0;
+        let inspectNI = 1, inspectNJ = 0; // neighbor
         const cvs = document.getElementById('cellview');
         const ctx2d = cvs.getContext('2d');
         const cellInfoEl = document.getElementById('cellinfo');
@@ -144,9 +151,9 @@
         function drawCellView() {
             if (!sim || !sim.getCellView) return; // GPU mode has no getCellView
             const B = sim.B;
-            // Active cell and its right neighbor (wrapping)
+            // Inspected cell pair (cyan + dark blue on grid)
             const v0 = sim.getCellView(inspectI, inspectJ);
-            const v1 = sim.getCellView((inspectI + 1) % B, inspectJ);
+            const v1 = sim.getCellView(inspectNI, inspectNJ);
 
             const img = ctx2d.createImageData(260, 68);
             const d = img.data;
@@ -196,8 +203,11 @@
             if (col >= 0 && col < sim.B && row >= 0 && row < sim.B) {
                 inspectI = col;
                 inspectJ = row;
-                cellInfoEl.textContent = 'Inspecting (' + inspectI + ',' + inspectJ + ')';
+                inspectNI = (col + 1) % sim.B;
+                inspectNJ = row;
+                cellInfoEl.textContent = '(' + inspectI + ',' + inspectJ + ') + (' + inspectNI + ',' + inspectNJ + ')';
                 drawCellView();
+                drawGrid();
             }
         };
 
@@ -215,12 +225,14 @@
                 if (!locked && result.cell) {
                     inspectI = result.cell.ci;
                     inspectJ = result.cell.cj;
+                    inspectNI = result.cell.ni;
+                    inspectNJ = result.cell.nj;
                     cellInfoEl.textContent = '(' + inspectI + ',' + inspectJ + ') -> (' +
-                        result.cell.ni + ',' + result.cell.nj + ')';
+                        inspectNI + ',' + inspectNJ + ')';
                 }
                 drawCellView();
-                if (result.done) {
-                    await drawGrid(); // update ASCII grid when quantum finishes
+                if (result.done || !locked) {
+                    await drawGrid(); // update highlights + content
                 }
                 await new Promise(r => setTimeout(r, 20)); // ~50fps
             }
