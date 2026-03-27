@@ -24,7 +24,7 @@
         <canvas id="grid"></canvas>
         <div>
             <canvas id="cv0" width="128" height="64" style="border:1px solid #066; image-rendering:pixelated; width:256px; height:128px; display:block;"></canvas>
-            <canvas id="cv1" width="128" height="64" style="border:1px solid #036; image-rendering:pixelated; width:256px; height:128px; display:block; margin-top:4px;"></canvas>
+            <canvas id="cv1" width="128" height="64" style="border:1px solid #660; image-rendering:pixelated; width:256px; height:128px; display:block; margin-top:4px;"></canvas>
             <div id="cellinfo"></div>
         </div>
     </div>
@@ -117,7 +117,7 @@
                     if (i===inspectI && j===inspectJ) {
                         gridCtx.fillStyle='#066'; gridCtx.fillRect(sx,sy,CHAR_W,CHAR_H); gridCtx.fillStyle='#0ff';
                     } else if (i===inspectNI && j===inspectNJ) {
-                        gridCtx.fillStyle='#024'; gridCtx.fillRect(sx,sy,CHAR_W,CHAR_H); gridCtx.fillStyle='#08f';
+                        gridCtx.fillStyle='#440'; gridCtx.fillRect(sx,sy,CHAR_W,CHAR_H); gridCtx.fillStyle='#ff0';
                     } else { gridCtx.fillStyle='#0f0'; }
                     gridCtx.fillText(ch, sx, sy);
                 }
