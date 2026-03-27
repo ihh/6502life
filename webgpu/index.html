@@ -81,6 +81,9 @@
         let framesSinceReset = 0;
         let fpsT0 = 0;
         let lastFps = 0;
+        let prevQuanta = 0;
+        let rateT0 = 0;
+        let lastRate = 0;
         const MEAN_CYC = 4096;
         const CHAR_W = 8, CHAR_H = 12;
 
@@ -98,7 +101,14 @@
             const c = lastCensus;
             const now = performance.now();
             const elapsed = (now - t0) / 1000;
-            const cps = (running && elapsed > 0.5) ? (totalQuanta * MEAN_CYC / (B * B) / elapsed) : 0;
+            const rateElapsed = (now - rateT0) / 1000;
+            if (rateElapsed > 0.5) {
+                const dq = totalQuanta - prevQuanta;
+                lastRate = dq * MEAN_CYC / (B * B) / rateElapsed;
+                prevQuanta = totalQuanta;
+                rateT0 = now;
+            }
+            const cps = running ? lastRate : 0;
             let r;
             if (cps >= 1e6) r = (cps/1e6).toFixed(1)+'M';
             else if (cps >= 1e3) r = (cps/1e3).toFixed(1)+'K';
