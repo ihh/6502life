@@ -37,6 +37,16 @@ export class BareSim {
         const shaderCode = await (await fetch('./cpu6502.wgsl')).text();
         const shaderModule = device.createShaderModule({ code: shaderCode });
 
+        // Check for compilation errors
+        const compilationInfo = await shaderModule.getCompilationInfo();
+        for (const msg of compilationInfo.messages) {
+            const prefix = msg.type === 'error' ? 'SHADER ERROR' : 'SHADER WARN';
+            console.error(`${prefix} [${msg.lineNum}:${msg.linePos}]: ${msg.message}`);
+            if (msg.type === 'error') {
+                throw new Error(`Shader compile error at line ${msg.lineNum}: ${msg.message}`);
+            }
+        }
+
         // Create pipeline
         const pipeline = device.createComputePipeline({
             layout: 'auto',

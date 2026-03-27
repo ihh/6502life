@@ -59,14 +59,16 @@ fn writeByte(addr: u32, val: u32) {
 // Read from 2KB local address space, mapped to board storage
 fn memRead(cellBase: u32, nbrBase: u32, addr: u32) -> u32 {
     let masked = addr & ADDR_MASK;
-    let storageAddr = select(cellBase + masked, nbrBase + (masked - M), masked < M);
+    // select(falseVal, trueVal, cond): WGSL order is opposite of C ternary
+    let storageAddr = select(nbrBase + (masked - M), cellBase + masked, masked < M);
     return readByte(storageAddr);
 }
 
 // Write to 2KB local address space
 fn memWrite(cellBase: u32, nbrBase: u32, addr: u32, val: u32) {
     let masked = addr & ADDR_MASK;
-    let storageAddr = select(cellBase + masked, nbrBase + (masked - M), masked < M);
+    // select(falseVal, trueVal, cond): WGSL order is opposite of C ternary
+    let storageAddr = select(nbrBase + (masked - M), cellBase + masked, masked < M);
     writeByte(storageAddr, val);
 }
 

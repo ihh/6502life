@@ -1,17 +1,19 @@
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="utf-8">
     <title>6502life WebGPU Bare Sim</title>
     <style>
         body { font-family: monospace; background: #111; color: #0f0; padding: 20px; }
         #log { white-space: pre; font-size: 14px; line-height: 1.4; }
         button { font-family: monospace; font-size: 16px; padding: 8px 16px;
-                 background: #030; color: #0f0; border: 1px solid #0f0; cursor: pointer; }
+                 background: #030; color: #0f0; border: 1px solid #0f0; cursor: pointer;
+                 margin-right: 8px; }
         button:hover { background: #050; }
     </style>
 </head>
 <body>
-    <h2>6502life Bare Sim — WebGPU</h2>
+    <h2>6502life Bare Sim -- WebGPU</h2>
     <button id="run">Run 100 rounds</button>
     <button id="run1k">Run 1000 rounds</button>
     <pre id="log">Initializing...</pre>
@@ -19,62 +21,114 @@
         import { BareSim } from './bare-sim.js';
 
         const log = document.getElementById('log');
-        function print(msg) { log.textContent += msg + '\n'; }
+        function print(msg) { log.textContent += msg + '\n'; log.scrollTop = log.scrollHeight; }
+
+        let sim = null;
+        let t0 = 0;
 
         async function main() {
             log.textContent = '';
 
+            print('Protocol: ' + location.protocol);
+            print('UA: ' + navigator.userAgent.slice(0, 80));
+            print('');
+
             if (!navigator.gpu) {
-                print('WebGPU not supported in this browser.');
-                print('Requires Safari 17+ (iOS 17+) or Chrome 113+.');
+                print('ERROR: navigator.gpu is undefined.');
+                print('');
+                print('To enable WebGPU on iOS Safari:');
+                print('  Settings > Safari > Advanced > Feature Flags > WebGPU');
+                print('');
+                print('Page must be served over HTTPS.');
                 return;
             }
+            print('navigator.gpu: OK');
 
-            print('Creating WebGPU device...');
-            let sim;
+            let adapter;
+            try {
+                adapter = await navigator.gpu.requestAdapter();
+            } catch (e) {
+                print('ERROR requesting adapter: ' + e.message);
+                return;
+            }
+            if (!adapter) {
+                print('ERROR: requestAdapter() returned null.');
+                print('Your GPU may not support WebGPU.');
+                return;
+            }
+            print('GPU adapter: ' + (adapter.name || 'unnamed'));
+
+            let device;
+            try {
+                device = await adapter.requestDevice();
+            } catch (e) {
+                print('ERROR requesting device: ' + e.message);
+                return;
+            }
+            print('GPU device: OK');
+
+            // Report any device errors
+            device.lost.then(info => print('DEVICE LOST: ' + info.reason + ' ' + info.message));
+
             try {
                 sim = await BareSim.create(16);
             } catch (e) {
-                print('Error: ' + e.message);
+                print('ERROR creating BareSim: ' + e.message);
+                print(e.stack || '');
                 return;
             }
-            print(`Board: ${sim.B}×${sim.B} (${sim.B * sim.B} cells)`);
+            print('Board: ' + sim.B + 'x' + sim.B + ' (' + (sim.B * sim.B) + ' cells)');
 
             // Plant BCC replicator at (0,0)
             sim.writeCell(0, 0, 0, [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8]);
             sim.writeCell(0, 0, 0xF9, [0x00, 0x00]); // saved PC = 0
             sim.writeCell(0, 0, 0xFF, [0xFF]);        // saved S
 
-            const c0 = await sim.census();
-            print(`Initial: ${c0.functional}/${c0.total} functional\n`);
+            try {
+                const c0 = await sim.census();
+                print('Initial: ' + c0.functional + '/' + c0.total + ' functional');
+            } catch (e) {
+                print('Census error: ' + e.message);
+            }
 
-            async function runRounds(n) {
-                const t0 = performance.now();
+            print('');
+            t0 = performance.now();
+
+            // Auto-run 10 rounds
+            print('Auto-running 10 rounds...');
+            await runRounds(10);
+            print('');
+            print('Ready. Click buttons to continue.');
+        }
+
+        async function runRounds(n) {
+            try {
+                const rt0 = performance.now();
                 for (let i = 0; i < n; i++) {
                     await sim.runPass();
                     await sim.runPass();
                 }
-                const dt = (performance.now() - t0) / 1000;
+                const dt = (performance.now() - rt0) / 1000;
                 const c = await sim.census();
-                const qps = sim.totalQuanta / (performance.now() / 1000 - window._t0 / 1000);
-                print(`${String(n).padStart(5)} rounds (${sim.totalQuanta} quanta): ` +
-                      `${c.functional}/${c.total} fn, ${c.loopVariants} variants ` +
-                      `[${dt.toFixed(1)}s, ${qps.toFixed(0)} q/s]`);
+                const elapsed = (performance.now() - t0) / 1000;
+                const qps = elapsed > 0 ? (sim.totalQuanta / elapsed) : 0;
+                print(
+                    n + ' rounds (' + sim.totalQuanta + ' q): ' +
+                    c.functional + '/' + c.total + ' fn, ' +
+                    c.loopVariants + ' var [' +
+                    dt.toFixed(2) + 's, ' + qps.toFixed(0) + ' q/s]'
+                );
                 for (const [sig, cnt] of c.topLoops) {
-                    print(`  ${sig} ×${cnt}`);
+                    print('  ' + sig + ' x' + cnt);
                 }
+            } catch (e) {
+                print('ERROR in runRounds: ' + e.message);
+                print(e.stack || '');
             }
-
-            window._t0 = performance.now();
-
-            document.getElementById('run').onclick = () => runRounds(100);
-            document.getElementById('run1k').onclick = () => runRounds(1000);
-
-            print('Ready. Click "Run" to start.\n');
-
-            // Auto-run a small test
-            await runRounds(10);
         }
+
+        document.getElementById('run').onclick = () => runRounds(100);
+        document.getElementById('run1k').onclick = () => runRounds(1000);
 
         main();
     </script>
