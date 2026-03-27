@@ -51,10 +51,13 @@
                 '  ' + sim.totalQuanta + 'q' +
                 '  ' + qps.toFixed(0) + 'q/s';
 
+            // Hash non-volatile parts of each cell (skip $F0-$FF registers, $100-$1FF stack)
+            // Use pages 0 ($00-$EF), 2 ($200-$2FF), 3 ($300-$3FF)
             let grid = '';
             for (let j = B - 1; j >= 0; j--) {
                 for (let i = 0; i < B; i++) {
-                    grid += c.cellMap[i * B + j] ? '#' : '.';
+                    const ch = c.cellChars[i * B + j];
+                    grid += String.fromCharCode(ch);
                 }
                 grid += '\n';
             }
@@ -67,7 +70,7 @@
                 const adapter = await navigator.gpu.requestAdapter();
                 if (!adapter) return null;
                 const { BareSim } = await import('./bare-sim.js');
-                const s = await BareSim.create(16);
+                const s = await BareSim.create(32);
                 return s;
             } catch (e) {
                 print('GPU failed: ' + e.message);
@@ -77,7 +80,7 @@
 
         async function useCPU() {
             const { BareSimCPU } = await import('./bare-sim-cpu.js');
-            return BareSimCPU.create(16);
+            return BareSimCPU.create(32);
         }
 
         async function main() {

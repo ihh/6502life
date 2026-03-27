@@ -222,6 +222,7 @@ export class BareSimCPU {
         const B = this.B, M = this.M;
         let functional = 0;
         const loopSigs = {}, cellMap = new Uint8Array(B * B);
+        const cellChars = new Uint8Array(B * B);
         for (let ci = 0; ci < B * B; ci++) {
             const base = ci * M, c = this.storage;
             if (c[base] === 0xB5 && c[base+2] === 0x9D && c[base+3] === 0x00 &&
@@ -232,12 +233,18 @@ export class BareSimCPU {
                 const sig = Array.from(c.slice(base, base+8)).map(b => b.toString(16).padStart(2,'0')).join('');
                 loopSigs[sig] = (loopSigs[sig] || 0) + 1;
             }
+            // Hash non-volatile: page 0 ($00-$EF), page 2 ($200-$2FF), page 3 ($300-$3FF)
+            // Skip $F0-$FF (registers) and $100-$1FF (stack)
+            let h = 5381;
+            for (let k = 0; k < 0xF0; k++) h = ((h * 33) ^ c[base + k]) >>> 0;
+            for (let k = 0x200; k < 0x400; k++) h = ((h * 33) ^ c[base + k]) >>> 0;
+            cellChars[ci] = 33 + (h % 94); // ASCII 33-126
         }
         return {
             functional, total: B * B,
             loopVariants: Object.keys(loopSigs).length,
             topLoops: Object.entries(loopSigs).sort((a, b) => b[1] - a[1]).slice(0, 5),
-            cellMap,
+            cellMap, cellChars,
         };
     }
 

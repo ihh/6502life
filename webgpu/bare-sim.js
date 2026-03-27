@@ -201,6 +201,7 @@ export class BareSim {
         let functional = 0;
         const loopSigs = {};
         const cellMap = new Uint8Array(this.B * this.B);
+        const cellChars = new Uint8Array(this.B * this.B);
         for (let ci = 0; ci < this.B * this.B; ci++) {
             const base = ci * this.M;
             const c = storage;
@@ -214,6 +215,11 @@ export class BareSim {
                     .map(b => b.toString(16).padStart(2, '0')).join('');
                 loopSigs[sig] = (loopSigs[sig] || 0) + 1;
             }
+            // Hash non-volatile: page 0 ($00-$EF), page 2 ($200-$2FF), page 3 ($300-$3FF)
+            let h = 5381;
+            for (let k = 0; k < 0xF0; k++) h = ((h * 33) ^ c[base + k]) >>> 0;
+            for (let k = 0x200; k < 0x400; k++) h = ((h * 33) ^ c[base + k]) >>> 0;
+            cellChars[ci] = 33 + (h % 94);
         }
 
         readBuffer.unmap();
@@ -224,7 +230,7 @@ export class BareSim {
             total: this.B * this.B,
             loopVariants: Object.keys(loopSigs).length,
             topLoops: Object.entries(loopSigs).sort((a, b) => b[1] - a[1]).slice(0, 5),
-            cellMap,
+            cellMap, cellChars,
         };
     }
 
