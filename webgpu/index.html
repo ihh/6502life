@@ -130,19 +130,26 @@
         async function autoRun() {
             autoRunning = !autoRunning;
             document.getElementById('auto').textContent = autoRunning ? 'Stop' : 'Auto';
+            let frames = 0;
             while (autoRunning) {
                 const n = gpuMode ? 50 : 5;
                 for (let i = 0; i < n; i++) {
                     await sim.runPass();
                     await sim.runPass();
                 }
+                frames++;
                 drawCellView();
+                // Redraw grid every 10 frames (~300ms) so chars update
+                // but not every frame (to keep click targets stable most of the time)
+                if (frames % 10 === 0) {
+                    await drawGrid();
+                }
                 statsEl.textContent =
                     sim.totalQuanta + 'q  ' +
                     (sim.totalQuanta / ((performance.now() - t0) / 1000)).toFixed(0) + 'q/s';
-                await new Promise(r => setTimeout(r, 30)); // yield to UI for clicks
+                await new Promise(r => setTimeout(r, 30));
             }
-            await drawGrid(); // full grid update when stopped
+            await drawGrid();
             drawCellView();
         }
 
