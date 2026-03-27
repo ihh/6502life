@@ -7,7 +7,7 @@
     <style>
         body { font-family: monospace; background: #111; color: #0f0; padding: 12px; }
         #log { white-space: pre; font-size: 11px; line-height: 1.2; max-height: 150px; overflow-y: auto; }
-        #grid { font-size: 10px; line-height: 1.0; letter-spacing: 2px; margin: 8px 0; }
+        #grid { margin: 8px 0; cursor: crosshair; }
         #stats { font-size: 14px; margin: 8px 0; }
         #mode { font-size: 12px; color: #0a0; margin-bottom: 8px; }
         button { font-family: monospace; font-size: 14px; padding: 6px 12px;
@@ -19,7 +19,7 @@
     <h3>6502life Bare Sim</h3>
     <div id="mode"></div>
     <div id="stats"></div>
-    <pre id="grid"></pre>
+    <canvas id="grid"></canvas>
     <div>
         <button id="run10">10</button>
         <button id="run100">100</button>
@@ -41,8 +41,25 @@
         let autoRunning = false;
         let gpuMode = false;
 
+        // Grid canvas setup
+        const gridCanvas = document.getElementById('grid');
+        const gridCtx = gridCanvas.getContext('2d');
+        const CHAR_W = 8, CHAR_H = 12;
+        let lastCensus = null;
+
+        function initGridCanvas() {
+            const B = sim.B;
+            gridCanvas.width = B * CHAR_W;
+            gridCanvas.height = B * CHAR_H;
+            gridCanvas.style.width = (B * CHAR_W) + 'px';
+            gridCanvas.style.height = (B * CHAR_H) + 'px';
+            gridCtx.font = '10px monospace';
+            gridCtx.textBaseline = 'top';
+        }
+
         async function drawGrid() {
-            const c = await sim.census();
+            lastCensus = await sim.census();
+            const c = lastCensus;
             const B = sim.B;
             const elapsed = (performance.now() - t0) / 1000;
             const qps = elapsed > 0 ? (sim.totalQuanta / elapsed) : 0;
@@ -53,20 +70,22 @@
                 '  ' + sim.totalQuanta + 'q' +
                 '  ' + qps.toFixed(0) + 'q/s';
 
-            // Build grid: each char is a clickable span with data attributes
-            let grid = '';
+            gridCtx.fillStyle = '#111';
+            gridCtx.fillRect(0, 0, gridCanvas.width, gridCanvas.height);
+
             for (let j = B - 1; j >= 0; j--) {
                 for (let i = 0; i < B; i++) {
                     const ch = String.fromCharCode(c.cellChars[i * B + j]);
-                    const escaped = ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : ch === '&' ? '&amp;' : ch;
-                    let color = '#0f0';
-                    if (i === inspectI && j === inspectJ) color = '#0ff';
-                    else if (i === inspectNI && j === inspectNJ) color = '#06a';
-                    grid += '<span data-i="' + i + '" data-j="' + j + '" style="color:' + color + '">' + escaped + '</span>';
+                    if (i === inspectI && j === inspectJ) {
+                        gridCtx.fillStyle = '#0ff';
+                    } else if (i === inspectNI && j === inspectNJ) {
+                        gridCtx.fillStyle = '#06a';
+                    } else {
+                        gridCtx.fillStyle = '#0f0';
+                    }
+                    gridCtx.fillText(ch, i * CHAR_W, (B - 1 - j) * CHAR_H);
                 }
-                grid += '\n';
             }
-            gridEl.innerHTML = grid;
         }
 
         async function tryGPU() {
@@ -110,6 +129,7 @@
             sim.writeCell(0, 0, 0xFF, [0xFF]);
 
             print(sim.B + 'x' + sim.B + ' board');
+            initGridCanvas();
             t0 = performance.now();
             await drawGrid();
             print('Ready.');
@@ -205,12 +225,15 @@
             ctx2d.putImageData(img, 0, 0);
         }
 
-        // Click on grid: read data-i, data-j from the clicked span
-        gridEl.onclick = (e) => {
-            const span = e.target.closest('span[data-i]');
-            if (!span) return;
-            const col = parseInt(span.dataset.i);
-            const row = parseInt(span.dataset.j);
+        // Click on grid canvas: compute cell from pixel coords
+        gridCanvas.onclick = (e) => {
+            const rect = gridCanvas.getBoundingClientRect();
+            const scaleX = gridCanvas.width / rect.width;
+            const scaleY = gridCanvas.height / rect.height;
+            const px = (e.clientX - rect.left) * scaleX;
+            const py = (e.clientY - rect.top) * scaleY;
+            const col = Math.floor(px / CHAR_W);
+            const row = sim.B - 1 - Math.floor(py / CHAR_H);
             if (col >= 0 && col < sim.B && row >= 0 && row < sim.B) {
                 inspectI = col;
                 inspectJ = row;
