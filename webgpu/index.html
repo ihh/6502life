@@ -27,11 +27,12 @@
     <div style="margin-top:8px;">
         <button id="toggle">Start</button>
         <select id="speed">
-            <option value="1">1 round/frame (slow)</option>
-            <option value="5" selected>5 rounds/frame</option>
-            <option value="25">25 rounds/frame</option>
-            <option value="100">100 rounds/frame (fast)</option>
-            <option value="500">500 rounds/frame (blast)</option>
+            <option value="0.5">~500 cyc/cell/s</option>
+            <option value="1">~1K cyc/cell/s</option>
+            <option value="2">~2K cyc/cell/s</option>
+            <option value="4" selected>~5K cyc/cell/s</option>
+            <option value="8">~10K cyc/cell/s</option>
+            <option value="15">max speed</option>
         </select>
     </div>
     <pre id="log"></pre>
@@ -53,6 +54,8 @@
         let gpuMode = false;
         let inspectI = 0, inspectJ = 0;
         let inspectNI = 1, inspectNJ = 0;
+        // Mean cycles per quantum (~4096)
+        const MEAN_CYCLES_PER_QUANTUM = 4096;
 
         const CHAR_W = 8, CHAR_H = 12;
 
@@ -70,13 +73,19 @@
             const c = await sim.census();
             const B = sim.B;
             const elapsed = (performance.now() - t0) / 1000;
-            const qps = elapsed > 0 ? (sim.totalQuanta / elapsed) : 0;
+            // Each quantum gives one cell ~4096 cycles on average
+            const totalCellCycles = sim.totalQuanta * MEAN_CYCLES_PER_QUANTUM;
+            const cycPerCellPerSec = elapsed > 0 ? (totalCellCycles / (B * B) / elapsed) : 0;
+
+            let rateStr;
+            if (cycPerCellPerSec >= 1e6) rateStr = (cycPerCellPerSec / 1e6).toFixed(1) + 'M';
+            else if (cycPerCellPerSec >= 1e3) rateStr = (cycPerCellPerSec / 1e3).toFixed(1) + 'K';
+            else rateStr = cycPerCellPerSec.toFixed(0);
 
             statsEl.textContent =
                 c.functional + '/' + c.total + ' alive' +
                 '  var=' + c.loopVariants +
-                '  ' + sim.totalQuanta + 'q' +
-                '  ' + qps.toFixed(0) + 'q/s';
+                '  ' + rateStr + ' cyc/cell/s';
 
             gridCtx.fillStyle = '#111';
             gridCtx.fillRect(0, 0, gridCanvas.width, gridCanvas.height);
@@ -134,7 +143,6 @@
             ctx2d.putImageData(img, 0, 0);
         }
 
-        // Click grid to select cell
         gridCanvas.onclick = (e) => {
             const rect = gridCanvas.getBoundingClientRect();
             const scaleX = gridCanvas.width / rect.width;
@@ -181,48 +189,54 @@
             if (sim) {
                 gpuMode = true;
                 modeEl.textContent = '[GPU] WebGPU compute shader';
-                print('GPU OK');
             } else {
                 sim = await useCPU();
                 gpuMode = false;
                 modeEl.textContent = '[CPU] JavaScript fallback';
-                print('Using CPU fallback');
             }
 
             sim.writeCell(0, 0, 0, [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8]);
             sim.writeCell(0, 0, 0xF9, [0x00, 0x00]);
             sim.writeCell(0, 0, 0xFF, [0xFF]);
 
-            print(sim.B + 'x' + sim.B + ' board');
+            print(sim.B + 'x' + sim.B + ' board. Click grid to inspect.');
             initGridCanvas();
             t0 = performance.now();
             await drawGrid();
             drawCellView();
-            print('Ready. Click Start.');
         }
 
-        // Main loop driven by requestAnimationFrame
-        function loop() {
+        // Main loop: time-budgeted to keep UI responsive
+        async function loop() {
             if (!running) return;
-            const rounds = parseInt(document.getElementById('speed').value) || 5;
 
-            // Run rounds synchronously (no await in rAF callback)
-            const work = async () => {
-                for (let i = 0; i < rounds; i++) {
-                    await sim.runPass();
-                    await sim.runPass();
-                }
-                await drawGrid();
-                drawCellView();
-                if (running) requestAnimationFrame(loop);
-            };
-            work();
+            const budgetMs = parseFloat(document.getElementById('speed').value) || 4;
+            const deadline = performance.now() + budgetMs;
+
+            // Run passes until time budget used
+            let passes = 0;
+            while (performance.now() < deadline) {
+                await sim.runPass();
+                await sim.runPass();
+                passes++;
+                // Always do at least 1, but yield after budget
+                if (passes >= 1 && performance.now() >= deadline) break;
+            }
+
+            await drawGrid();
+            drawCellView();
+
+            if (running) requestAnimationFrame(loop);
         }
 
         document.getElementById('toggle').onclick = () => {
             running = !running;
             document.getElementById('toggle').textContent = running ? 'Stop' : 'Start';
-            if (running) requestAnimationFrame(loop);
+            if (running) {
+                t0 = performance.now();
+                sim.totalQuanta = 0;
+                requestAnimationFrame(loop);
+            }
         };
 
         main();
