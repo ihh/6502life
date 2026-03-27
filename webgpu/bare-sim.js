@@ -223,6 +223,9 @@ export class BareSim {
         }
 
         readBuffer.unmap();
+        // Keep a CPU-side snapshot for getCellView
+        this._storageSnapshot = new Uint8Array(storage);
+
         readBuffer.destroy();
 
         return {
@@ -231,6 +234,16 @@ export class BareSim {
             loopVariants: Object.keys(loopSigs).length,
             topLoops: Object.entries(loopSigs).sort((a, b) => b[1] - a[1]).slice(0, 5),
             cellMap, cellChars,
+        };
+    }
+
+    getCellView(i, j) {
+        if (!this._storageSnapshot) return null;
+        const base = (i * this.B + j) * this.M;
+        return {
+            data: this._storageSnapshot.slice(base, base + this.M),
+            writes: new Float32Array(this.M),  // no tracking in GPU mode
+            fetches: new Float32Array(this.M),
         };
     }
 
