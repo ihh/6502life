@@ -28,45 +28,27 @@ def _run_pass(storage, B, M, pair_indices, budgets):
     Returns:
         storage: updated uint8[B*B*M]
     """
-    N = pair_indices.shape[0]
+    offsets = jnp.arange(M, dtype=jnp.int32)  # [0..1023]
 
-    # Gather: build [N, 2048] memory array from storage
-    # For each pair, cell is at pair_indices[i,0]..+M, neighbor at pair_indices[i,1]..+M
-    def gather_one(idx_pair):
-        cell_base = idx_pair[0]
-        nbr_base = idx_pair[1]
-        cell_mem = jax.lax.dynamic_slice(storage, (cell_base,), (M,))
-        nbr_mem = jax.lax.dynamic_slice(storage, (nbr_base,), (M,))
-        return jnp.concatenate([cell_mem, nbr_mem])
-
-    mem_batch = jax.vmap(gather_one)(pair_indices)  # [N, 2048]
+    # Vectorized gather: build [N, 2048] from storage using fancy indexing
+    cell_idx = pair_indices[:, 0:1] + offsets[None, :]  # [N, M]
+    nbr_idx = pair_indices[:, 1:2] + offsets[None, :]   # [N, M]
+    cell_mem = storage[cell_idx]   # [N, M]
+    nbr_mem = storage[nbr_idx]     # [N, M]
+    mem_batch = jnp.concatenate([cell_mem, nbr_mem], axis=1)  # [N, 2048]
 
     # Run all quanta in parallel
     result_batch, _, _ = jax.vmap(run_one_quantum)(mem_batch, budgets)  # [N, 2048]
 
-    # Scatter: write results back to storage
-    def scatter_one(storage, idx_and_result):
-        idx_pair, result = idx_and_result[:2], idx_and_result[2:]  # unpack
-        cell_base = idx_pair[0]
-        nbr_base = idx_pair[1]
-        cell_result = result[:M]
-        nbr_result = result[M:]
-        storage = jax.lax.dynamic_update_slice(storage, cell_result, (cell_base,))
-        storage = jax.lax.dynamic_update_slice(storage, nbr_result, (nbr_base,))
-        return storage
-
-    # Pack indices and results together for scan
-    # Use lax.fori_loop since scatter is sequential (each write depends on previous)
+    # Scatter: write results back via fori_loop (cache-friendly on CPU)
+    # On GPU, replace with vectorized .at[].set() for bandwidth
     def scatter_body(i, storage):
         cell_base = pair_indices[i, 0]
         nbr_base = pair_indices[i, 1]
-        cell_result = result_batch[i, :M]
-        nbr_result = result_batch[i, M:]
-        storage = jax.lax.dynamic_update_slice(storage, cell_result, (cell_base,))
-        storage = jax.lax.dynamic_update_slice(storage, nbr_result, (nbr_base,))
+        storage = jax.lax.dynamic_update_slice(storage, result_batch[i, :M], (cell_base,))
+        storage = jax.lax.dynamic_update_slice(storage, result_batch[i, M:], (nbr_base,))
         return storage
-
-    storage = jax.lax.fori_loop(0, N, scatter_body, storage)
+    storage = jax.lax.fori_loop(0, pair_indices.shape[0], scatter_body, storage)
 
     return storage
 
