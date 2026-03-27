@@ -412,8 +412,8 @@ export class BareSimCPU {
             this.totalQuanta++;
         }
 
-        // Decay all glows
-        const decay = 0.92;
+        // Decay all glows (slow decay = longer trails)
+        const decay = 0.97;
         for (let k = 0; k < this.writeGlow.length; k++) {
             this.writeGlow[k] *= decay;
             this.fetchGlow[k] *= decay;

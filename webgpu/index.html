@@ -152,39 +152,26 @@
             const d = img.data;
 
             function drawCell(view, xOff, yOff) {
-                const maxW = 1, maxF = 1;
-                // Find max for normalization
-                let mw = 0.01, mf = 0.01;
-                for (let k = 0; k < 1024; k++) {
-                    if (view.writes[k] > mw) mw = view.writes[k];
-                    if (view.fetches[k] > mf) mf = view.fetches[k];
-                }
                 for (let row = 0; row < 32; row++) {
                     for (let col = 0; col < 32; col++) {
                         const byteIdx = row * 32 + col;
                         const val = view.data[byteIdx];
-                        // Gamma-curved intensity: sqrt for punchier glow
-                        const wRaw = Math.min(1, view.writes[byteIdx] / mw);
-                        const fRaw = Math.min(1, view.fetches[byteIdx] / mf);
-                        const wI = Math.pow(wRaw, 0.4);  // strong gamma curve
-                        const fI = Math.pow(fRaw, 0.4);
-                        // Green: constant base + byte value
-                        const g = 20 + (val > 0 ? 30 : 0);
-                        // Red: write activity (bright, saturated)
-                        const r = Math.floor(wI * 255);
-                        // Blue: fetch activity (bright, saturated)
-                        const b = Math.floor(fI * 255);
+                        // Absolute glow: clamp at 1.0, gamma 0.3 for punch
+                        const wI = Math.pow(Math.min(1, view.writes[byteIdx]), 0.3);
+                        const fI = Math.pow(Math.min(1, view.fetches[byteIdx]), 0.3);
+                        // Base green from byte content
+                        const hasData = val > 0 ? 1 : 0;
                         // Draw 4x2 block
                         for (let dy = 0; dy < 2; dy++) {
                             for (let dx = 0; dx < 4; dx++) {
                                 const px = xOff + col * 4 + dx;
                                 const py = yOff + row * 2 + dy;
                                 const bit = (val >> (7 - (dy * 4 + dx))) & 1;
-                                const brightness = bit ? 1.0 : 0.15;
+                                const br = bit ? 1.0 : 0.2;
                                 const pi = (py * 260 + px) * 4;
-                                d[pi] = Math.min(255, Math.floor((r + 20) * brightness));
-                                d[pi+1] = Math.min(255, Math.floor((g + r * 0.1 + b * 0.1) * brightness));
-                                d[pi+2] = Math.min(255, Math.floor((b + 20) * brightness));
+                                d[pi]   = Math.min(255, Math.floor((wI * 255 + hasData * 15) * br));
+                                d[pi+1] = Math.min(255, Math.floor((hasData * 40 + wI * 30 + fI * 30) * br));
+                                d[pi+2] = Math.min(255, Math.floor((fI * 255 + hasData * 15) * br));
                                 d[pi+3] = 255;
                             }
                         }
@@ -223,7 +210,7 @@
             if (!sim.writeGlow) sim.initSlowMode();
 
             while (slowRunning) {
-                const result = sim.slowStep(50); // ~50 cycles per frame
+                const result = sim.slowStep(15); // ~15 cycles per frame = ~1 instruction
                 const locked = document.getElementById('lockview').checked;
                 if (!locked && result.cell) {
                     inspectI = result.cell.ci;
