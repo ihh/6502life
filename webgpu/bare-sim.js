@@ -193,6 +193,7 @@ export class BareSim {
 
         let functional = 0;
         const loopSigs = {};
+        const cellMap = new Uint8Array(this.B * this.B);
         for (let ci = 0; ci < this.B * this.B; ci++) {
             const base = ci * this.M;
             const c = storage;
@@ -201,6 +202,7 @@ export class BareSim {
                 (c[base + 5] === 0xE8 || c[base + 5] === 0xCA) &&
                 [0xD0, 0x90, 0x50, 0x10, 0x30, 0xB0, 0x70].includes(c[base + 6])) {
                 functional++;
+                cellMap[ci] = 1;
                 const sig = Array.from(storage.slice(base, base + 8))
                     .map(b => b.toString(16).padStart(2, '0')).join('');
                 loopSigs[sig] = (loopSigs[sig] || 0) + 1;
@@ -215,6 +217,7 @@ export class BareSim {
             total: this.B * this.B,
             loopVariants: Object.keys(loopSigs).length,
             topLoops: Object.entries(loopSigs).sort((a, b) => b[1] - a[1]).slice(0, 5),
+            cellMap,
         };
     }
 
