@@ -71,22 +71,32 @@
                 return;
             }
 
-            print('Initializing...');
+            print('Creating device...');
             try {
                 sim = await BareSim.create(16);
+                print('Device OK');
             } catch (e) {
                 print('ERROR: ' + e.message);
+                print(e.stack || '');
                 return;
             }
 
             // Plant BCC replicator
+            print('Planting replicator...');
             sim.writeCell(0, 0, 0, [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8]);
             sim.writeCell(0, 0, 0xF9, [0x00, 0x00]);
             sim.writeCell(0, 0, 0xFF, [0xFF]);
 
             print('Board: ' + sim.B + 'x' + sim.B);
             t0 = performance.now();
-            await drawGrid();
+
+            try {
+                await drawGrid();
+                print('Ready.');
+            } catch (e) {
+                print('drawGrid ERROR: ' + e.message);
+                print(e.stack || '');
+            }
         }
 
         async function runRounds(n) {
