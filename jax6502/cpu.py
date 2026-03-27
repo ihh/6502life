@@ -37,8 +37,8 @@ from .opcode_table import (
 # JAX-constant opcode table
 _OPC = jnp.array(OPCODE_TABLE, dtype=jnp.int32)
 
-# Address mask — 0x7FF for 2KB (production), 0xFFFF for 64KB (testing)
-ADDR_MASK = 0xFFFF  # TODO: make configurable; use 0x7FF for 6502life
+# Address mask — 0x7FF for 2KB bare sim
+ADDR_MASK = 0x7FF
 
 # P flag bits: NV-BDIZC
 F_C = 0x01; F_Z = 0x02; F_I = 0x04; F_D = 0x08
