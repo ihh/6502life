@@ -266,6 +266,7 @@ class BoardController {
             hasLookupTables: true,   // geometry ROM at $E000-$EE3F
             hasOrientedRegisters: true, // $F0-$F9 auto-rotate top 6 bits
             hasRNG: true,            // 4 random bytes at $FC-$FF each quantum
+            hasRegisterSave: true,   // save/restore registers to $F9-$FF between quanta
             neighborhoodSize: 7,    // neighborhood dimension: 2, 3, 5, or 7
             schedulerMode: 'random', // 'random' or 'checkerboard'
             decayRate: 0,            // random bytes zeroed per quantum (0 = off)
@@ -399,7 +400,7 @@ class BoardController {
             // Copy scalar params
             for (const key of ['pBitNoise', 'pBitNoiseZero', 'hasCompass',
                                'hasAtomicWrites', 'hasLookupTables', 'hasOrientedRegisters', 'hasRNG',
-                               'neighborhoodSize', 'schedulerMode',
+                               'neighborhoodSize', 'schedulerMode', 'hasRegisterSave',
                                'decayRate', 'wordDecayRate', 'pWordDecayBitNoise', 'pWordDecayBitNoiseZero',
                                'diversityBonus', 'similarityCopyNoise']) {
                 if (incoming[key] !== undefined) this.boardParams[key] = incoming[key];
@@ -1267,6 +1268,7 @@ class BoardController {
     }
 
     writeRegisters() {
+        if (!this.boardParams.hasRegisterSave) return;
         // Write directly to storage, bypassing address translation.
         // Register offsets are in the origin cell (neighborhood cell 0).
         const base = this.memory.neighborCellStorageBase(0);
@@ -1281,6 +1283,16 @@ class BoardController {
     }
 
     readRegisters() {
+        if (!this.boardParams.hasRegisterSave) {
+            // Cold boot: PC=0, all registers cleared, S=0xFF
+            this.sfotty.PC = 0;
+            this.sfotty.P = 0x30; // U + B set
+            this.sfotty.A = 0;
+            this.sfotty.X = 0;
+            this.sfotty.Y = 0;
+            this.sfotty.S = 0xFF;
+            return;
+        }
         const base = this.memory.neighborCellStorageBase(0);
         const s = this.memory.storage;
         this.sfotty.PC = (s[base + this.regAddrPCHI] << 8) | s[base + this.regAddrPCLO];

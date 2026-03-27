@@ -17,9 +17,14 @@ function nzFlags(val, p) {
     return (p & ~(F_N | F_Z)) | (val & F_N) | z;
 }
 
-function runQuantum(mem, budget) {
-    let pc = (mem[0xF9] << 8) | mem[0xFA];
-    let a = mem[0xFC], x = mem[0xFD], y = mem[0xFE], s = mem[0xFF], p = mem[0xFB];
+function runQuantum(mem, budget, hasRegisterSave = true) {
+    let pc, a, x, y, s, p;
+    if (hasRegisterSave) {
+        pc = (mem[0xF9] << 8) | mem[0xFA];
+        a = mem[0xFC]; x = mem[0xFD]; y = mem[0xFE]; s = mem[0xFF]; p = mem[0xFB];
+    } else {
+        pc = 0; a = 0; x = 0; y = 0; s = 0xFF; p = 0x30;
+    }
     let cycles = 0;
 
     for (let step = 0; step < MAX_STEPS; step++) {
@@ -155,22 +160,25 @@ function runQuantum(mem, budget) {
         p = (p | F_U | F_B) & 0xFF;
     }
 
-    // Save registers
-    mem[0xF9] = (pc >> 8) & 0xFF;
-    mem[0xFA] = pc & 0xFF;
-    mem[0xFB] = p; mem[0xFC] = a; mem[0xFD] = x; mem[0xFE] = y; mem[0xFF] = s;
+    // Save registers (only if enabled)
+    if (hasRegisterSave) {
+        mem[0xF9] = (pc >> 8) & 0xFF;
+        mem[0xFA] = pc & 0xFF;
+        mem[0xFB] = p; mem[0xFC] = a; mem[0xFD] = x; mem[0xFE] = y; mem[0xFF] = s;
+    }
 }
 
 export class BareSimCPU {
-    constructor(B = 16, M = 1024) {
+    constructor(B = 16, M = 1024, opts = {}) {
         this.B = B;
         this.M = M;
         this.storage = new Uint8Array(B * B * M);
         this.totalQuanta = 0;
+        this.hasRegisterSave = opts.hasRegisterSave !== false;
     }
 
-    static async create(B = 16) {
-        return new BareSimCPU(B);
+    static async create(B = 16, opts = {}) {
+        return new BareSimCPU(B, 1024, opts);
     }
 
     writeCell(i, j, offset, data) {
@@ -210,7 +218,7 @@ export class BareSimCPU {
             while (hl < 32 && (r & 1)) { r >>= 1; hl++; }
             const budget = Math.max(1, Math.ceil(16 * 177 * (hl + Math.random())));
 
-            runQuantum(mem, budget);
+            runQuantum(mem, budget, this.hasRegisterSave);
 
             this.storage.set(mem.subarray(0, M), cb);
             this.storage.set(mem.subarray(M, 2 * M), nb);

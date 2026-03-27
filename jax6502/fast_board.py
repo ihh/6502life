@@ -26,15 +26,23 @@ REG_S    = 0xFF
 MAX_STEPS = 350  # instructions per quantum (covers ~95% of quanta)
 
 
-def _run_one_quantum(memory, cycle_budget):
+def _run_one_quantum(memory, cycle_budget, has_register_save=True):
     """Run one cell for one quantum. Pure JAX, no host calls."""
-    # Read registers
-    pc = (memory[REG_PCHI].astype(jnp.int32) << 8) | memory[REG_PCLO].astype(jnp.int32)
-    a = memory[REG_A].astype(jnp.int32)
-    x = memory[REG_X].astype(jnp.int32)
-    y = memory[REG_Y].astype(jnp.int32)
-    s = memory[REG_S].astype(jnp.int32)
-    p = memory[REG_P].astype(jnp.int32)
+    if has_register_save:
+        pc = (memory[REG_PCHI].astype(jnp.int32) << 8) | memory[REG_PCLO].astype(jnp.int32)
+        a = memory[REG_A].astype(jnp.int32)
+        x = memory[REG_X].astype(jnp.int32)
+        y = memory[REG_Y].astype(jnp.int32)
+        s = memory[REG_S].astype(jnp.int32)
+        p = memory[REG_P].astype(jnp.int32)
+    else:
+        # Cold boot: PC=0, clean registers
+        pc = jnp.int32(0)
+        a = jnp.int32(0)
+        x = jnp.int32(0)
+        y = jnp.int32(0)
+        s = jnp.int32(0xFF)
+        p = jnp.int32(0x30)
 
     def scan_fn(carry, _):
         pc, a, x, y, s, p, mem, cyc_used, brk_op, done = carry
@@ -66,11 +74,12 @@ def _run_one_quantum(memory, cycle_budget):
     (pc_f, a_f, x_f, y_f, s_f, p_f, mem_f, _, _, _), _ = \
         jax.lax.scan(scan_fn, init, None, length=MAX_STEPS)
 
-    # Save registers
-    mem_f = mem_f.at[REG_PCHI].set(((pc_f >> 8) & 0xFF).astype(jnp.uint8))
-    mem_f = mem_f.at[REG_PCLO].set((pc_f & 0xFF).astype(jnp.uint8))
-    mem_f = mem_f.at[REG_P].set(p_f.astype(jnp.uint8))
-    mem_f = mem_f.at[REG_A].set(a_f.astype(jnp.uint8))
+    # Save registers (only if enabled)
+    if has_register_save:
+        mem_f = mem_f.at[REG_PCHI].set(((pc_f >> 8) & 0xFF).astype(jnp.uint8))
+        mem_f = mem_f.at[REG_PCLO].set((pc_f & 0xFF).astype(jnp.uint8))
+        mem_f = mem_f.at[REG_P].set(p_f.astype(jnp.uint8))
+        mem_f = mem_f.at[REG_A].set(a_f.astype(jnp.uint8))
     mem_f = mem_f.at[REG_X].set(x_f.astype(jnp.uint8))
     mem_f = mem_f.at[REG_Y].set(y_f.astype(jnp.uint8))
     mem_f = mem_f.at[REG_S].set(s_f.astype(jnp.uint8))
