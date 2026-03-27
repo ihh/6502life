@@ -26,7 +26,6 @@
         <button id="run1k">1000</button>
         <button id="auto">Auto</button>
         <button id="slow">Slow</button>
-        <label style="font-size:12px; margin-left:12px;"><input type="checkbox" id="lockview" checked> Lock view</label>
     </div>
     <canvas id="cellview" width="260" height="68" style="border:1px solid #030; image-rendering:pixelated; width:520px; height:136px;"></canvas>
     <div id="cellinfo" style="font-size:11px; color:#080;"></div>
@@ -226,18 +225,10 @@
 
             while (slowRunning) {
                 const result = sim.slowStep(15); // ~15 cycles per frame = ~1 instruction
-                const locked = document.getElementById('lockview').checked;
-                if (!locked && result.cell) {
-                    inspectI = result.cell.ci;
-                    inspectJ = result.cell.cj;
-                    inspectNI = result.cell.ni;
-                    inspectNJ = result.cell.nj;
-                    cellInfoEl.textContent = '(' + inspectI + ',' + inspectJ + ') -> (' +
-                        inspectNI + ',' + inspectNJ + ')';
-                }
+                // View always stays on the clicked cell
                 drawCellView();
-                if (result.done || !locked) {
-                    await drawGrid(); // update highlights + content
+                if (result.done) {
+                    await drawGrid();
                 }
                 await new Promise(r => setTimeout(r, 20)); // ~50fps
             }
