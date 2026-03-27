@@ -196,10 +196,15 @@
         // Click on grid to select cell
         gridEl.onclick = (e) => {
             const rect = gridEl.getBoundingClientRect();
-            const charW = gridEl.offsetWidth / sim.B;
-            const charH = gridEl.offsetHeight / (sim.B + 1);
+            const B = sim.B;
+            // Each row is B chars + newline. Grid has B rows.
+            // Use text content line height and character width from font.
+            const style = getComputedStyle(gridEl);
+            const lineH = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.0;
+            // Measure char width: grid is B chars wide per line
+            const charW = rect.width / B;
             const col = Math.floor((e.clientX - rect.left) / charW);
-            const row = sim.B - 1 - Math.floor((e.clientY - rect.top) / charH);
+            const row = B - 1 - Math.floor((e.clientY - rect.top) / lineH);
             if (col >= 0 && col < sim.B && row >= 0 && row < sim.B) {
                 inspectI = col;
                 inspectJ = row;
