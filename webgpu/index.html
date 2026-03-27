@@ -6,11 +6,11 @@
     <title>6502life Bare Sim</title>
     <style>
         body { font-family: monospace; background: #111; color: #0f0; padding: 12px; }
-        #log { white-space: pre; font-size: 11px; line-height: 1.2; max-height: 100px; overflow-y: auto; }
+        #log { white-space: pre; font-size: 11px; line-height: 1.2; max-height: 80px; overflow-y: auto; }
         #grid { cursor: crosshair; }
         #stats { font-size: 14px; margin: 8px 0; }
         #mode { font-size: 12px; color: #0a0; margin-bottom: 8px; }
-        #cellinfo { font-size: 11px; color: #080; }
+        #cellinfo { font-size: 11px; color: #080; margin-top: 4px; }
         button, select { font-family: monospace; font-size: 14px; padding: 6px 12px;
                  background: #030; color: #0f0; border: 1px solid #0f0; cursor: pointer;
                  margin-right: 6px; margin-bottom: 6px; }
@@ -48,79 +48,70 @@
     </div>
     <pre id="log"></pre>
     <script type="module">
-        const logEl = document.getElementById('log');
-        const gridCanvas = document.getElementById('grid');
+        const $ = id => document.getElementById(id);
+        const logEl = $('log'), gridCanvas = $('grid'), statsEl = $('stats');
+        const modeEl = $('mode'), cellInfoEl = $('cellinfo');
         const gridCtx = gridCanvas.getContext('2d');
-        const statsEl = document.getElementById('stats');
-        const modeEl = document.getElementById('mode');
-        const cellInfoEl = document.getElementById('cellinfo');
-        const ctx0 = document.getElementById('cv0').getContext('2d');
-        const ctx1 = document.getElementById('cv1').getContext('2d');
-
+        const ctx0 = $('cv0').getContext('2d'), ctx1 = $('cv1').getContext('2d');
         function print(msg) { logEl.textContent += msg + '\n'; }
 
-        let running = false;
-        let gpuMode = false;
-        let gpuSim = null;     // direct reference for GPU mode
-        let worker = null;     // worker for CPU mode
-        let B = 32;
+        let running = false, gpuMode = false, gpuSim = null, worker = null;
+        const B = 32, MEAN_CYC = 4096, CHAR_W = 8, CHAR_H = 12;
         let inspectI = 0, inspectJ = 0, inspectNI = 1, inspectNJ = 0;
+        let lastCensus = null, lastCellView0 = null, lastCellView1 = null;
+        let totalQuanta = 0;
+
+        // Rate display: EMA
+        let rateEMA = 0, lastQuanta = 0, lastRateTime = 0;
+
+        // FPS
+        let fpsFrames = 0, fpsT0 = 0, fpsVal = 0;
+
+        // Trace animation state
+        let currentTrace = null;   // array of {fetch, writes, cycles}
+        let traceIdx = 0;          // current instruction in trace
+        let traceCycBudget = 0;    // cycles to play this frame
+        // Glow buffers for animation (2 cells x 1024 bytes)
+        let glowWrite = new Float32Array(2048);
+        let glowFetch = new Float32Array(2048);
+        const GLOW_DECAY = 0.93;
 
         function updateNeighbor() {
-            const dir = document.getElementById('nbrdir').value;
-            const di = dir === 'e' ? 1 : dir === 'w' ? -1 : 0;
-            const dj = dir === 'n' ? 1 : dir === 's' ? -1 : 0;
-            inspectNI = (inspectI + di + B) % B;
-            inspectNJ = (inspectJ + dj + B) % B;
+            const d = $('nbrdir').value;
+            inspectNI = (inspectI + (d==='e'?1:d==='w'?-1:0) + B) % B;
+            inspectNJ = (inspectJ + (d==='n'?1:d==='s'?-1:0) + B) % B;
             cellInfoEl.textContent = '('+inspectI+','+inspectJ+') + ('+inspectNI+','+inspectNJ+')';
+            if (worker) worker.postMessage({ type: 'traceCell', i: inspectI, j: inspectJ });
         }
-        let t0 = 0;
-        let lastCensus = null;
-        let lastCellView0 = null, lastCellView1 = null;
-        let totalQuanta = 0;
-        let framesSinceReset = 0;
-        let fpsT0 = 0;
-        let lastFps = 0;
-        let prevQuanta = 0;
-        let rateT0 = 0;
-        let lastRate = 0;
-        const MEAN_CYC = 4096;
-        const CHAR_W = 8, CHAR_H = 12;
 
         function initGridCanvas() {
-            gridCanvas.width = B * CHAR_W;
-            gridCanvas.height = B * CHAR_H;
-            gridCanvas.style.width = (B * CHAR_W) + 'px';
-            gridCanvas.style.height = (B * CHAR_H) + 'px';
-            gridCtx.font = '10px monospace';
-            gridCtx.textBaseline = 'top';
+            gridCanvas.width = B * CHAR_W; gridCanvas.height = B * CHAR_H;
+            gridCanvas.style.width = (B*CHAR_W)+'px'; gridCanvas.style.height = (B*CHAR_H)+'px';
+            gridCtx.font = '10px monospace'; gridCtx.textBaseline = 'top';
         }
 
         function renderGrid() {
             if (!lastCensus) return;
-            const c = lastCensus;
-            const now = performance.now();
-            const elapsed = (now - t0) / 1000;
-            const rateElapsed = (now - rateT0) / 1000;
-            if (rateElapsed > 0.5) {
-                const dq = totalQuanta - prevQuanta;
-                lastRate = dq * MEAN_CYC / (B * B) / rateElapsed;
-                prevQuanta = totalQuanta;
-                rateT0 = now;
-            }
-            const cps = running ? lastRate : 0;
-            let r;
-            if (cps >= 1e6) r = (cps/1e6).toFixed(1)+'M';
-            else if (cps >= 1e3) r = (cps/1e3).toFixed(1)+'K';
-            else r = cps.toFixed(0);
-            framesSinceReset++;
-            const fpsElapsed = (now - fpsT0) / 1000;
-            const fps = fpsElapsed > 0.3 ? Math.round(framesSinceReset / fpsElapsed) : lastFps;
-            if (fpsElapsed > 1) { lastFps = fps; framesSinceReset = 0; fpsT0 = now; }
-            statsEl.textContent = c.functional+'/'+c.total+' alive  var='+c.loopVariants+'  '+r+' cyc/cell/s  '+fps+' fps';
+            const c = lastCensus, now = performance.now();
 
-            gridCtx.fillStyle = '#111';
-            gridCtx.fillRect(0, 0, gridCanvas.width, gridCanvas.height);
+            // Rate EMA
+            if (running && now - lastRateTime > 300) {
+                const dq = totalQuanta - lastQuanta;
+                const dt = (now - lastRateTime) / 1000;
+                const inst = dt > 0 ? (dq * MEAN_CYC / (B*B) / dt) : 0;
+                rateEMA = rateEMA * 0.7 + inst * 0.3;
+                lastQuanta = totalQuanta; lastRateTime = now;
+            }
+            const cps = running ? rateEMA : 0;
+            let r; if (cps>=1e6) r=(cps/1e6).toFixed(1)+'M'; else if (cps>=1e3) r=(cps/1e3).toFixed(1)+'K'; else r=cps.toFixed(0);
+
+            // FPS
+            fpsFrames++;
+            if (now - fpsT0 > 1000) { fpsVal = Math.round(fpsFrames * 1000 / (now - fpsT0)); fpsFrames = 0; fpsT0 = now; }
+
+            statsEl.textContent = c.functional+'/'+c.total+' alive  var='+c.loopVariants+'  '+r+' cyc/cell/s  '+fpsVal+' fps';
+
+            gridCtx.fillStyle = '#111'; gridCtx.fillRect(0, 0, gridCanvas.width, gridCanvas.height);
             for (let j = B-1; j >= 0; j--) {
                 for (let i = 0; i < B; i++) {
                     const sx = i*CHAR_W, sy = (B-1-j)*CHAR_H;
@@ -135,22 +126,22 @@
             }
         }
 
-        function renderCellView(ctx, view) {
-            if (!view) return;
+        function renderCellView(ctx, cellData, glowOff) {
+            if (!cellData) return;
             const img = ctx.createImageData(128, 64);
             const d = img.data;
             for (let row = 0; row < 32; row++) {
                 for (let col = 0; col < 32; col++) {
                     const byteIdx = row*32+col;
-                    const val = view.data[byteIdx];
-                    const wI = Math.pow(Math.min(1, view.writes[byteIdx]), 0.3);
-                    const fI = Math.pow(Math.min(1, view.fetches[byteIdx]), 0.3);
+                    const val = cellData[byteIdx];
+                    const wI = Math.pow(Math.min(1, glowWrite[glowOff+byteIdx]), 0.3);
+                    const fI = Math.pow(Math.min(1, glowFetch[glowOff+byteIdx]), 0.3);
                     const has = val > 0 ? 1 : 0;
                     for (let dy = 0; dy < 2; dy++) {
                         for (let dx = 0; dx < 4; dx++) {
                             const bit = (val >> (7-(dy*4+dx))) & 1;
                             const br = bit ? 1.0 : 0.2;
-                            const pi = ((row*2+dy)*128 + col*4+dx)*4;
+                            const pi = ((row*2+dy)*128+col*4+dx)*4;
                             d[pi]   = Math.min(255, Math.floor((wI*255+has*15)*br));
                             d[pi+1] = Math.min(255, Math.floor((has*40+wI*30+fI*30)*br));
                             d[pi+2] = Math.min(255, Math.floor((fI*255+has*15)*br));
@@ -162,166 +153,148 @@
             ctx.putImageData(img, 0, 0);
         }
 
-        gridCanvas.onclick = (e) => {
-            const rect = gridCanvas.getBoundingClientRect();
-            const sx = gridCanvas.width/rect.width, sy = gridCanvas.height/rect.height;
-            const col = Math.floor((e.clientX-rect.left)*sx/CHAR_W);
-            const row = B-1-Math.floor((e.clientY-rect.top)*sy/CHAR_H);
-            if (col>=0 && col<B && row>=0 && row<B) {
-                inspectI=col; inspectJ=row;
-                updateNeighbor();
-                requestCellViews();
-                renderGrid();
+        // Animate trace: advance N cycles per frame, light up glows
+        function animateTrace() {
+            if (!currentTrace || traceIdx >= currentTrace.length) return;
+            const speed = parseFloat($('speed').value) || 1;
+            // At slow speeds: play ~4 cycles per frame (1 instruction)
+            // At fast speeds: play all remaining
+            const cycPerFrame = speed < 1 ? 4 : speed < 5 ? 20 : 99999;
+            let cyc = 0;
+            while (traceIdx < currentTrace.length && cyc < cycPerFrame) {
+                const insn = currentTrace[traceIdx];
+                glowFetch[insn.fetch] = 1.0;
+                for (const wa of insn.writes) glowWrite[wa] = 1.0;
+                cyc += insn.cycles;
+                traceIdx++;
             }
-        };
-
-        // === GPU mode: direct calls ===
-        async function gpuCensus() {
-            lastCensus = await gpuSim.census();
-            totalQuanta = gpuSim.totalQuanta;
         }
-        async function gpuCellViews() {
+
+        // Main render loop — always 60fps
+        function renderLoop() {
+            // Decay glows
+            for (let i = 0; i < 2048; i++) { glowWrite[i] *= GLOW_DECAY; glowFetch[i] *= GLOW_DECAY; }
+
+            // Animate trace if playing
+            animateTrace();
+
+            // Render
+            renderGrid();
+            if (lastCellView0) renderCellView(ctx0, lastCellView0.data, 0);
+            if (lastCellView1) renderCellView(ctx1, lastCellView1.data, 1024);
+
+            // Request fresh cell views
+            if (running) requestCellViews();
+
+            requestAnimationFrame(renderLoop);
+        }
+
+        // === GPU mode ===
+        let gpuPassQueue = 0;
+        async function gpuLoop() {
+            if (!running || !gpuMode) return;
+            const speed = parseFloat($('speed').value) || 1;
+            gpuPassQueue += speed;
+            const n = Math.floor(gpuPassQueue); gpuPassQueue -= n;
+            for (let i = 0; i < n; i++) { await gpuSim.runPass(); await gpuSim.runPass(); }
+            lastCensus = await gpuSim.census(); totalQuanta = gpuSim.totalQuanta;
             if (gpuSim.getCellView) {
                 lastCellView0 = gpuSim.getCellView(inspectI, inspectJ);
                 lastCellView1 = gpuSim.getCellView(inspectNI, inspectNJ);
             }
+            if (running) requestAnimationFrame(gpuLoop);
         }
 
-        // === CPU mode: worker messages ===
+        // === CPU/Worker mode ===
         function workerSend(msg) { worker.postMessage(msg); }
-
-        function setupWorker() {
-            worker = new Worker('./sim-worker.js', { type: 'module' });
-            worker.onmessage = (e) => {
-                const msg = e.data;
-                if (msg.type === 'ready') {
-                    print('Worker ready');
-                    workerSend({ type: 'writeCell', i:0, j:0, offset:0, data:[0xB5,0x00,0x9D,0x00,0x04,0xE8,0x90,0xF8] });
-                    workerSend({ type: 'writeCell', i:0, j:0, offset:0xF9, data:[0x00,0x00] });
-                    workerSend({ type: 'writeCell', i:0, j:0, offset:0xFF, data:[0xFF] });
-                    workerSend({ type: 'census' });
-                } else if (msg.type === 'census') {
-                    lastCensus = msg.data;
-                    totalQuanta = msg.totalQuanta;
-                } else if (msg.type === 'cellView') {
-                    if (msg.i === inspectI && msg.j === inspectJ) {
-                        lastCellView0 = msg;
-                    } else if (msg.i === inspectNI && msg.j === inspectNJ) {
-                        lastCellView1 = msg;
-                    }
-                }
-            };
-        }
-
         function requestCellViews() {
-            if (gpuMode) {
-                gpuCellViews();
+            if (gpuMode && gpuSim && gpuSim.getCellView) {
+                lastCellView0 = gpuSim.getCellView(inspectI, inspectJ);
+                lastCellView1 = gpuSim.getCellView(inspectNI, inspectNJ);
             } else if (worker) {
                 workerSend({ type: 'getCellView', i: inspectI, j: inspectJ });
                 workerSend({ type: 'getCellView', i: inspectNI, j: inspectNJ });
             }
         }
 
-        // === Render loop (always on main thread) ===
-        function renderLoop() {
-            renderGrid();
-            renderCellView(ctx0, lastCellView0);
-            renderCellView(ctx1, lastCellView1);
-            // Keep requesting fresh cell views while running
-            if (running) requestCellViews();
-            requestAnimationFrame(renderLoop);
+        function setupWorker() {
+            worker = new Worker('./sim-worker.js', { type: 'module' });
+            worker.onmessage = (e) => {
+                const msg = e.data;
+                if (msg.type === 'ready') {
+                    workerSend({ type: 'writeCell', i:0, j:0, offset:0, data:[0xB5,0x00,0x9D,0x00,0x04,0xE8,0x90,0xF8] });
+                    workerSend({ type: 'writeCell', i:0, j:0, offset:0xF9, data:[0x00,0x00] });
+                    workerSend({ type: 'writeCell', i:0, j:0, offset:0xFF, data:[0xFF] });
+                    workerSend({ type: 'traceCell', i: inspectI, j: inspectJ });
+                    workerSend({ type: 'census' });
+                } else if (msg.type === 'census') {
+                    lastCensus = msg.data; totalQuanta = msg.totalQuanta;
+                } else if (msg.type === 'cellView') {
+                    if (msg.i === inspectI && msg.j === inspectJ) lastCellView0 = msg;
+                    else if (msg.i === inspectNI && msg.j === inspectNJ) lastCellView1 = msg;
+                } else if (msg.type === 'trace') {
+                    // New trace arrived: start animation
+                    currentTrace = msg.data.trace;
+                    traceIdx = 0;
+                }
+            };
         }
 
-        // === GPU run loop ===
-        let gpuPassQueue = 0;
-        async function gpuLoop() {
-            if (!running || !gpuMode) return;
-            const speed = parseFloat(document.getElementById('speed').value) || 1;
-            gpuPassQueue += speed;
-            const n = Math.floor(gpuPassQueue);
-            gpuPassQueue -= n;
-            for (let i = 0; i < n; i++) {
-                await gpuSim.runPass();
-                await gpuSim.runPass();
+        // Click grid
+        gridCanvas.onclick = (e) => {
+            const rect = gridCanvas.getBoundingClientRect();
+            const col = Math.floor((e.clientX-rect.left)*gridCanvas.width/rect.width/CHAR_W);
+            const row = B-1-Math.floor((e.clientY-rect.top)*gridCanvas.height/rect.height/CHAR_H);
+            if (col>=0 && col<B && row>=0 && row<B) {
+                inspectI = col; inspectJ = row;
+                updateNeighbor();
+                glowWrite.fill(0); glowFetch.fill(0); // reset glow on refocus
+                requestCellViews();
             }
-            await gpuCensus();
-            gpuCellViews();
-            if (running) requestAnimationFrame(gpuLoop);
-        }
+        };
+        $('nbrdir').onchange = () => { updateNeighbor(); requestCellViews(); };
+        $('speed').onchange = () => {
+            if (!gpuMode && running) workerSend({ type: 'speed', speed: parseFloat($('speed').value)||1 });
+        };
 
-        // === Init ===
+        // Init
         async function main() {
             logEl.textContent = '';
-            print('Detecting GPU...');
-
-            // Try GPU
             if (navigator.gpu) {
                 try {
                     const adapter = await navigator.gpu.requestAdapter();
                     if (adapter) {
                         const { BareSim } = await import('./bare-sim.js');
-                        gpuSim = await BareSim.create(B);
-                        gpuMode = true;
+                        gpuSim = await BareSim.create(B); gpuMode = true;
                     }
-                } catch(e) { print('GPU: ' + e.message); }
+                } catch(e) { print('GPU: '+e.message); }
             }
-
             if (gpuMode) {
                 modeEl.textContent = '[GPU] WebGPU compute shader';
-                gpuSim.writeCell(0, 0, 0, [0xB5,0x00,0x9D,0x00,0x04,0xE8,0x90,0xF8]);
-                gpuSim.writeCell(0, 0, 0xF9, [0x00,0x00]);
-                gpuSim.writeCell(0, 0, 0xFF, [0xFF]);
-                await gpuCensus();
-                gpuCellViews();
+                gpuSim.writeCell(0,0,0,[0xB5,0x00,0x9D,0x00,0x04,0xE8,0x90,0xF8]);
+                gpuSim.writeCell(0,0,0xF9,[0x00,0x00]); gpuSim.writeCell(0,0,0xFF,[0xFF]);
+                lastCensus = await gpuSim.census(); totalQuanta = gpuSim.totalQuanta;
             } else {
                 modeEl.textContent = '[CPU] Web Worker';
-                setupWorker();
-                workerSend({ type: 'init', B });
+                setupWorker(); workerSend({ type: 'init', B });
             }
-
-            print(B + 'x' + B + ' board. Click grid to inspect.');
-            initGridCanvas();
-            t0 = performance.now();
-
-            // Start render loop (always running, just draws latest data)
+            print(B+'x'+B+' board. Click grid to inspect.');
+            initGridCanvas(); fpsT0 = lastRateTime = performance.now();
             requestAnimationFrame(renderLoop);
         }
 
-        document.getElementById('toggle').onclick = () => {
+        $('toggle').onclick = () => {
             running = !running;
-            document.getElementById('toggle').textContent = running ? 'Stop' : 'Start';
+            $('toggle').textContent = running ? 'Stop' : 'Start';
             if (running) {
-                t0 = performance.now();
-                totalQuanta = 0;
-                framesSinceReset = 0;
-                fpsT0 = performance.now();
-                if (gpuMode && gpuSim) gpuSim.totalQuanta = 0;
-                const speed = parseFloat(document.getElementById('speed').value) || 1;
-                if (gpuMode) {
-                    gpuPassQueue = 0;
-                    requestAnimationFrame(gpuLoop);
-                } else {
-                    workerSend({ type: 'start', speed });
-                }
+                lastRateTime = performance.now(); lastQuanta = totalQuanta; rateEMA = 0;
+                fpsT0 = performance.now(); fpsFrames = 0;
+                const speed = parseFloat($('speed').value) || 1;
+                if (gpuMode) { gpuSim.totalQuanta = 0; totalQuanta = 0; gpuPassQueue = 0; requestAnimationFrame(gpuLoop); }
+                else { workerSend({ type: 'start', speed }); }
             } else {
-                if (!gpuMode) {
-                    workerSend({ type: 'stop' });
-                    workerSend({ type: 'census' });
-                    requestCellViews();
-                }
-            }
-        };
-
-        document.getElementById('nbrdir').onchange = () => {
-            updateNeighbor();
-            requestCellViews();
-            renderGrid();
-        };
-
-        document.getElementById('speed').onchange = () => {
-            const speed = parseFloat(document.getElementById('speed').value) || 1;
-            if (!gpuMode && running) {
-                workerSend({ type: 'speed', speed });
+                if (!gpuMode) { workerSend({ type: 'stop' }); workerSend({ type: 'census' }); }
+                requestCellViews();
             }
         };
 

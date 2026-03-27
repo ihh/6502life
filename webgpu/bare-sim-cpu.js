@@ -17,7 +17,7 @@ function nzFlags(val, p) {
     return (p & ~(F_N | F_Z)) | (val & F_N) | z;
 }
 
-function runQuantum(mem, budget, hasRegisterSave = true, writeLog = null, fetchLog = null) {
+function runQuantum(mem, budget, hasRegisterSave = true, writeLog = null, fetchLog = null, trace = null) {
     let pc, a, x, y, s, p;
     if (hasRegisterSave) {
         pc = (mem[0xF9] << 8) | mem[0xFA];
@@ -28,6 +28,7 @@ function runQuantum(mem, budget, hasRegisterSave = true, writeLog = null, fetchL
     let cycles = 0;
 
     for (let step = 0; step < MAX_STEPS; step++) {
+        const _traceEntry = trace ? { fetch: pc & ADDR_MASK, writes: [], cycles: 0 } : null;
         if (fetchLog) fetchLog[pc & ADDR_MASK]++;
         const opcode = mem[pc & ADDR_MASK];
         const i = opcode * 7;
@@ -155,9 +156,11 @@ function runQuantum(mem, budget, hasRegisterSave = true, writeLog = null, fetchL
             const wa = wAddr & ADDR_MASK;
             mem[wa] = wVal & 0xFF;
             if (writeLog) writeLog[wa]++;
+            if (_traceEntry) _traceEntry.writes.push(wa);
         }
 
         const totalCyc = baseCyc + extra + brExtra;
+        if (_traceEntry) { _traceEntry.cycles = totalCyc; trace.push(_traceEntry); }
         cycles += totalCyc;
         if (cycles >= budget) break;
         pc = nextPc;
@@ -180,9 +183,12 @@ export class BareSimCPU {
         this.storage = new Uint8Array(B * B * M);
         this.totalQuanta = 0;
         this.hasRegisterSave = opts.hasRegisterSave !== false;
-        // Per-byte activity tracking (quantum number of last write/fetch)
+        // Per-byte activity tracking
         this.lastWrite = new Uint32Array(B * B * M);
         this.lastFetch = new Uint32Array(B * B * M);
+        // Trace: set _traceCell = [i,j] to capture next quantum for that cell
+        this._traceCell = null;
+        this._lastTrace = null;
     }
 
     static async create(B = 16, opts = {}) {
@@ -232,7 +238,15 @@ export class BareSimCPU {
 
             writeLog.fill(0);
             fetchLog.fill(0);
-            runQuantum(mem, budget, this.hasRegisterSave, writeLog, fetchLog);
+            // If this is the traced cell, capture instruction trace
+            let cellTrace = null;
+            if (this._traceCell && ci === this._traceCell[0] && cj === this._traceCell[1]) {
+                cellTrace = [];
+            }
+            runQuantum(mem, budget, this.hasRegisterSave, writeLog, fetchLog, cellTrace);
+            if (cellTrace && cellTrace.length > 0) {
+                this._lastTrace = { ci, cj, ni, nj, trace: cellTrace };
+            }
 
             this.storage.set(mem.subarray(0, M), cb);
             this.storage.set(mem.subarray(M, 2 * M), nb);

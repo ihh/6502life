@@ -1,13 +1,12 @@
 /**
  * Web Worker for CPU-mode bare sim.
- * Runs the 6502 interpreter off the main thread.
  */
 
 import { BareSimCPU } from './bare-sim-cpu.js';
 
 let sim = null;
 let running = false;
-let passesPerTick = 1;  // passes per ~16ms tick (fractional ok)
+let passesPerTick = 1;
 let passQueue = 0;
 
 async function init(B) {
@@ -30,7 +29,12 @@ async function runLoop() {
         const c = await sim.census();
         postMessage({ type: 'census', data: c, totalQuanta: sim.totalQuanta });
 
-        // Pace at ~60 ticks/sec
+        // Send trace if one was captured
+        if (sim._lastTrace) {
+            postMessage({ type: 'trace', data: sim._lastTrace });
+            sim._lastTrace = null;
+        }
+
         await new Promise(r => setTimeout(r, 16));
     }
 }
@@ -55,7 +59,10 @@ onmessage = async (e) => {
             break;
         case 'speed':
             passesPerTick = msg.speed || 1;
-            passQueue = 0;  // reset accumulator to avoid burst
+            passQueue = 0;
+            break;
+        case 'traceCell':
+            if (sim) sim._traceCell = msg.i >= 0 ? [msg.i, msg.j] : null;
             break;
         case 'census':
             if (sim) {
