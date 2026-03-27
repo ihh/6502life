@@ -13,13 +13,15 @@
  */
 
 import { buildOpcodeTable } from './opcode_table.js';
+import { PRNG } from './prng.js';
 
 export class BareSim {
-    constructor(device, pipeline, B, M, storageBuffer, opcodeBuffer, pairBuffer, budgetBuffer) {
+    constructor(device, pipeline, B, M, storageBuffer, opcodeBuffer, pairBuffer, budgetBuffer, seed) {
         this.device = device;
         this.pipeline = pipeline;
         this.B = B;
         this.M = M;
+        this.rng = new PRNG(seed || 42);
         this.storageBuffer = storageBuffer;
         this.opcodeBuffer = opcodeBuffer;
         this.pairBuffer = pairBuffer;
@@ -27,7 +29,7 @@ export class BareSim {
         this.totalQuanta = 0;
     }
 
-    static async create(B = 16, M = 1024) {
+    static async create(B = 16, M = 1024, opts = {}) {
         if (!navigator.gpu) throw new Error('WebGPU not supported');
         const adapter = await navigator.gpu.requestAdapter();
         if (!adapter) throw new Error('No GPU adapter found');
@@ -88,7 +90,7 @@ export class BareSim {
         const zeros = new Uint8Array(totalBytes);
         device.queue.writeBuffer(storageBuffer, 0, zeros);
 
-        return new BareSim(device, pipeline, B, M, storageBuffer, opcodeBuffer, pairBuffer, budgetBuffer);
+        return new BareSim(device, pipeline, B, M, storageBuffer, opcodeBuffer, pairBuffer, budgetBuffer, opts.seed);
     }
 
     writeCell(i, j, offset, data) {
@@ -108,8 +110,9 @@ export class BareSim {
         const B = this.B, M = this.M;
         const N = (B * B) / 2;
 
-        // Build checkerboard pairs (CPU-side, fast enough)
-        const rv = Math.random() * 8 | 0;
+        // Build checkerboard pairs (CPU-side, seeded PRNG)
+        const rng = this.rng;
+        const rv = rng.below(8);
         const tiling = rv & 1;
         const offsetI = (rv >> 1) & 1;
         const offsetJ = (rv >> 2) & 1;
@@ -121,7 +124,7 @@ export class BareSim {
         if (tiling === 0) {
             for (let k = 0; k < B / 2; k++) {
                 for (let j = 0; j < B; j++) {
-                    const role = Math.random() < 0.5 ? 0 : 1;
+                    const role = rng.int() & 1;
                     const i0 = (2 * k + offsetI) % B;
                     const i1 = (2 * k + 1 + offsetI) % B;
                     const jj = (j + offsetJ) % B;
@@ -130,17 +133,16 @@ export class BareSim {
                     pairs[idx * 2] = (ci * B + jj) * M;
                     pairs[idx * 2 + 1] = (ni * B + jj) * M;
                     // Budget: geometric-exponential
-                    let r = Math.random() * 0x7FFFFFFF | 0;
-                    let hl = 0;
+                    let r = rng.int(); let hl = 0;
                     while (hl < 32 && (r & 1)) { r >>= 1; hl++; }
-                    budgets[idx] = Math.max(1, Math.ceil(16 * 177 * (hl + Math.random())));
+                    budgets[idx] = Math.max(1, Math.ceil(16 * 177 * (hl + rng.real())));
                     idx++;
                 }
             }
         } else {
             for (let i = 0; i < B; i++) {
                 for (let k = 0; k < B / 2; k++) {
-                    const role = Math.random() < 0.5 ? 0 : 1;
+                    const role = rng.int() & 1;
                     const ii = (i + offsetI) % B;
                     const j0 = (2 * k + offsetJ) % B;
                     const j1 = (2 * k + 1 + offsetJ) % B;
@@ -148,10 +150,9 @@ export class BareSim {
                     const nj = role === 0 ? j1 : j0;
                     pairs[idx * 2] = (ii * B + cj) * M;
                     pairs[idx * 2 + 1] = (ii * B + nj) * M;
-                    let r = Math.random() * 0x7FFFFFFF | 0;
-                    let hl = 0;
+                    let r = rng.int(); let hl = 0;
                     while (hl < 32 && (r & 1)) { r >>= 1; hl++; }
-                    budgets[idx] = Math.max(1, Math.ceil(16 * 177 * (hl + Math.random())));
+                    budgets[idx] = Math.max(1, Math.ceil(16 * 177 * (hl + rng.real())));
                     idx++;
                 }
             }

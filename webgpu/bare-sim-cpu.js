@@ -1,9 +1,11 @@
 /**
  * CPU fallback bare sim — same API as the WebGPU BareSim.
  * Pure JavaScript 6502 interpreter for non-GPU machines.
+ * Uses seeded PRNG for deterministic, reproducible board histories.
  */
 
 import { buildOpcodeTable } from './opcode_table.js';
+import { PRNG } from './prng.js';
 
 const ADDR_MASK = 0x7FF;
 const MAX_STEPS = 350;
@@ -180,6 +182,8 @@ export class BareSimCPU {
     constructor(B = 16, M = 1024, opts = {}) {
         this.B = B;
         this.M = M;
+        this.seed = opts.seed || 42;
+        this.rng = new PRNG(this.seed);
         this.storage = new Uint8Array(B * B * M);
         this.totalQuanta = 0;
         this.hasRegisterSave = opts.hasRegisterSave !== false;
@@ -201,8 +205,8 @@ export class BareSimCPU {
     }
 
     async runPass() {
-        const B = this.B, M = this.M, N = (B * B) / 2;
-        const rv = Math.random() * 8 | 0;
+        const B = this.B, M = this.M, N = (B * B) / 2, rng = this.rng;
+        const rv = rng.below(8);
         const tiling = rv & 1, offI = (rv >> 1) & 1, offJ = (rv >> 2) & 1;
         const mem = new Uint8Array(2048);
 
@@ -210,14 +214,14 @@ export class BareSimCPU {
         if (tiling === 0) {
             for (let k = 0; k < B / 2; k++)
                 for (let j = 0; j < B; j++) {
-                    const role = Math.random() < 0.5 ? 0 : 1;
+                    const role = rng.int() & 1;
                     const i0 = (2*k + offI) % B, i1 = (2*k+1 + offI) % B, jj = (j + offJ) % B;
                     pairs.push(role === 0 ? [i0,jj,i1,jj] : [i1,jj,i0,jj]);
                 }
         } else {
             for (let i = 0; i < B; i++)
                 for (let k = 0; k < B / 2; k++) {
-                    const role = Math.random() < 0.5 ? 0 : 1;
+                    const role = rng.int() & 1;
                     const ii = (i + offI) % B, j0 = (2*k + offJ) % B, j1 = (2*k+1 + offJ) % B;
                     pairs.push(role === 0 ? [ii,j0,ii,j1] : [ii,j1,ii,j0]);
                 }
@@ -232,9 +236,9 @@ export class BareSimCPU {
             mem.set(this.storage.subarray(cb, cb + M), 0);
             mem.set(this.storage.subarray(nb, nb + M), M);
 
-            let r = Math.random() * 0x7FFFFFFF | 0, hl = 0;
+            let r = rng.int(), hl = 0;
             while (hl < 32 && (r & 1)) { r >>= 1; hl++; }
-            const budget = Math.max(1, Math.ceil(16 * 177 * (hl + Math.random())));
+            const budget = Math.max(1, Math.ceil(16 * 177 * (hl + rng.real())));
 
             writeLog.fill(0);
             fetchLog.fill(0);
@@ -434,6 +438,15 @@ export class BareSimCPU {
         }
 
         return { done, fetchAddrs, writeAddrs, cell };
+    }
+
+    // Serialize full state (for reproducibility verification)
+    getStateHash() {
+        // Simple djb2 hash of storage + PRNG state
+        let h = 5381;
+        for (let i = 0; i < this.storage.length; i++) h = ((h * 33) ^ this.storage[i]) >>> 0;
+        h = ((h * 33) ^ this.rng.state) >>> 0;
+        return h;
     }
 
     getCellView(i, j) {
