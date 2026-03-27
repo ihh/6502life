@@ -192,18 +192,32 @@
             ctx2d.putImageData(img, 0, 0);
         }
 
+        // Measure monospace char width once
+        let _charW = 0;
+        function getCharWidth() {
+            if (_charW) return _charW;
+            const span = document.createElement('span');
+            span.style.font = getComputedStyle(gridEl).font;
+            span.style.visibility = 'hidden';
+            span.style.position = 'absolute';
+            span.textContent = 'X'.repeat(32);
+            document.body.appendChild(span);
+            _charW = span.getBoundingClientRect().width / 32;
+            document.body.removeChild(span);
+            return _charW;
+        }
+
         // Click on grid to select cell
         gridEl.onclick = (e) => {
             const rect = gridEl.getBoundingClientRect();
             const B = sim.B;
-            // Each row is B chars + newline. Grid has B rows.
-            // Use text content line height and character width from font.
             const style = getComputedStyle(gridEl);
             const lineH = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.0;
-            // Measure char width: grid is B chars wide per line
-            const charW = rect.width / B;
-            const col = Math.floor((e.clientX - rect.left) / charW);
-            const row = B - 1 - Math.floor((e.clientY - rect.top) / lineH);
+            const charW = getCharWidth();
+            const padLeft = parseFloat(style.paddingLeft) || 0;
+            const padTop = parseFloat(style.paddingTop) || 0;
+            const col = Math.floor((e.clientX - rect.left - padLeft) / charW);
+            const row = B - 1 - Math.floor((e.clientY - rect.top - padTop) / lineH);
             if (col >= 0 && col < sim.B && row >= 0 && row < sim.B) {
                 inspectI = col;
                 inspectJ = row;
