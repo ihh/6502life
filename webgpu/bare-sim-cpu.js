@@ -279,12 +279,157 @@ export class BareSimCPU {
         };
     }
 
+    // Slow mode: pick a cell, run one quantum at ~50 cycles, track activity
+    initSlowMode() {
+        this._slowCell = null; // current (ci, cj, ni, nj)
+        this._slowMem = new Uint8Array(2048);
+        this._slowBudget = 0;
+        this._slowCycles = 0;
+        this._slowPc = 0;
+        this._slowRegs = { a: 0, x: 0, y: 0, s: 0xFF, p: 0x30 };
+        // Per-byte glow: decaying activity for visualization
+        this.writeGlow = new Float32Array(this.B * this.B * this.M);
+        this.fetchGlow = new Float32Array(this.B * this.B * this.M);
+    }
+
+    _pickSlowCell() {
+        const B = this.B, M = this.M;
+        // Random cell + neighbor (same as runPass but one pair)
+        const rv = Math.random() * 8 | 0;
+        const tiling = rv & 1, offI = (rv >> 1) & 1, offJ = (rv >> 2) & 1;
+        let ci, cj, ni, nj;
+        if (tiling === 0) {
+            const k = Math.floor(Math.random() * (B / 2));
+            const j = Math.floor(Math.random() * B);
+            const role = Math.random() < 0.5 ? 0 : 1;
+            const i0 = (2*k + offI) % B, i1 = (2*k+1 + offI) % B;
+            const jj = (j + offJ) % B;
+            ci = role === 0 ? i0 : i1; ni = role === 0 ? i1 : i0;
+            cj = jj; nj = jj;
+        } else {
+            const i = Math.floor(Math.random() * B);
+            const k = Math.floor(Math.random() * (B / 2));
+            const role = Math.random() < 0.5 ? 0 : 1;
+            const ii = (i + offI) % B;
+            const j0 = (2*k + offJ) % B, j1 = (2*k+1 + offJ) % B;
+            ci = ii; ni = ii;
+            cj = role === 0 ? j0 : j1; nj = role === 0 ? j1 : j0;
+        }
+        // Assemble memory
+        const cb = (ci * B + cj) * M, nb = (ni * B + nj) * M;
+        this._slowMem.set(this.storage.subarray(cb, cb + M), 0);
+        this._slowMem.set(this.storage.subarray(nb, nb + M), M);
+        // Budget
+        let r = Math.random() * 0x7FFFFFFF | 0, hl = 0;
+        while (hl < 32 && (r & 1)) { r >>= 1; hl++; }
+        this._slowBudget = Math.max(1, Math.ceil(16 * 177 * (hl + Math.random())));
+        this._slowCycles = 0;
+        // Init registers
+        if (this.hasRegisterSave) {
+            this._slowPc = (this._slowMem[0xF9] << 8) | this._slowMem[0xFA];
+            this._slowRegs = {
+                a: this._slowMem[0xFC], x: this._slowMem[0xFD],
+                y: this._slowMem[0xFE], s: this._slowMem[0xFF], p: this._slowMem[0xFB]
+            };
+        } else {
+            this._slowPc = 0;
+            this._slowRegs = { a: 0, x: 0, y: 0, s: 0xFF, p: 0x30 };
+        }
+        this._slowCell = { ci, cj, ni, nj, cb, nb };
+    }
+
+    // Run N cycles in slow mode. Returns { done, fetchAddr, writeAddr }
+    slowStep(maxCycles = 50) {
+        if (!this._slowCell) this._pickSlowCell();
+        const mem = this._slowMem;
+        let { a, x, y, s, p } = this._slowRegs;
+        let pc = this._slowPc;
+        let cyclesRun = 0;
+        let fetchAddrs = [], writeAddrs = [];
+        const cell = this._slowCell;
+        const B = this.B, M = this.M;
+
+        while (cyclesRun < maxCycles && this._slowCycles < this._slowBudget) {
+            const fetchAddr = pc & ADDR_MASK;
+            fetchAddrs.push(fetchAddr);
+            // Map to board address for glow
+            const boardFetch = fetchAddr < M ? cell.cb + fetchAddr : cell.nb + (fetchAddr - M);
+            this.fetchGlow[boardFetch] = 1.0;
+
+            const opcode = mem[fetchAddr];
+            const i = opcode * 7;
+            const cls = opcTable[i], addrMode = opcTable[i+1], op = opcTable[i+2];
+            const baseCyc = opcTable[i+3], pcross = opcTable[i+4], nbytes = opcTable[i+5];
+            const op1 = mem[(pc + 1) & ADDR_MASK];
+            const op2 = mem[(pc + 2) & ADDR_MASK];
+            const opWord = (op1 | (op2 << 8)) & 0xFFFF;
+
+            // Simplified: just count cycles and track writes
+            // (Full execution happens in the regular runQuantum path)
+            // For slow mode, we use the same interpreter but one instruction at a time
+            const prevStorage = new Uint8Array(mem);
+
+            // Run one instruction via the full interpreter
+            // Temporarily swap in our register state
+            mem[0xF9] = (pc >> 8) & 0xFF; mem[0xFA] = pc & 0xFF;
+            mem[0xFB] = p; mem[0xFC] = a; mem[0xFD] = x; mem[0xFE] = y; mem[0xFF] = s;
+            const wl = new Uint16Array(2048);
+            const fl = new Uint16Array(2048);
+            runQuantum(mem, baseCyc + 100, true, wl, fl); // run exactly 1 instruction
+            // Read back registers
+            pc = (mem[0xF9] << 8) | mem[0xFA];
+            a = mem[0xFC]; x = mem[0xFD]; y = mem[0xFE]; s = mem[0xFF]; p = mem[0xFB];
+
+            // Find which bytes were written
+            for (let k = 0; k < 2048; k++) {
+                if (wl[k] > 0) {
+                    writeAddrs.push(k);
+                    const boardAddr = k < M ? cell.cb + k : cell.nb + (k - M);
+                    this.writeGlow[boardAddr] = 1.0;
+                }
+            }
+
+            cyclesRun += baseCyc;
+            this._slowCycles += baseCyc;
+
+            if (cls === 13 || cls === 14) break; // BRK or JAM
+        }
+
+        this._slowPc = pc;
+        this._slowRegs = { a, x, y, s, p };
+
+        // Check if quantum is done
+        let done = this._slowCycles >= this._slowBudget;
+        if (done) {
+            // Write back to board storage
+            if (this.hasRegisterSave) {
+                mem[0xF9] = (pc >> 8) & 0xFF; mem[0xFA] = pc & 0xFF;
+                mem[0xFB] = p; mem[0xFC] = a; mem[0xFD] = x; mem[0xFE] = y; mem[0xFF] = s;
+            }
+            this.storage.set(mem.subarray(0, M), cell.cb);
+            this.storage.set(mem.subarray(M, 2 * M), cell.nb);
+            this._slowCell = null; // next call picks new cell
+            this.totalQuanta++;
+        }
+
+        // Decay all glows
+        const decay = 0.92;
+        for (let k = 0; k < this.writeGlow.length; k++) {
+            this.writeGlow[k] *= decay;
+            this.fetchGlow[k] *= decay;
+        }
+
+        return { done, fetchAddrs, writeAddrs, cell };
+    }
+
     getCellView(i, j) {
         const base = (i * this.B + j) * this.M;
         return {
             data: this.storage.slice(base, base + this.M),
-            writes: this.lastWrite.slice(base, base + this.M),
-            fetches: this.lastFetch.slice(base, base + this.M),
+            writes: this.writeGlow ? this.writeGlow.slice(base, base + this.M)
+                                   : this.lastWrite.slice(base, base + this.M),
+            fetches: this.fetchGlow ? this.fetchGlow.slice(base, base + this.M)
+                                    : this.lastFetch.slice(base, base + this.M),
         };
     }
 

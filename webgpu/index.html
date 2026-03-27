@@ -25,6 +25,8 @@
         <button id="run100">100</button>
         <button id="run1k">1000</button>
         <button id="auto">Auto</button>
+        <button id="slow">Slow</button>
+        <label style="font-size:12px; margin-left:12px;"><input type="checkbox" id="lockview" checked> Lock view</label>
     </div>
     <canvas id="cellview" width="260" height="68" style="border:1px solid #030; image-rendering:pixelated; width:520px; height:136px;"></canvas>
     <div id="cellinfo" style="font-size:11px; color:#080;"></div>
@@ -209,10 +211,36 @@
             }
         };
 
+        let slowRunning = false;
+
+        async function slowRun() {
+            slowRunning = !slowRunning;
+            document.getElementById('slow').textContent = slowRunning ? 'Stop Slow' : 'Slow';
+            if (!sim.initSlowMode) { print('Slow mode: CPU only'); slowRunning = false; return; }
+            if (!sim.writeGlow) sim.initSlowMode();
+
+            while (slowRunning) {
+                const result = sim.slowStep(50); // ~50 cycles per frame
+                const locked = document.getElementById('lockview').checked;
+                if (!locked && result.cell) {
+                    inspectI = result.cell.ci;
+                    inspectJ = result.cell.cj;
+                    cellInfoEl.textContent = '(' + inspectI + ',' + inspectJ + ') -> (' +
+                        result.cell.ni + ',' + result.cell.nj + ')';
+                }
+                drawCellView();
+                if (result.done) {
+                    await drawGrid(); // update ASCII grid when quantum finishes
+                }
+                await new Promise(r => setTimeout(r, 20)); // ~50fps
+            }
+        }
+
         document.getElementById('run10').onclick = () => runRounds(10).then(drawCellView);
         document.getElementById('run100').onclick = () => runRounds(100).then(drawCellView);
         document.getElementById('run1k').onclick = () => runRounds(1000).then(drawCellView);
         document.getElementById('auto').onclick = autoRun;
+        document.getElementById('slow').onclick = slowRun;
 
         main();
     </script>
