@@ -54,19 +54,16 @@
                 '  ' + sim.totalQuanta + 'q' +
                 '  ' + qps.toFixed(0) + 'q/s';
 
-            // Build grid with colored highlights for inspected cell pair
+            // Build grid: each char is a clickable span with data attributes
             let grid = '';
             for (let j = B - 1; j >= 0; j--) {
                 for (let i = 0; i < B; i++) {
                     const ch = String.fromCharCode(c.cellChars[i * B + j]);
                     const escaped = ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : ch === '&' ? '&amp;' : ch;
-                    if (i === inspectI && j === inspectJ) {
-                        grid += '<span style="color:#0ff">' + escaped + '</span>';
-                    } else if (i === inspectNI && j === inspectNJ) {
-                        grid += '<span style="color:#06a">' + escaped + '</span>';
-                    } else {
-                        grid += escaped;
-                    }
+                    let color = '#0f0';
+                    if (i === inspectI && j === inspectJ) color = '#0ff';
+                    else if (i === inspectNI && j === inspectNJ) color = '#06a';
+                    grid += '<span data-i="' + i + '" data-j="' + j + '" style="color:' + color + '">' + escaped + '</span>';
                 }
                 grid += '\n';
             }
@@ -192,32 +189,12 @@
             ctx2d.putImageData(img, 0, 0);
         }
 
-        // Measure monospace char width once
-        let _charW = 0;
-        function getCharWidth() {
-            if (_charW) return _charW;
-            const span = document.createElement('span');
-            span.style.font = getComputedStyle(gridEl).font;
-            span.style.visibility = 'hidden';
-            span.style.position = 'absolute';
-            span.textContent = 'X'.repeat(32);
-            document.body.appendChild(span);
-            _charW = span.getBoundingClientRect().width / 32;
-            document.body.removeChild(span);
-            return _charW;
-        }
-
-        // Click on grid to select cell
+        // Click on grid: read data-i, data-j from the clicked span
         gridEl.onclick = (e) => {
-            const rect = gridEl.getBoundingClientRect();
-            const B = sim.B;
-            const style = getComputedStyle(gridEl);
-            const lineH = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.0;
-            const charW = getCharWidth();
-            const padLeft = parseFloat(style.paddingLeft) || 0;
-            const padTop = parseFloat(style.paddingTop) || 0;
-            const col = Math.floor((e.clientX - rect.left - padLeft) / charW);
-            const row = B - 1 - Math.floor((e.clientY - rect.top - padTop) / lineH);
+            const span = e.target.closest('span[data-i]');
+            if (!span) return;
+            const col = parseInt(span.dataset.i);
+            const row = parseInt(span.dataset.j);
             if (col >= 0 && col < sim.B && row >= 0 && row < sim.B) {
                 inspectI = col;
                 inspectJ = row;
