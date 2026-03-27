@@ -17,7 +17,7 @@ function nzFlags(val, p) {
     return (p & ~(F_N | F_Z)) | (val & F_N) | z;
 }
 
-function runQuantum(mem, budget, hasRegisterSave = true) {
+function runQuantum(mem, budget, hasRegisterSave = true, writeLog = null, fetchLog = null) {
     let pc, a, x, y, s, p;
     if (hasRegisterSave) {
         pc = (mem[0xF9] << 8) | mem[0xFA];
@@ -28,6 +28,7 @@ function runQuantum(mem, budget, hasRegisterSave = true) {
     let cycles = 0;
 
     for (let step = 0; step < MAX_STEPS; step++) {
+        if (fetchLog) fetchLog[pc & ADDR_MASK]++;
         const opcode = mem[pc & ADDR_MASK];
         const i = opcode * 7;
         const cls = opcTable[i], addrMode = opcTable[i+1], op = opcTable[i+2];
@@ -150,7 +151,11 @@ function runQuantum(mem, budget, hasRegisterSave = true) {
             break;
         }
 
-        if (doWrite) mem[wAddr & ADDR_MASK] = wVal & 0xFF;
+        if (doWrite) {
+            const wa = wAddr & ADDR_MASK;
+            mem[wa] = wVal & 0xFF;
+            if (writeLog) writeLog[wa]++;
+        }
 
         const totalCyc = baseCyc + extra + brExtra;
         cycles += totalCyc;
@@ -175,6 +180,9 @@ export class BareSimCPU {
         this.storage = new Uint8Array(B * B * M);
         this.totalQuanta = 0;
         this.hasRegisterSave = opts.hasRegisterSave !== false;
+        // Per-byte activity tracking (quantum number of last write/fetch)
+        this.lastWrite = new Uint32Array(B * B * M);
+        this.lastFetch = new Uint32Array(B * B * M);
     }
 
     static async create(B = 16, opts = {}) {
@@ -209,6 +217,10 @@ export class BareSimCPU {
                 }
         }
 
+        // Temporary per-quantum activity logs (2KB address space)
+        const writeLog = new Uint16Array(2048);
+        const fetchLog = new Uint16Array(2048);
+
         for (const [ci, cj, ni, nj] of pairs) {
             const cb = (ci * B + cj) * M, nb = (ni * B + nj) * M;
             mem.set(this.storage.subarray(cb, cb + M), 0);
@@ -218,10 +230,21 @@ export class BareSimCPU {
             while (hl < 32 && (r & 1)) { r >>= 1; hl++; }
             const budget = Math.max(1, Math.ceil(16 * 177 * (hl + Math.random())));
 
-            runQuantum(mem, budget, this.hasRegisterSave);
+            writeLog.fill(0);
+            fetchLog.fill(0);
+            runQuantum(mem, budget, this.hasRegisterSave, writeLog, fetchLog);
 
             this.storage.set(mem.subarray(0, M), cb);
             this.storage.set(mem.subarray(M, 2 * M), nb);
+
+            // Map local activity to board-level tracking (exponential decay + add)
+            const decay = 0.99;
+            for (let k = 0; k < M; k++) {
+                this.lastWrite[cb + k] = this.lastWrite[cb + k] * decay + writeLog[k];
+                this.lastFetch[cb + k] = this.lastFetch[cb + k] * decay + fetchLog[k];
+                this.lastWrite[nb + k] = this.lastWrite[nb + k] * decay + writeLog[M + k];
+                this.lastFetch[nb + k] = this.lastFetch[nb + k] * decay + fetchLog[M + k];
+            }
         }
         this.totalQuanta += N;
     }
@@ -253,6 +276,15 @@ export class BareSimCPU {
             loopVariants: Object.keys(loopSigs).length,
             topLoops: Object.entries(loopSigs).sort((a, b) => b[1] - a[1]).slice(0, 5),
             cellMap, cellChars,
+        };
+    }
+
+    getCellView(i, j) {
+        const base = (i * this.B + j) * this.M;
+        return {
+            data: this.storage.slice(base, base + this.M),
+            writes: this.lastWrite.slice(base, base + this.M),
+            fetches: this.lastFetch.slice(base, base + this.M),
         };
     }
 

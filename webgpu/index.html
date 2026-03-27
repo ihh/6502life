@@ -26,6 +26,8 @@
         <button id="run1k">1000</button>
         <button id="auto">Auto</button>
     </div>
+    <canvas id="cellview" width="260" height="68" style="border:1px solid #030; image-rendering:pixelated; width:520px; height:136px;"></canvas>
+    <div id="cellinfo" style="font-size:11px; color:#080;"></div>
     <pre id="log"></pre>
     <script type="module">
         const logEl = document.getElementById('log');
@@ -117,6 +119,7 @@
                 await sim.runPass();
             }
             await drawGrid();
+            drawCellView();
             const dt = (performance.now() - rt0) / 1000;
             print(n + 'r ' + dt.toFixed(2) + 's');
         }
@@ -130,9 +133,85 @@
             }
         }
 
-        document.getElementById('run10').onclick = () => runRounds(10);
-        document.getElementById('run100').onclick = () => runRounds(100);
-        document.getElementById('run1k').onclick = () => runRounds(1000);
+        // Cell inspector: 4x2 pixels per byte, 32x32 bytes per cell, 2 cells
+        let inspectI = 0, inspectJ = 0;
+        const cvs = document.getElementById('cellview');
+        const ctx2d = cvs.getContext('2d');
+        const cellInfoEl = document.getElementById('cellinfo');
+
+        function drawCellView() {
+            if (!sim || !sim.getCellView) return; // GPU mode has no getCellView
+            const B = sim.B;
+            // Active cell and its right neighbor (wrapping)
+            const v0 = sim.getCellView(inspectI, inspectJ);
+            const v1 = sim.getCellView((inspectI + 1) % B, inspectJ);
+
+            const img = ctx2d.createImageData(260, 68);
+            const d = img.data;
+
+            function drawCell(view, xOff, yOff) {
+                const maxW = 1, maxF = 1;
+                // Find max for normalization
+                let mw = 0.01, mf = 0.01;
+                for (let k = 0; k < 1024; k++) {
+                    if (view.writes[k] > mw) mw = view.writes[k];
+                    if (view.fetches[k] > mf) mf = view.fetches[k];
+                }
+                for (let row = 0; row < 32; row++) {
+                    for (let col = 0; col < 32; col++) {
+                        const byteIdx = row * 32 + col;
+                        const val = view.data[byteIdx];
+                        const wIntensity = Math.min(1, view.writes[byteIdx] / mw);
+                        const fIntensity = Math.min(1, view.fetches[byteIdx] / mf);
+                        // Green: constant base + byte value
+                        const g = 30 + (val > 0 ? 40 : 0);
+                        // Red: write recency
+                        const r = Math.floor(wIntensity * 220);
+                        // Blue: fetch recency
+                        const b = Math.floor(fIntensity * 220);
+                        // Draw 4x2 block
+                        for (let dy = 0; dy < 2; dy++) {
+                            for (let dx = 0; dx < 4; dx++) {
+                                const px = xOff + col * 4 + dx;
+                                const py = yOff + row * 2 + dy;
+                                const bit = (val >> (7 - (dy * 4 + dx))) & 1;
+                                const brightness = bit ? 1.0 : 0.25;
+                                const pi = (py * 260 + px) * 4;
+                                d[pi] = Math.min(255, r * brightness + g * 0.2);
+                                d[pi+1] = Math.min(255, g * brightness);
+                                d[pi+2] = Math.min(255, b * brightness + 10);
+                                d[pi+3] = 255;
+                            }
+                        }
+                    }
+                }
+            }
+
+            drawCell(v0, 0, 2);
+            drawCell(v1, 132, 2);
+
+            // Label
+            ctx2d.putImageData(img, 0, 0);
+        }
+
+        // Click on grid to select cell
+        gridEl.onclick = (e) => {
+            const rect = gridEl.getBoundingClientRect();
+            const charW = gridEl.offsetWidth / sim.B;
+            const charH = gridEl.offsetHeight / (sim.B + 1);
+            const col = Math.floor((e.clientX - rect.left) / charW);
+            const row = sim.B - 1 - Math.floor((e.clientY - rect.top) / charH);
+            if (col >= 0 && col < sim.B && row >= 0 && row < sim.B) {
+                inspectI = col;
+                inspectJ = row;
+                cellInfoEl.textContent = 'Inspecting (' + inspectI + ',' + inspectJ + ')';
+                drawCellView();
+            }
+        };
+
+        document.getElementById('run10').onclick = () => runRounds(10).then(drawCellView);
+        document.getElementById('run100').onclick = () => runRounds(100).then(drawCellView);
+        document.getElementById('run1k').onclick = () => runRounds(1000).then(drawCellView);
         document.getElementById('auto').onclick = autoRun;
 
         main();
