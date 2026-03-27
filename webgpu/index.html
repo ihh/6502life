@@ -27,12 +27,13 @@
     <div style="margin-top:8px;">
         <button id="toggle">Start</button>
         <select id="speed">
-            <option value="0.5">~500 cyc/cell/s</option>
-            <option value="1">~1K cyc/cell/s</option>
-            <option value="2">~2K cyc/cell/s</option>
-            <option value="4" selected>~5K cyc/cell/s</option>
-            <option value="8">~10K cyc/cell/s</option>
-            <option value="15">max speed</option>
+            <option value="0.05">crawl</option>
+            <option value="0.1">very slow</option>
+            <option value="0.25">slow</option>
+            <option value="1" selected>normal</option>
+            <option value="5">fast</option>
+            <option value="25">very fast</option>
+            <option value="100">max</option>
         </select>
     </div>
     <pre id="log"></pre>
@@ -206,21 +207,20 @@
             drawCellView();
         }
 
-        // Main loop: time-budgeted to keep UI responsive
+        // Main loop: run N passes per frame, controlled by dropdown
+        let passQueue = 0; // fractional accumulator for sub-1 rates
+
         async function loop() {
             if (!running) return;
 
-            const budgetMs = parseFloat(document.getElementById('speed').value) || 4;
-            const deadline = performance.now() + budgetMs;
+            const passesPerFrame = parseFloat(document.getElementById('speed').value) || 1;
+            passQueue += passesPerFrame;
+            const n = Math.floor(passQueue);
+            passQueue -= n;
 
-            // Run passes until time budget used
-            let passes = 0;
-            while (performance.now() < deadline) {
+            for (let i = 0; i < n; i++) {
                 await sim.runPass();
                 await sim.runPass();
-                passes++;
-                // Always do at least 1, but yield after budget
-                if (passes >= 1 && performance.now() >= deadline) break;
             }
 
             await drawGrid();
