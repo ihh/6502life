@@ -25,7 +25,6 @@
         <button id="run100">100</button>
         <button id="run1k">1000</button>
         <button id="auto">Auto</button>
-        <button id="slow">Slow</button>
     </div>
     <canvas id="cellview" width="260" height="68" style="border:1px solid #030; image-rendering:pixelated; width:520px; height:136px;"></canvas>
     <div id="cellinfo" style="font-size:11px; color:#080;"></div>
@@ -132,9 +131,19 @@
             autoRunning = !autoRunning;
             document.getElementById('auto').textContent = autoRunning ? 'Stop' : 'Auto';
             while (autoRunning) {
-                await runRounds(gpuMode ? 50 : 5);
-                await new Promise(r => setTimeout(r, 10));
+                const n = gpuMode ? 50 : 5;
+                for (let i = 0; i < n; i++) {
+                    await sim.runPass();
+                    await sim.runPass();
+                }
+                drawCellView();
+                statsEl.textContent =
+                    sim.totalQuanta + 'q  ' +
+                    (sim.totalQuanta / ((performance.now() - t0) / 1000)).toFixed(0) + 'q/s';
+                await new Promise(r => setTimeout(r, 30)); // yield to UI for clicks
             }
+            await drawGrid(); // full grid update when stopped
+            drawCellView();
         }
 
         // Cell inspector: 4x2 pixels per byte, 32x32 bytes per cell, 2 cells
@@ -206,30 +215,10 @@
             }
         };
 
-        let slowRunning = false;
-
-        async function slowRun() {
-            slowRunning = !slowRunning;
-            document.getElementById('slow').textContent = slowRunning ? 'Stop Slow' : 'Slow';
-            if (!sim.initSlowMode) { print('Slow mode: CPU only'); slowRunning = false; return; }
-            if (!sim.writeGlow) sim.initSlowMode();
-
-            while (slowRunning) {
-                const result = sim.slowStep(15); // ~15 cycles per frame = ~1 instruction
-                // View always stays on the clicked cell
-                drawCellView();
-                if (result.done) {
-                    await drawGrid();
-                }
-                await new Promise(r => setTimeout(r, 20)); // ~50fps
-            }
-        }
-
         document.getElementById('run10').onclick = () => runRounds(10).then(drawCellView);
         document.getElementById('run100').onclick = () => runRounds(100).then(drawCellView);
         document.getElementById('run1k').onclick = () => runRounds(1000).then(drawCellView);
         document.getElementById('auto').onclick = autoRun;
-        document.getElementById('slow').onclick = slowRun;
 
         main();
     </script>
