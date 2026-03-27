@@ -1589,43 +1589,53 @@ class BoardController {
                     }
                 }
                 // ── Local pairwise word decay ──
-                // Compare a random 16-bit word at the same offset in the
-                // two scheduled cells (active + neighbor). If they match,
-                // resample each of the 32 bits with probability pWordDecayBitNoise.
-                // This is O(1) per quantum and scales with copy density:
-                // identical neighbors always match, diverse neighbors rarely do.
+                // Sample two random 16-bit words from the 2KB address space
+                // (active cell + neighbor = 0x000-0x7FF). If the two words
+                // match (and aren't from the same address), resample each of
+                // the 32 bits with probability pWordDecayBitNoise.
+                // Catches intra-cell repetition, cross-cell cloning, and all
+                // patterns in between. O(1) per event.
                 if (this.boardParams.wordDecayRate > 0) {
                     const mt = this.memory.mt;
                     const s = this.memory.storage;
                     const M = this.memory.M;
+                    const Nsq = this.memory.Nsquared;
+                    const memSize = Nsq * M; // total mapped bytes (e.g. 2048 for N=2)
                     const eps = this.boardParams.pWordDecayBitNoise ?? 0.01;
                     const q = this.boardParams.pWordDecayBitNoiseZero ?? 0.5;
                     const rate = this.boardParams.wordDecayRate;
                     const nEvents = rate >= 1 ? Math.floor(rate) : (mt.real() < rate ? 1 : 0);
-                    const base0 = this.memory.neighborCellStorageBase(0);
-                    const base1 = this.memory.neighborCellStorageBase(1);
+                    // Precompute storage bases for mapped cells
+                    const bases = [];
+                    for (let c = 0; c < Nsq; c++) {
+                        bases.push(this.memory.neighborCellStorageBase(c));
+                    }
                     for (let w = 0; w < nEvents; w++) {
-                        // Pick a random offset within the cell (0 to M-2)
-                        const offset = mt.int() % (M - 1);
-                        // Read the 16-bit word from each cell
-                        const a0 = s[base0 + offset];
-                        const a1 = s[base0 + offset + 1];
-                        const b0 = s[base1 + offset];
-                        const b1 = s[base1 + offset + 1];
-                        // If the two words match, apply noise to both copies
-                        if (a0 === b0 && a1 === b1) {
+                        // Sample two random word-aligned addresses from 0..memSize-2
+                        const addr1 = mt.int() % (memSize - 1);
+                        const addr2 = mt.int() % (memSize - 1);
+                        if (addr1 === addr2) continue; // same location, skip
+                        // Map logical address to storage address
+                        const cell1 = Math.floor(addr1 / M);
+                        const off1 = addr1 % M;
+                        const cell2 = Math.floor(addr2 / M);
+                        const off2 = addr2 % M;
+                        if (off1 >= M - 1 || off2 >= M - 1) continue; // word straddles cell boundary
+                        const sa1 = bases[cell1] + off1;
+                        const sa2 = bases[cell2] + off2;
+                        // Compare the two 16-bit words
+                        if (s[sa1] === s[sa2] && s[sa1 + 1] === s[sa2 + 1]) {
+                            // Match: resample each of the 32 bits (16 per word)
                             for (let bit = 0; bit < 16; bit++) {
                                 const byteIdx = bit < 8 ? 0 : 1;
                                 const bitIdx = bit & 7;
                                 if (mt.real() < eps) {
-                                    const newBit = (mt.real() >= q) ? 1 : 0;
-                                    // Apply to cell 0
-                                    const addr0 = base0 + offset + byteIdx;
-                                    s[addr0] = (s[addr0] & ~(1 << bitIdx)) | (newBit << bitIdx);
-                                    // Apply independently to cell 1
-                                    const newBit1 = (mt.real() >= q) ? 1 : 0;
-                                    const addr1 = base1 + offset + byteIdx;
-                                    s[addr1] = (s[addr1] & ~(1 << bitIdx)) | (newBit1 << bitIdx);
+                                    const nv1 = (mt.real() >= q) ? 1 : 0;
+                                    s[sa1 + byteIdx] = (s[sa1 + byteIdx] & ~(1 << bitIdx)) | (nv1 << bitIdx);
+                                }
+                                if (mt.real() < eps) {
+                                    const nv2 = (mt.real() >= q) ? 1 : 0;
+                                    s[sa2 + byteIdx] = (s[sa2 + byteIdx] & ~(1 << bitIdx)) | (nv2 << bitIdx);
                                 }
                             }
                         }
