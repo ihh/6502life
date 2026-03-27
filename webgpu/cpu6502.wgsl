@@ -257,8 +257,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             else if (op == 5u) { cond = (p & F_C) != 0u; }  // BCS
             else if (op == 6u) { cond = (p & F_Z) == 0u; }  // BNE
             else if (op == 7u) { cond = (p & F_Z) != 0u; }  // BEQ
-            let offset = select(i32(op1), i32(op1) - 256, op1 >= 128u);
-            let target = u32(i32(pc + 2u) + offset) & 0xFFFFu;
+            let brOff = select(i32(op1), i32(op1) - 256, op1 >= 128u);
+            let target = u32(i32(pc + 2u) + brOff) & 0xFFFFu;
             if (cond) {
                 nextPc = target;
                 let samePage = (target >> 8u) == ((pc + 2u) >> 8u);
