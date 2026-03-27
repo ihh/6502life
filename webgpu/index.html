@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>6502life WebGPU Bare Sim</title>
+    <style>
+        body { font-family: monospace; background: #111; color: #0f0; padding: 20px; }
+        #log { white-space: pre; font-size: 14px; line-height: 1.4; }
+        button { font-family: monospace; font-size: 16px; padding: 8px 16px;
+                 background: #030; color: #0f0; border: 1px solid #0f0; cursor: pointer; }
+        button:hover { background: #050; }
+    </style>
+</head>
+<body>
+    <h2>6502life Bare Sim — WebGPU</h2>
+    <button id="run">Run 100 rounds</button>
+    <button id="run1k">Run 1000 rounds</button>
+    <pre id="log">Initializing...</pre>
+    <script type="module">
+        import { BareSim } from './bare-sim.js';
+
+        const log = document.getElementById('log');
+        function print(msg) { log.textContent += msg + '\n'; }
+
+        async function main() {
+            log.textContent = '';
+
+            if (!navigator.gpu) {
+                print('WebGPU not supported in this browser.');
+                print('Requires Safari 17+ (iOS 17+) or Chrome 113+.');
+                return;
+            }
+
+            print('Creating WebGPU device...');
+            let sim;
+            try {
+                sim = await BareSim.create(16);
+            } catch (e) {
+                print('Error: ' + e.message);
+                return;
+            }
+            print(`Board: ${sim.B}×${sim.B} (${sim.B * sim.B} cells)`);
+
+            // Plant BCC replicator at (0,0)
+            sim.writeCell(0, 0, 0, [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8]);
+            sim.writeCell(0, 0, 0xF9, [0x00, 0x00]); // saved PC = 0
+            sim.writeCell(0, 0, 0xFF, [0xFF]);        // saved S
+
+            const c0 = await sim.census();
+            print(`Initial: ${c0.functional}/${c0.total} functional\n`);
+
+            async function runRounds(n) {
+                const t0 = performance.now();
+                for (let i = 0; i < n; i++) {
+                    await sim.runPass();
+                    await sim.runPass();
+                }
+                const dt = (performance.now() - t0) / 1000;
+                const c = await sim.census();
+                const qps = sim.totalQuanta / (performance.now() / 1000 - window._t0 / 1000);
+                print(`${String(n).padStart(5)} rounds (${sim.totalQuanta} quanta): ` +
+                      `${c.functional}/${c.total} fn, ${c.loopVariants} variants ` +
+                      `[${dt.toFixed(1)}s, ${qps.toFixed(0)} q/s]`);
+                for (const [sig, cnt] of c.topLoops) {
+                    print(`  ${sig} ×${cnt}`);
+                }
+            }
+
+            window._t0 = performance.now();
+
+            document.getElementById('run').onclick = () => runRounds(100);
+            document.getElementById('run1k').onclick = () => runRounds(1000);
+
+            print('Ready. Click "Run" to start.\n');
+
+            // Auto-run a small test
+            await runRounds(10);
+        }
+
+        main();
+    </script>
+</body>
+</html>
