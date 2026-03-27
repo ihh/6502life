@@ -99,6 +99,7 @@
             statsEl.textContent=c.functional+'/'+c.total+' alive  var='+c.loopVariants+'  '+r+' cyc/cell/s  '+fpsVal+' fps';
 
             gridCtx.fillStyle='#111'; gridCtx.fillRect(0,0,gridCanvas.width,gridCanvas.height);
+            gridCtx.font='10px monospace'; gridCtx.textBaseline='top';
             for(let j=B-1;j>=0;j--) for(let i=0;i<B;i++) {
                 const sx=i*CHAR_W, sy=(B-1-j)*CHAR_H;
                 const ch=String.fromCharCode(c.cellChars[i*B+j]);

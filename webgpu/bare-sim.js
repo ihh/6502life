@@ -223,10 +223,11 @@ export class BareSim {
             cellChars[ci] = 33 + (h % 94);
         }
 
-        readBuffer.unmap();
-        // Keep a CPU-side snapshot for getCellView
-        this._storageSnapshot = new Uint8Array(storage);
+        // Copy snapshot BEFORE unmap (getMappedRange view is detached on unmap)
+        this._storageSnapshot = new Uint8Array(storage.length);
+        this._storageSnapshot.set(storage);
 
+        readBuffer.unmap();
         readBuffer.destroy();
 
         return {
