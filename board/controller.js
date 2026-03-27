@@ -269,6 +269,8 @@ class BoardController {
             neighborhoodSize: 7,    // neighborhood dimension: 2, 3, 5, or 7
             schedulerMode: 'random', // 'random' or 'checkerboard'
             decayRate: 0,            // random bytes zeroed per quantum (0 = off)
+            wordDecayRate: 0,        // frequency-dependent decay events per quantum (0 = off)
+            pWordNoiseZero: 0.5,     // P(resampled bit = 0) for word decay
             diversityBonus: false,   // neighborhood diversity affects quantum length
             similarityCopyNoise: false, // BRK copy noise scales with src/dest similarity
         }, boardParams);
@@ -397,7 +399,8 @@ class BoardController {
             for (const key of ['pBitNoise', 'pBitNoiseZero', 'hasCompass',
                                'hasAtomicWrites', 'hasLookupTables', 'hasOrientedRegisters', 'hasRNG',
                                'neighborhoodSize', 'schedulerMode',
-                               'decayRate', 'diversityBonus', 'similarityCopyNoise']) {
+                               'decayRate', 'wordDecayRate', 'pWordNoiseZero',
+                               'diversityBonus', 'similarityCopyNoise']) {
                 if (incoming[key] !== undefined) this.boardParams[key] = incoming[key];
             }
             // Restore brkOps: prefer brkOps if present, else synthesize from legacy flags
@@ -1582,6 +1585,39 @@ class BoardController {
                     for (let d = 0; d < this.boardParams.decayRate; d++) {
                         const addr = mt.int() % storageSize;
                         this.memory.storage[addr] = 0;
+                    }
+                }
+                // ── Frequency-dependent word decay ──
+                // Pick a random 2-byte word from the board. Scan for all
+                // matching adjacent byte-pairs (including odd-aligned).
+                // Corrupt one random bit in each matched byte.
+                if (this.boardParams.wordDecayRate > 0) {
+                    const mt = this.memory.mt;
+                    const s = this.memory.storage;
+                    const sz = this.memory.storageSize;
+                    const q = this.boardParams.pWordNoiseZero ?? 0.5;
+                    for (let w = 0; w < this.boardParams.wordDecayRate; w++) {
+                        // Sample a word from a random board location
+                        const sampleAddr = mt.int() % (sz - 1);
+                        const lo = s[sampleAddr];
+                        const hi = s[sampleAddr + 1];
+                        // Scan board for all matching adjacent pairs
+                        // Mark matched bytes (each byte marked at most once)
+                        const marked = new Uint8Array(sz); // 0 = unmarked, 1 = marked
+                        for (let i = 0; i < sz - 1; i++) {
+                            if (s[i] === lo && s[i + 1] === hi) {
+                                marked[i] = 1;
+                                marked[i + 1] = 1;
+                            }
+                        }
+                        // Corrupt one random bit in each marked byte
+                        for (let i = 0; i < sz; i++) {
+                            if (marked[i]) {
+                                const bit = mt.int() & 7;
+                                const newBitVal = (mt.real() >= q) ? 1 : 0;
+                                s[i] = (s[i] & ~(1 << bit)) | (newBitVal << bit);
+                            }
+                        }
                     }
                 }
                 break;
