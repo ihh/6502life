@@ -6,13 +6,15 @@
     <title>6502life Bare Sim</title>
     <style>
         body { font-family: monospace; background: #111; color: #0f0; padding: 12px; }
-        #log { white-space: pre; font-size: 11px; line-height: 1.2; max-height: 150px; overflow-y: auto; }
+        #log { white-space: pre; font-size: 11px; line-height: 1.2; max-height: 100px; overflow-y: auto; }
         #grid { margin: 8px 0; cursor: crosshair; }
         #stats { font-size: 14px; margin: 8px 0; }
         #mode { font-size: 12px; color: #0a0; margin-bottom: 8px; }
-        button { font-family: monospace; font-size: 14px; padding: 6px 12px;
+        #cellinfo { font-size: 11px; color: #080; }
+        button, select { font-family: monospace; font-size: 14px; padding: 6px 12px;
                  background: #030; color: #0f0; border: 1px solid #0f0; cursor: pointer;
                  margin-right: 6px; margin-bottom: 6px; }
+        select { padding: 4px 8px; }
     </style>
 </head>
 <body>
@@ -20,32 +22,39 @@
     <div id="mode"></div>
     <div id="stats"></div>
     <canvas id="grid"></canvas>
-    <div>
-        <button id="run10">10</button>
-        <button id="run100">100</button>
-        <button id="run1k">1000</button>
-        <button id="auto">Auto</button>
-    </div>
     <canvas id="cellview" width="260" height="68" style="border:1px solid #030; image-rendering:pixelated; width:520px; height:136px;"></canvas>
-    <div id="cellinfo" style="font-size:11px; color:#080;"></div>
+    <div id="cellinfo"></div>
+    <div style="margin-top:8px;">
+        <button id="toggle">Start</button>
+        <select id="speed">
+            <option value="1">1 round/frame (slow)</option>
+            <option value="5" selected>5 rounds/frame</option>
+            <option value="25">25 rounds/frame</option>
+            <option value="100">100 rounds/frame (fast)</option>
+            <option value="500">500 rounds/frame (blast)</option>
+        </select>
+    </div>
     <pre id="log"></pre>
     <script type="module">
         const logEl = document.getElementById('log');
-        const gridEl = document.getElementById('grid');
+        const gridCanvas = document.getElementById('grid');
+        const gridCtx = gridCanvas.getContext('2d');
         const statsEl = document.getElementById('stats');
         const modeEl = document.getElementById('mode');
+        const cellInfoEl = document.getElementById('cellinfo');
+        const cvs = document.getElementById('cellview');
+        const ctx2d = cvs.getContext('2d');
+
         function print(msg) { logEl.textContent += msg + '\n'; }
 
         let sim = null;
         let t0 = 0;
-        let autoRunning = false;
+        let running = false;
         let gpuMode = false;
+        let inspectI = 0, inspectJ = 0;
+        let inspectNI = 1, inspectNJ = 0;
 
-        // Grid canvas setup
-        const gridCanvas = document.getElementById('grid');
-        const gridCtx = gridCanvas.getContext('2d');
         const CHAR_W = 8, CHAR_H = 12;
-        let lastCensus = null;
 
         function initGridCanvas() {
             const B = sim.B;
@@ -58,8 +67,7 @@
         }
 
         async function drawGrid() {
-            lastCensus = await sim.census();
-            const c = lastCensus;
+            const c = await sim.census();
             const B = sim.B;
             const elapsed = (performance.now() - t0) / 1000;
             const qps = elapsed > 0 ? (sim.totalQuanta / elapsed) : 0;
@@ -87,6 +95,64 @@
                 }
             }
         }
+
+        function drawCellView() {
+            if (!sim || !sim.getCellView) return;
+            const v0 = sim.getCellView(inspectI, inspectJ);
+            const v1 = sim.getCellView(inspectNI, inspectNJ);
+
+            const img = ctx2d.createImageData(260, 68);
+            const d = img.data;
+
+            function drawCell(view, xOff, yOff) {
+                for (let row = 0; row < 32; row++) {
+                    for (let col = 0; col < 32; col++) {
+                        const byteIdx = row * 32 + col;
+                        const val = view.data[byteIdx];
+                        const wI = Math.pow(Math.min(1, view.writes[byteIdx]), 0.3);
+                        const fI = Math.pow(Math.min(1, view.fetches[byteIdx]), 0.3);
+                        const hasData = val > 0 ? 1 : 0;
+                        for (let dy = 0; dy < 2; dy++) {
+                            for (let dx = 0; dx < 4; dx++) {
+                                const px = xOff + col * 4 + dx;
+                                const py = yOff + row * 2 + dy;
+                                const bit = (val >> (7 - (dy * 4 + dx))) & 1;
+                                const br = bit ? 1.0 : 0.2;
+                                const pi = (py * 260 + px) * 4;
+                                d[pi]   = Math.min(255, Math.floor((wI * 255 + hasData * 15) * br));
+                                d[pi+1] = Math.min(255, Math.floor((hasData * 40 + wI * 30 + fI * 30) * br));
+                                d[pi+2] = Math.min(255, Math.floor((fI * 255 + hasData * 15) * br));
+                                d[pi+3] = 255;
+                            }
+                        }
+                    }
+                }
+            }
+
+            drawCell(v0, 0, 2);
+            drawCell(v1, 132, 2);
+            ctx2d.putImageData(img, 0, 0);
+        }
+
+        // Click grid to select cell
+        gridCanvas.onclick = (e) => {
+            const rect = gridCanvas.getBoundingClientRect();
+            const scaleX = gridCanvas.width / rect.width;
+            const scaleY = gridCanvas.height / rect.height;
+            const px = (e.clientX - rect.left) * scaleX;
+            const py = (e.clientY - rect.top) * scaleY;
+            const col = Math.floor(px / CHAR_W);
+            const row = sim.B - 1 - Math.floor(py / CHAR_H);
+            if (col >= 0 && col < sim.B && row >= 0 && row < sim.B) {
+                inspectI = col;
+                inspectJ = row;
+                inspectNI = (col + 1) % sim.B;
+                inspectNJ = row;
+                cellInfoEl.textContent = '(' + inspectI + ',' + inspectJ + ') + (' + inspectNI + ',' + inspectNJ + ')';
+                drawCellView();
+                drawGrid();
+            }
+        };
 
         async function tryGPU() {
             if (!navigator.gpu) return null;
@@ -123,7 +189,6 @@
                 print('Using CPU fallback');
             }
 
-            // Plant BCC replicator
             sim.writeCell(0, 0, 0, [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8]);
             sim.writeCell(0, 0, 0xF9, [0x00, 0x00]);
             sim.writeCell(0, 0, 0xFF, [0xFF]);
@@ -132,123 +197,33 @@
             initGridCanvas();
             t0 = performance.now();
             await drawGrid();
-            print('Ready.');
-        }
-
-        async function runRounds(n) {
-            const rt0 = performance.now();
-            for (let i = 0; i < n; i++) {
-                await sim.runPass();
-                await sim.runPass();
-            }
-            await drawGrid();
             drawCellView();
-            const dt = (performance.now() - rt0) / 1000;
-            print(n + 'r ' + dt.toFixed(2) + 's');
+            print('Ready. Click Start.');
         }
 
-        async function autoRun() {
-            autoRunning = !autoRunning;
-            document.getElementById('auto').textContent = autoRunning ? 'Stop' : 'Auto';
-            if (!autoRunning) return;
+        // Main loop driven by requestAnimationFrame
+        function loop() {
+            if (!running) return;
+            const rounds = parseInt(document.getElementById('speed').value) || 5;
 
-            async function frame() {
-                if (!autoRunning) {
-                    await drawGrid();
-                    drawCellView();
-                    return;
-                }
-                const n = gpuMode ? 50 : 5;
-                for (let i = 0; i < n; i++) {
+            // Run rounds synchronously (no await in rAF callback)
+            const work = async () => {
+                for (let i = 0; i < rounds; i++) {
                     await sim.runPass();
                     await sim.runPass();
                 }
                 await drawGrid();
                 drawCellView();
-                statsEl.textContent =
-                    sim.totalQuanta + 'q  ' +
-                    (sim.totalQuanta / ((performance.now() - t0) / 1000)).toFixed(0) + 'q/s';
-                requestAnimationFrame(frame);
-            }
-            requestAnimationFrame(frame);
+                if (running) requestAnimationFrame(loop);
+            };
+            work();
         }
 
-        // Cell inspector: 4x2 pixels per byte, 32x32 bytes per cell, 2 cells
-        let inspectI = 0, inspectJ = 0;
-        let inspectNI = 1, inspectNJ = 0; // neighbor
-        const cvs = document.getElementById('cellview');
-        const ctx2d = cvs.getContext('2d');
-        const cellInfoEl = document.getElementById('cellinfo');
-
-        function drawCellView() {
-            if (!sim || !sim.getCellView) return; // GPU mode has no getCellView
-            const B = sim.B;
-            // Inspected cell pair (cyan + dark blue on grid)
-            const v0 = sim.getCellView(inspectI, inspectJ);
-            const v1 = sim.getCellView(inspectNI, inspectNJ);
-
-            const img = ctx2d.createImageData(260, 68);
-            const d = img.data;
-
-            function drawCell(view, xOff, yOff) {
-                for (let row = 0; row < 32; row++) {
-                    for (let col = 0; col < 32; col++) {
-                        const byteIdx = row * 32 + col;
-                        const val = view.data[byteIdx];
-                        // Absolute glow: clamp at 1.0, gamma 0.3 for punch
-                        const wI = Math.pow(Math.min(1, view.writes[byteIdx]), 0.3);
-                        const fI = Math.pow(Math.min(1, view.fetches[byteIdx]), 0.3);
-                        // Base green from byte content
-                        const hasData = val > 0 ? 1 : 0;
-                        // Draw 4x2 block
-                        for (let dy = 0; dy < 2; dy++) {
-                            for (let dx = 0; dx < 4; dx++) {
-                                const px = xOff + col * 4 + dx;
-                                const py = yOff + row * 2 + dy;
-                                const bit = (val >> (7 - (dy * 4 + dx))) & 1;
-                                const br = bit ? 1.0 : 0.2;
-                                const pi = (py * 260 + px) * 4;
-                                d[pi]   = Math.min(255, Math.floor((wI * 255 + hasData * 15) * br));
-                                d[pi+1] = Math.min(255, Math.floor((hasData * 40 + wI * 30 + fI * 30) * br));
-                                d[pi+2] = Math.min(255, Math.floor((fI * 255 + hasData * 15) * br));
-                                d[pi+3] = 255;
-                            }
-                        }
-                    }
-                }
-            }
-
-            drawCell(v0, 0, 2);
-            drawCell(v1, 132, 2);
-
-            // Label
-            ctx2d.putImageData(img, 0, 0);
-        }
-
-        // Click on grid canvas: compute cell from pixel coords
-        gridCanvas.onclick = (e) => {
-            const rect = gridCanvas.getBoundingClientRect();
-            const scaleX = gridCanvas.width / rect.width;
-            const scaleY = gridCanvas.height / rect.height;
-            const px = (e.clientX - rect.left) * scaleX;
-            const py = (e.clientY - rect.top) * scaleY;
-            const col = Math.floor(px / CHAR_W);
-            const row = sim.B - 1 - Math.floor(py / CHAR_H);
-            if (col >= 0 && col < sim.B && row >= 0 && row < sim.B) {
-                inspectI = col;
-                inspectJ = row;
-                inspectNI = (col + 1) % sim.B;
-                inspectNJ = row;
-                cellInfoEl.textContent = '(' + inspectI + ',' + inspectJ + ') + (' + inspectNI + ',' + inspectNJ + ')';
-                drawCellView();
-                drawGrid();
-            }
+        document.getElementById('toggle').onclick = () => {
+            running = !running;
+            document.getElementById('toggle').textContent = running ? 'Stop' : 'Start';
+            if (running) requestAnimationFrame(loop);
         };
-
-        document.getElementById('run10').onclick = () => runRounds(10).then(drawCellView);
-        document.getElementById('run100').onclick = () => runRounds(100).then(drawCellView);
-        document.getElementById('run1k').onclick = () => runRounds(1000).then(drawCellView);
-        document.getElementById('auto').onclick = autoRun;
 
         main();
     </script>
