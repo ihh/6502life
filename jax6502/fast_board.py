@@ -1,143 +1,230 @@
 """
-All-JAX bare sim board. Storage stays on device (GPU/CPU).
-No numpy transfers during simulation — only for initialization and census.
+All-JAX bare sim board, optimized for GPU.
 
-The board storage is a flat jnp.uint8 array of shape [B*B*M].
-Each pass: build index arrays for cell/neighbor pairs, gather 2KB
-chunks, run all quanta via vmap, scatter results back.
+The entire simulation loop — scheduling, gather, execution, scatter —
+runs in JIT-compiled JAX. No Python interpreter overhead during sim.
+Board storage stays on device. Only census() transfers to host.
 """
 
 import jax
 import jax.numpy as jnp
+import jax.random as jr
 import numpy as np
 from functools import partial
-from .batch import run_one_quantum
+from .cpu import step_one_instruction, ADDR_MASK
+
+
+# Register save area offsets
+REG_PCHI = 0xF9
+REG_PCLO = 0xFA
+REG_P    = 0xFB
+REG_A    = 0xFC
+REG_X    = 0xFD
+REG_Y    = 0xFE
+REG_S    = 0xFF
+
+MAX_STEPS = 350  # instructions per quantum (covers ~95% of quanta)
+
+
+def _run_one_quantum(memory, cycle_budget):
+    """Run one cell for one quantum. Pure JAX, no host calls."""
+    # Read registers
+    pc = (memory[REG_PCHI].astype(jnp.int32) << 8) | memory[REG_PCLO].astype(jnp.int32)
+    a = memory[REG_A].astype(jnp.int32)
+    x = memory[REG_X].astype(jnp.int32)
+    y = memory[REG_Y].astype(jnp.int32)
+    s = memory[REG_S].astype(jnp.int32)
+    p = memory[REG_P].astype(jnp.int32)
+
+    def scan_fn(carry, _):
+        pc, a, x, y, s, p, mem, cyc_used, brk_op, done = carry
+        new_pc, new_a, new_x, new_y, new_s, new_p, new_mem, cyc, brk, halted = \
+            step_one_instruction(
+                pc.astype(jnp.uint16), a.astype(jnp.uint8),
+                x.astype(jnp.uint8), y.astype(jnp.uint8),
+                s.astype(jnp.uint8), p.astype(jnp.uint8), mem)
+        new_cyc = cyc_used + cyc
+        accept = ~done & (new_cyc < cycle_budget)
+        done_now = done | (new_cyc >= cycle_budget) | (brk >= 0) | halted
+        # Select: accept new state or keep old
+        out = (
+            jnp.where(accept, new_pc.astype(jnp.int32), pc),
+            jnp.where(accept, new_a.astype(jnp.int32), a),
+            jnp.where(accept, new_x.astype(jnp.int32), x),
+            jnp.where(accept, new_y.astype(jnp.int32), y),
+            jnp.where(accept, new_s.astype(jnp.int32), s),
+            jnp.where(accept, new_p.astype(jnp.int32), p),
+            jnp.where(accept, new_mem, mem),
+            jnp.where(accept, new_cyc, cyc_used),
+            jnp.where(accept & (brk >= 0), brk, brk_op),
+            done_now,
+        )
+        return out, None
+
+    init = (pc, a, x, y, s, p, memory,
+            jnp.int32(0), jnp.int16(-1), jnp.bool_(False))
+    (pc_f, a_f, x_f, y_f, s_f, p_f, mem_f, _, _, _), _ = \
+        jax.lax.scan(scan_fn, init, None, length=MAX_STEPS)
+
+    # Save registers
+    mem_f = mem_f.at[REG_PCHI].set(((pc_f >> 8) & 0xFF).astype(jnp.uint8))
+    mem_f = mem_f.at[REG_PCLO].set((pc_f & 0xFF).astype(jnp.uint8))
+    mem_f = mem_f.at[REG_P].set(p_f.astype(jnp.uint8))
+    mem_f = mem_f.at[REG_A].set(a_f.astype(jnp.uint8))
+    mem_f = mem_f.at[REG_X].set(x_f.astype(jnp.uint8))
+    mem_f = mem_f.at[REG_Y].set(y_f.astype(jnp.uint8))
+    mem_f = mem_f.at[REG_S].set(s_f.astype(jnp.uint8))
+    return mem_f
+
+
+def _sample_budgets(key, n):
+    """Sample n cycle budgets from the geometric-exponential distribution."""
+    k1, k2 = jr.split(key)
+    # Geometric: count trailing 1-bits in random int
+    bits = jr.randint(k1, (n,), 0, 2**31 - 1, dtype=jnp.int32)
+    # Count trailing ones: use bit tricks
+    # ~bits gives 0s where 1s were; (bits+1) & ~bits isolates lowest 0-bit
+    # Position of lowest 0-bit = number of trailing 1s
+    inverted = ~bits
+    lowest_zero = inverted & (-inverted)  # isolate lowest set bit in inverted
+    # log2 of lowest_zero = position = trailing 1-count
+    # Use integer bit counting: clz(lowest_zero) on [1..2^31]
+    # Approximate: floor(log2(x)) via float conversion
+    half_lives = jnp.floor(jnp.log2(jnp.maximum(lowest_zero.astype(jnp.float32), 1.0))).astype(jnp.int32)
+    half_lives = jnp.minimum(half_lives, 31)
+    # Fractional part
+    frac = jr.uniform(k2, (n,))
+    budgets = jnp.ceil(16 * 177 * (half_lives + frac)).astype(jnp.int32)
+    return jnp.maximum(budgets, 1)
+
+
+def _build_pairs_jax(key, B, M):
+    """Build checkerboard pairs entirely in JAX. Returns [N, 2] index array."""
+    k1, k2, k3 = jr.split(key, 3)
+    rv = jr.randint(k1, (), 0, 8)
+    tiling = rv & 1
+    offset_i = (rv >> 1) & 1
+    offset_j = (rv >> 2) & 1
+
+    N = (B * B) // 2
+    role_bits = jr.randint(k2, (N,), 0, 2)
+
+    # Precompute all pair coordinates for both tilings
+    # Tiling 0 (X): pair along i-axis
+    pairs_x = jnp.zeros((N, 2), dtype=jnp.int32)
+    idx = 0
+    # Build with numpy then convert (pair topology is static for given B)
+    pairs_x_np = np.zeros((N, 4), dtype=np.int32)  # [ci, cj, ni, nj]
+    pairs_y_np = np.zeros((N, 4), dtype=np.int32)
+    idx = 0
+    for k in range(B // 2):
+        for j in range(B):
+            i0, i1 = 2 * k, 2 * k + 1
+            pairs_x_np[idx] = [i0, j, i1, j]
+            idx += 1
+    idx = 0
+    for i in range(B):
+        for k in range(B // 2):
+            j0, j1 = 2 * k, 2 * k + 1
+            pairs_y_np[idx] = [i, j0, i, j1]
+            idx += 1
+
+    pairs_x_static = jnp.array(pairs_x_np, dtype=jnp.int32)
+    pairs_y_static = jnp.array(pairs_y_np, dtype=jnp.int32)
+
+    # Select tiling
+    pairs_base = jnp.where(tiling, pairs_y_static, pairs_x_static)
+
+    # Apply offsets (wrapping)
+    ci = (pairs_base[:, 0] + offset_i) % B
+    cj = (pairs_base[:, 1] + offset_j) % B
+    ni = (pairs_base[:, 2] + offset_i) % B
+    nj = (pairs_base[:, 3] + offset_j) % B
+
+    # Apply role: swap cell and neighbor when role=1
+    ci_out = jnp.where(role_bits == 0, ci, ni)
+    cj_out = jnp.where(role_bits == 0, cj, nj)
+    ni_out = jnp.where(role_bits == 0, ni, ci)
+    nj_out = jnp.where(role_bits == 0, nj, cj)
+
+    # Convert to flat storage bases
+    cell_bases = (ci_out * B + cj_out) * M
+    nbr_bases = (ni_out * B + nj_out) * M
+
+    return jnp.stack([cell_bases, nbr_bases], axis=1)  # [N, 2]
 
 
 @partial(jax.jit, static_argnums=(1, 2))
-def _run_pass(storage, B, M, pair_indices, budgets):
-    """Run one checkerboard pass entirely in JAX.
+def _run_pass(storage, B, M, key):
+    """Run one checkerboard pass. All JAX, no Python."""
+    k1, k2, k3 = jr.split(key, 3)
 
-    Args:
-        storage: uint8[B*B*M] — flat board storage
-        B: board size (static)
-        M: bytes per cell (static, 1024)
-        pair_indices: int32[N, 2] — (cell_flat_base, neighbor_flat_base) for each pair
-        budgets: int32[N] — cycle budget per pair
+    pair_indices = _build_pairs_jax(k1, B, M)
+    N = pair_indices.shape[0]
+    budgets = _sample_budgets(k2, N)
+    offsets = jnp.arange(M, dtype=jnp.int32)
 
-    Returns:
-        storage: updated uint8[B*B*M]
-    """
-    offsets = jnp.arange(M, dtype=jnp.int32)  # [0..1023]
-
-    # Vectorized gather: build [N, 2048] from storage using fancy indexing
+    # Vectorized gather
     cell_idx = pair_indices[:, 0:1] + offsets[None, :]  # [N, M]
     nbr_idx = pair_indices[:, 1:2] + offsets[None, :]   # [N, M]
-    cell_mem = storage[cell_idx]   # [N, M]
-    nbr_mem = storage[nbr_idx]     # [N, M]
-    mem_batch = jnp.concatenate([cell_mem, nbr_mem], axis=1)  # [N, 2048]
+    mem_batch = jnp.concatenate([storage[cell_idx], storage[nbr_idx]], axis=1)  # [N, 2048]
 
     # Run all quanta in parallel
-    result_batch, _, _ = jax.vmap(run_one_quantum)(mem_batch, budgets)  # [N, 2048]
+    result_batch = jax.vmap(_run_one_quantum)(mem_batch, budgets)  # [N, 2048]
 
-    # Scatter: write results back via fori_loop (cache-friendly on CPU)
-    # On GPU, replace with vectorized .at[].set() for bandwidth
-    def scatter_body(i, storage):
-        cell_base = pair_indices[i, 0]
-        nbr_base = pair_indices[i, 1]
-        storage = jax.lax.dynamic_update_slice(storage, result_batch[i, :M], (cell_base,))
-        storage = jax.lax.dynamic_update_slice(storage, result_batch[i, M:], (nbr_base,))
-        return storage
-    storage = jax.lax.fori_loop(0, pair_indices.shape[0], scatter_body, storage)
+    # Vectorized scatter (GPU-optimal: single .at[].set() call)
+    all_idx = jnp.concatenate([cell_idx.ravel(), nbr_idx.ravel()])
+    all_vals = jnp.concatenate([result_batch[:, :M].ravel(),
+                                 result_batch[:, M:].ravel()])
+    storage = storage.at[all_idx].set(all_vals)
 
-    return storage
+    return storage, k3
+
+
+@partial(jax.jit, static_argnums=(1, 2, 3))
+def run_rounds(storage, B, M, n_rounds, key):
+    """Run n_rounds complete rounds (2 passes each). Fully JIT'd."""
+    def body(i, state):
+        storage, key = state
+        k1, k2, key = jr.split(key, 3)
+        storage, _ = _run_pass(storage, B, M, k1)
+        storage, _ = _run_pass(storage, B, M, k2)
+        return storage, key
+    storage, key = jax.lax.fori_loop(0, n_rounds, body, (storage, key))
+    return storage, key
 
 
 class FastBoard:
-    """All-JAX board — storage stays on device."""
+    """All-JAX board — storage on device, simulation fully JIT-compiled."""
 
     def __init__(self, size=16, seed=42):
         self.B = size
         self.M = 1024
         self.storage = jnp.zeros(size * size * 1024, dtype=jnp.uint8)
-        self.rng = np.random.RandomState(seed)
+        self.key = jr.PRNGKey(seed)
         self.total_quanta = 0
 
     def write_cell(self, i, j, offset, data):
-        """Write bytes to a cell (host-side, for initialization)."""
         base = (i * self.B + j) * self.M + offset
         data_arr = jnp.array(list(data), dtype=jnp.uint8)
         self.storage = self.storage.at[base:base + len(data)].set(data_arr)
 
-    def _build_pass(self):
-        """Build pair indices and budgets for one checkerboard pass."""
-        B = self.B
-        M = self.M
-        rv = self.rng.randint(0, 8)
-        tiling = rv & 1
-        offset_i = (rv >> 1) & 1
-        offset_j = (rv >> 2) & 1
-
-        pairs = []
-        budgets = []
-
-        if tiling == 0:
-            for k in range(B // 2):
-                for j in range(B):
-                    role = self.rng.randint(0, 2)
-                    i0 = (2 * k + offset_i) % B
-                    i1 = (2 * k + 1 + offset_i) % B
-                    jj = (j + offset_j) % B
-                    if role == 0:
-                        ci, cj, ni, nj = i0, jj, i1, jj
-                    else:
-                        ci, cj, ni, nj = i1, jj, i0, jj
-                    pairs.append(((ci * B + cj) * M, (ni * B + nj) * M))
-                    # Sample budget
-                    r = int(self.rng.randint(0, 2**31))
-                    hl = 0
-                    while hl < 32 and (r & 1):
-                        r >>= 1
-                        hl += 1
-                    frac = self.rng.random()
-                    budgets.append(max(1, int(np.ceil(16 * 177 * (hl + frac)))))
-        else:
-            for i in range(B):
-                for k in range(B // 2):
-                    role = self.rng.randint(0, 2)
-                    ii = (i + offset_i) % B
-                    j0 = (2 * k + offset_j) % B
-                    j1 = (2 * k + 1 + offset_j) % B
-                    if role == 0:
-                        ci, cj, ni, nj = ii, j0, ii, j1
-                    else:
-                        ci, cj, ni, nj = ii, j1, ii, j0
-                    pairs.append(((ci * B + cj) * M, (ni * B + nj) * M))
-                    r = int(self.rng.randint(0, 2**31))
-                    hl = 0
-                    while hl < 32 and (r & 1):
-                        r >>= 1
-                        hl += 1
-                    frac = self.rng.random()
-                    budgets.append(max(1, int(np.ceil(16 * 177 * (hl + frac)))))
-
-        return (jnp.array(pairs, dtype=jnp.int32),
-                jnp.array(budgets, dtype=jnp.int32))
+    def read_cell(self, i, j):
+        base = (i * self.B + j) * self.M
+        return np.asarray(self.storage[base: base + self.M], dtype=np.uint8)
 
     def run_pass(self):
-        """Run one checkerboard pass (B²/2 quanta) entirely in JAX."""
-        pair_indices, budgets = self._build_pass()
-        self.storage = _run_pass(self.storage, self.B, self.M, pair_indices, budgets)
-        self.total_quanta += pair_indices.shape[0]
+        self.key, subkey = jr.split(self.key)
+        self.storage, _ = _run_pass(self.storage, self.B, self.M, subkey)
+        self.total_quanta += (self.B * self.B) // 2
 
     def run_rounds(self, n):
-        """Run n full rounds (2 passes each)."""
-        for _ in range(n):
-            self.run_pass()
-            self.run_pass()
+        """Run n full rounds (2 passes each). Single JIT call."""
+        self.key, subkey = jr.split(self.key)
+        self.storage, self.key = run_rounds(self.storage, self.B, self.M, n, subkey)
+        self.total_quanta += n * self.B * self.B
 
     def census(self):
-        """Count functional replicators (transfers to numpy for analysis)."""
         s = np.asarray(self.storage, dtype=np.uint8)
         B, M = self.B, self.M
         functional = 0
