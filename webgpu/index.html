@@ -163,25 +163,28 @@
                     for (let col = 0; col < 32; col++) {
                         const byteIdx = row * 32 + col;
                         const val = view.data[byteIdx];
-                        const wIntensity = Math.min(1, view.writes[byteIdx] / mw);
-                        const fIntensity = Math.min(1, view.fetches[byteIdx] / mf);
+                        // Gamma-curved intensity: sqrt for punchier glow
+                        const wRaw = Math.min(1, view.writes[byteIdx] / mw);
+                        const fRaw = Math.min(1, view.fetches[byteIdx] / mf);
+                        const wI = Math.pow(wRaw, 0.4);  // strong gamma curve
+                        const fI = Math.pow(fRaw, 0.4);
                         // Green: constant base + byte value
-                        const g = 30 + (val > 0 ? 40 : 0);
-                        // Red: write recency
-                        const r = Math.floor(wIntensity * 220);
-                        // Blue: fetch recency
-                        const b = Math.floor(fIntensity * 220);
+                        const g = 20 + (val > 0 ? 30 : 0);
+                        // Red: write activity (bright, saturated)
+                        const r = Math.floor(wI * 255);
+                        // Blue: fetch activity (bright, saturated)
+                        const b = Math.floor(fI * 255);
                         // Draw 4x2 block
                         for (let dy = 0; dy < 2; dy++) {
                             for (let dx = 0; dx < 4; dx++) {
                                 const px = xOff + col * 4 + dx;
                                 const py = yOff + row * 2 + dy;
                                 const bit = (val >> (7 - (dy * 4 + dx))) & 1;
-                                const brightness = bit ? 1.0 : 0.25;
+                                const brightness = bit ? 1.0 : 0.15;
                                 const pi = (py * 260 + px) * 4;
-                                d[pi] = Math.min(255, r * brightness + g * 0.2);
-                                d[pi+1] = Math.min(255, g * brightness);
-                                d[pi+2] = Math.min(255, b * brightness + 10);
+                                d[pi] = Math.min(255, Math.floor((r + 20) * brightness));
+                                d[pi+1] = Math.min(255, Math.floor((g + r * 0.1 + b * 0.1) * brightness));
+                                d[pi+2] = Math.min(255, Math.floor((b + 20) * brightness));
                                 d[pi+3] = 255;
                             }
                         }
