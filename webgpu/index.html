@@ -98,7 +98,7 @@
             const c = lastCensus;
             const now = performance.now();
             const elapsed = (now - t0) / 1000;
-            const cps = elapsed > 0 ? (totalQuanta * MEAN_CYC / (B * B) / elapsed) : 0;
+            const cps = (running && elapsed > 0.5) ? (totalQuanta * MEAN_CYC / (B * B) / elapsed) : 0;
             let r;
             if (cps >= 1e6) r = (cps/1e6).toFixed(1)+'M';
             else if (cps >= 1e3) r = (cps/1e3).toFixed(1)+'K';
@@ -280,13 +280,15 @@
         document.getElementById('toggle').onclick = () => {
             running = !running;
             document.getElementById('toggle').textContent = running ? 'Stop' : 'Start';
-            t0 = performance.now();
-            totalQuanta = 0;
-            if (gpuMode && gpuSim) gpuSim.totalQuanta = 0;
-
             if (running) {
+                t0 = performance.now();
+                totalQuanta = 0;
+                framesSinceReset = 0;
+                fpsT0 = performance.now();
+                if (gpuMode && gpuSim) gpuSim.totalQuanta = 0;
                 const speed = parseFloat(document.getElementById('speed').value) || 1;
                 if (gpuMode) {
+                    gpuPassQueue = 0;
                     requestAnimationFrame(gpuLoop);
                 } else {
                     workerSend({ type: 'start', speed });

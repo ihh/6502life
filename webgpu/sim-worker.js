@@ -7,7 +7,7 @@ import { BareSimCPU } from './bare-sim-cpu.js';
 
 let sim = null;
 let running = false;
-let passesPerFrame = 1;
+let passesPerTick = 1;  // passes per ~16ms tick (fractional ok)
 let passQueue = 0;
 
 async function init(B) {
@@ -17,7 +17,7 @@ async function init(B) {
 
 async function runLoop() {
     while (running) {
-        passQueue += passesPerFrame;
+        passQueue += passesPerTick;
         const n = Math.floor(passQueue);
         passQueue -= n;
 
@@ -26,11 +26,11 @@ async function runLoop() {
             await sim.runPass();
         }
 
-        // Send census after each batch
+        // Send census
         const c = await sim.census();
         postMessage({ type: 'census', data: c, totalQuanta: sim.totalQuanta });
 
-        // Pace: ~60 batches/sec to match render frames
+        // Pace at ~60 ticks/sec
         await new Promise(r => setTimeout(r, 16));
     }
 }
@@ -45,7 +45,7 @@ onmessage = async (e) => {
             if (sim) sim.writeCell(msg.i, msg.j, msg.offset, msg.data);
             break;
         case 'start':
-            passesPerFrame = msg.speed || 1;
+            passesPerTick = msg.speed || 1;
             passQueue = 0;
             running = true;
             runLoop();
@@ -54,7 +54,8 @@ onmessage = async (e) => {
             running = false;
             break;
         case 'speed':
-            passesPerFrame = msg.speed || 1;
+            passesPerTick = msg.speed || 1;
+            passQueue = 0;  // reset accumulator to avoid burst
             break;
         case 'census':
             if (sim) {
