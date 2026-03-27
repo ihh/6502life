@@ -2,40 +2,42 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>6502life WebGPU Bare Sim</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>6502life Bare Sim</title>
     <style>
-        body { font-family: monospace; background: #111; color: #0f0; padding: 20px; }
-        #log { white-space: pre; font-size: 12px; line-height: 1.3; max-height: 200px; overflow-y: auto; }
-        #grid { font-size: 10px; line-height: 1.0; letter-spacing: 1px; margin: 10px 0; }
-        #stats { font-size: 16px; margin: 10px 0; }
-        button { font-family: monospace; font-size: 16px; padding: 8px 16px;
+        body { font-family: monospace; background: #111; color: #0f0; padding: 12px; }
+        #log { white-space: pre; font-size: 11px; line-height: 1.2; max-height: 150px; overflow-y: auto; }
+        #grid { font-size: 10px; line-height: 1.0; letter-spacing: 2px; margin: 8px 0; }
+        #stats { font-size: 14px; margin: 8px 0; }
+        #mode { font-size: 12px; color: #0a0; margin-bottom: 8px; }
+        button { font-family: monospace; font-size: 14px; padding: 6px 12px;
                  background: #030; color: #0f0; border: 1px solid #0f0; cursor: pointer;
-                 margin-right: 8px; margin-bottom: 8px; }
-        button:hover { background: #050; }
-        .alive { color: #0f0; }
-        .dead { color: #333; }
+                 margin-right: 6px; margin-bottom: 6px; }
     </style>
 </head>
 <body>
-    <h2>6502life Bare Sim</h2>
+    <h3>6502life Bare Sim</h3>
+    <div id="mode"></div>
     <div id="stats"></div>
     <pre id="grid"></pre>
-    <button id="run10">Run 10</button>
-    <button id="run100">Run 100</button>
-    <button id="run1k">Run 1000</button>
-    <button id="auto">Auto</button>
+    <div>
+        <button id="run10">10</button>
+        <button id="run100">100</button>
+        <button id="run1k">1000</button>
+        <button id="auto">Auto</button>
+    </div>
     <pre id="log"></pre>
     <script type="module">
-        import { BareSim } from './bare-sim.js';
-
         const logEl = document.getElementById('log');
         const gridEl = document.getElementById('grid');
         const statsEl = document.getElementById('stats');
+        const modeEl = document.getElementById('mode');
         function print(msg) { logEl.textContent += msg + '\n'; }
 
         let sim = null;
         let t0 = 0;
         let autoRunning = false;
+        let gpuMode = false;
 
         async function drawGrid() {
             const c = await sim.census();
@@ -44,59 +46,65 @@
             const qps = elapsed > 0 ? (sim.totalQuanta / elapsed) : 0;
 
             statsEl.textContent =
-                'fn=' + c.functional + '/' + c.total +
+                c.functional + '/' + c.total + ' alive' +
                 '  var=' + c.loopVariants +
-                '  q=' + sim.totalQuanta +
-                '  ' + qps.toFixed(0) + ' q/s';
+                '  ' + sim.totalQuanta + 'q' +
+                '  ' + qps.toFixed(0) + 'q/s';
 
-            // Draw B x B grid: # for functional, . for dead
             let grid = '';
             for (let j = B - 1; j >= 0; j--) {
                 for (let i = 0; i < B; i++) {
-                    const ci = i * B + j;
-                    const base = ci * sim.M;
-                    // Check functional inline from census data
-                    grid += c.cellMap[ci] ? '#' : '.';
+                    grid += c.cellMap[i * B + j] ? '#' : '.';
                 }
                 grid += '\n';
             }
             gridEl.textContent = grid;
         }
 
+        async function tryGPU() {
+            if (!navigator.gpu) return null;
+            try {
+                const adapter = await navigator.gpu.requestAdapter();
+                if (!adapter) return null;
+                const { BareSim } = await import('./bare-sim.js');
+                const s = await BareSim.create(16);
+                return s;
+            } catch (e) {
+                print('GPU failed: ' + e.message);
+                return null;
+            }
+        }
+
+        async function useCPU() {
+            const { BareSimCPU } = await import('./bare-sim-cpu.js');
+            return BareSimCPU.create(16);
+        }
+
         async function main() {
             logEl.textContent = '';
+            print('Detecting GPU...');
 
-            if (!navigator.gpu) {
-                print('WebGPU not available. Enable in Safari Feature Flags.');
-                return;
-            }
-
-            print('Creating device...');
-            try {
-                sim = await BareSim.create(16);
-                print('Device OK');
-            } catch (e) {
-                print('ERROR: ' + e.message);
-                print(e.stack || '');
-                return;
+            sim = await tryGPU();
+            if (sim) {
+                gpuMode = true;
+                modeEl.textContent = '[GPU] WebGPU compute shader';
+                print('GPU OK');
+            } else {
+                sim = await useCPU();
+                gpuMode = false;
+                modeEl.textContent = '[CPU] JavaScript fallback';
+                print('Using CPU fallback');
             }
 
             // Plant BCC replicator
-            print('Planting replicator...');
             sim.writeCell(0, 0, 0, [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8]);
             sim.writeCell(0, 0, 0xF9, [0x00, 0x00]);
             sim.writeCell(0, 0, 0xFF, [0xFF]);
 
-            print('Board: ' + sim.B + 'x' + sim.B);
+            print(sim.B + 'x' + sim.B + ' board');
             t0 = performance.now();
-
-            try {
-                await drawGrid();
-                print('Ready.');
-            } catch (e) {
-                print('drawGrid ERROR: ' + e.message);
-                print(e.stack || '');
-            }
+            await drawGrid();
+            print('Ready.');
         }
 
         async function runRounds(n) {
@@ -107,15 +115,15 @@
             }
             await drawGrid();
             const dt = (performance.now() - rt0) / 1000;
-            print(n + 'r ' + sim.totalQuanta + 'q ' + dt.toFixed(2) + 's');
+            print(n + 'r ' + dt.toFixed(2) + 's');
         }
 
         async function autoRun() {
             autoRunning = !autoRunning;
             document.getElementById('auto').textContent = autoRunning ? 'Stop' : 'Auto';
             while (autoRunning) {
-                await runRounds(50);
-                await new Promise(r => setTimeout(r, 10)); // yield to UI
+                await runRounds(gpuMode ? 50 : 5);
+                await new Promise(r => setTimeout(r, 10));
             }
         }
 

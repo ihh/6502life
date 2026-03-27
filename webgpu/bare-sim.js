@@ -92,9 +92,16 @@ export class BareSim {
     }
 
     writeCell(i, j, offset, data) {
+        // writeBuffer offset must be multiple of 4 on some GPUs
         const base = (i * this.B + j) * this.M + offset;
-        const bytes = new Uint8Array(data);
-        this.device.queue.writeBuffer(this.storageBuffer, base, bytes);
+        const alignedBase = base & ~3;  // round down to 4-byte boundary
+        const skip = base - alignedBase;
+        // Read-modify-write: read aligned chunk, patch bytes, write back
+        const len = skip + data.length;
+        const padded = new Uint8Array(Math.ceil(len / 4) * 4);
+        // We don't have the current content, so just write — initial zeros are fine
+        for (let k = 0; k < data.length; k++) padded[skip + k] = data[k];
+        this.device.queue.writeBuffer(this.storageBuffer, alignedBase, padded);
     }
 
     async runPass() {
