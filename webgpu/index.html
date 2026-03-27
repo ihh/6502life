@@ -80,6 +80,7 @@
         let totalQuanta = 0;
         let framesSinceReset = 0;
         let fpsT0 = 0;
+        let lastFps = 0;
         const MEAN_CYC = 4096;
         const CHAR_W = 8, CHAR_H = 12;
 
@@ -104,8 +105,8 @@
             else r = cps.toFixed(0);
             framesSinceReset++;
             const fpsElapsed = (now - fpsT0) / 1000;
-            const fps = fpsElapsed > 0.5 ? (framesSinceReset / fpsElapsed).toFixed(0) : '--';
-            if (fpsElapsed > 1) { framesSinceReset = 0; fpsT0 = now; }
+            const fps = fpsElapsed > 0.3 ? Math.round(framesSinceReset / fpsElapsed) : lastFps;
+            if (fpsElapsed > 1) { lastFps = fps; framesSinceReset = 0; fpsT0 = now; }
             statsEl.textContent = c.functional+'/'+c.total+' alive  var='+c.loopVariants+'  '+r+' cyc/cell/s  '+fps+' fps';
 
             gridCtx.fillStyle = '#111';
@@ -216,6 +217,8 @@
             renderGrid();
             renderCellView(ctx0, lastCellView0);
             renderCellView(ctx1, lastCellView1);
+            // Keep requesting fresh cell views while running
+            if (running) requestCellViews();
             requestAnimationFrame(renderLoop);
         }
 
