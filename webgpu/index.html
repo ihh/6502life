@@ -218,7 +218,8 @@
         }
 
         // Main loop: run N passes per frame, controlled by dropdown
-        let passQueue = 0; // fractional accumulator for sub-1 rates
+        let passQueue = 0;
+        let frameCount = 0;
 
         async function loop() {
             if (!running) return;
@@ -233,7 +234,12 @@
                 await sim.runPass();
             }
 
-            await drawGrid();
+            frameCount++;
+            // At high speeds, only redraw grid every few frames
+            const redrawInterval = passesPerFrame >= 25 ? 10 : passesPerFrame >= 5 ? 3 : 1;
+            if (frameCount % redrawInterval === 0) {
+                await drawGrid();
+            }
             drawCellView();
 
             if (running) requestAnimationFrame(loop);
