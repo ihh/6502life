@@ -104,9 +104,9 @@
                 const sx=i*CHAR_W, sy=(B-1-j)*CHAR_H;
                 const ch=String.fromCharCode(c.cellChars[i*B+j]);
                 if(i===inspectI&&j===inspectJ) {
-                    gridCtx.fillStyle='#006'; gridCtx.fillRect(sx,sy,CHAR_W,CHAR_H); gridCtx.fillStyle='#4af';
+                    gridCtx.fillStyle='#00c'; gridCtx.fillRect(sx,sy,CHAR_W,CHAR_H); gridCtx.fillStyle='#fff';
                 } else if(i===inspectNI&&j===inspectNJ) {
-                    gridCtx.fillStyle='#400'; gridCtx.fillRect(sx,sy,CHAR_W,CHAR_H); gridCtx.fillStyle='#f88';
+                    gridCtx.fillStyle='#a00'; gridCtx.fillRect(sx,sy,CHAR_W,CHAR_H); gridCtx.fillStyle='#fff';
                 } else { gridCtx.fillStyle='#0f0'; }
                 gridCtx.fillText(ch,sx,sy);
             }
