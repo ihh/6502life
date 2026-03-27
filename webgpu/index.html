@@ -7,7 +7,7 @@
     <style>
         body { font-family: monospace; background: #111; color: #0f0; padding: 12px; }
         #log { white-space: pre; font-size: 11px; line-height: 1.2; max-height: 100px; overflow-y: auto; }
-        #grid { margin: 8px 0; cursor: crosshair; }
+        #grid { cursor: crosshair; }
         #stats { font-size: 14px; margin: 8px 0; }
         #mode { font-size: 12px; color: #0a0; margin-bottom: 8px; }
         #cellinfo { font-size: 11px; color: #080; }
@@ -21,9 +21,14 @@
     <h3>6502life Bare Sim</h3>
     <div id="mode"></div>
     <div id="stats"></div>
-    <canvas id="grid"></canvas>
-    <canvas id="cellview" width="260" height="68" style="border:1px solid #030; image-rendering:pixelated; width:520px; height:136px;"></canvas>
-    <div id="cellinfo"></div>
+    <div style="display:flex; gap:12px; align-items:flex-start; margin:8px 0;">
+        <canvas id="grid"></canvas>
+        <div>
+            <canvas id="cv0" width="128" height="64" style="border:1px solid #066; image-rendering:pixelated; width:256px; height:128px; display:block;"></canvas>
+            <canvas id="cv1" width="128" height="64" style="border:1px solid #036; image-rendering:pixelated; width:256px; height:128px; display:block; margin-top:4px;"></canvas>
+            <div id="cellinfo"></div>
+        </div>
+    </div>
     <div style="margin-top:8px;">
         <button id="toggle">Start</button>
         <select id="speed">
@@ -44,8 +49,10 @@
         const statsEl = document.getElementById('stats');
         const modeEl = document.getElementById('mode');
         const cellInfoEl = document.getElementById('cellinfo');
-        const cvs = document.getElementById('cellview');
-        const ctx2d = cvs.getContext('2d');
+        const cvs0 = document.getElementById('cv0');
+        const ctx0 = cvs0.getContext('2d');
+        const cvs1 = document.getElementById('cv1');
+        const ctx1 = cvs1.getContext('2d');
 
         function print(msg) { logEl.textContent += msg + '\n'; }
 
@@ -93,28 +100,31 @@
 
             for (let j = B - 1; j >= 0; j--) {
                 for (let i = 0; i < B; i++) {
+                    const sx = i * CHAR_W;
+                    const sy = (B - 1 - j) * CHAR_H;
                     const ch = String.fromCharCode(c.cellChars[i * B + j]);
                     if (i === inspectI && j === inspectJ) {
+                        gridCtx.fillStyle = '#066';
+                        gridCtx.fillRect(sx, sy, CHAR_W, CHAR_H);
                         gridCtx.fillStyle = '#0ff';
                     } else if (i === inspectNI && j === inspectNJ) {
-                        gridCtx.fillStyle = '#06a';
+                        gridCtx.fillStyle = '#024';
+                        gridCtx.fillRect(sx, sy, CHAR_W, CHAR_H);
+                        gridCtx.fillStyle = '#08f';
                     } else {
                         gridCtx.fillStyle = '#0f0';
                     }
-                    gridCtx.fillText(ch, i * CHAR_W, (B - 1 - j) * CHAR_H);
+                    gridCtx.fillText(ch, sx, sy);
                 }
             }
         }
 
         function drawCellView() {
             if (!sim || !sim.getCellView) return;
-            const v0 = sim.getCellView(inspectI, inspectJ);
-            const v1 = sim.getCellView(inspectNI, inspectNJ);
 
-            const img = ctx2d.createImageData(260, 68);
-            const d = img.data;
-
-            function drawCell(view, xOff, yOff) {
+            function drawCell(ctx, view) {
+                const img = ctx.createImageData(128, 64);
+                const d = img.data;
                 for (let row = 0; row < 32; row++) {
                     for (let col = 0; col < 32; col++) {
                         const byteIdx = row * 32 + col;
@@ -124,11 +134,11 @@
                         const hasData = val > 0 ? 1 : 0;
                         for (let dy = 0; dy < 2; dy++) {
                             for (let dx = 0; dx < 4; dx++) {
-                                const px = xOff + col * 4 + dx;
-                                const py = yOff + row * 2 + dy;
+                                const px = col * 4 + dx;
+                                const py = row * 2 + dy;
                                 const bit = (val >> (7 - (dy * 4 + dx))) & 1;
                                 const br = bit ? 1.0 : 0.2;
-                                const pi = (py * 260 + px) * 4;
+                                const pi = (py * 128 + px) * 4;
                                 d[pi]   = Math.min(255, Math.floor((wI * 255 + hasData * 15) * br));
                                 d[pi+1] = Math.min(255, Math.floor((hasData * 40 + wI * 30 + fI * 30) * br));
                                 d[pi+2] = Math.min(255, Math.floor((fI * 255 + hasData * 15) * br));
@@ -137,11 +147,11 @@
                         }
                     }
                 }
+                ctx.putImageData(img, 0, 0);
             }
 
-            drawCell(v0, 0, 2);
-            drawCell(v1, 132, 2);
-            ctx2d.putImageData(img, 0, 0);
+            drawCell(ctx0, sim.getCellView(inspectI, inspectJ));
+            drawCell(ctx1, sim.getCellView(inspectNI, inspectNJ));
         }
 
         gridCanvas.onclick = (e) => {
