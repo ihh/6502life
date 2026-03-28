@@ -1,13 +1,18 @@
 /**
- * Share protocol: signed cell exchange between two boards.
+ * Share protocol: signed offers and signed receipts.
  *
- * A share is a one-time write event where cells are swapped between
- * two boards. Both parties sign the same attestation covering:
- * - Both board state hashes at time of share
- * - Hashes of all cells given and received
+ * Primitives:
+ *   OFFER:   "Here are cells from my board. Signed by me."
+ *   RECEIPT: "I received your offer and applied it. Signed by me."
  *
- * The share is recorded as a player input in each board's session.
- * No merged boards, no prolonged sessions, no edge negotiation.
+ * A "successful share" is an interpretation-layer pattern:
+ *   Alice's chain: offer_to_Bob + receipt_of_Bob's_offer
+ *   Bob's chain:   offer_to_Alice + receipt_of_Alice's_offer
+ * where the offers and receipts cross-reference each other.
+ *
+ * Anyone can back out at any time without consequence.
+ * One-way colonization (offer + receipt, no counter-offer) is fine.
+ * The crypto layer only provides non-repudiation.
  *
  * @module coin/share
  */
@@ -15,133 +20,175 @@
 import { sha256, toHex } from './hash.js';
 import { readCellMemory, writeCellBytes } from '../engine/board.js';
 
-/**
- * @typedef {Object} CellRef
- * @property {number} i - row
- * @property {number} j - column
- * @property {string} hash - hex SHA-256 of the cell's 1024 bytes
- */
-
-/**
- * @typedef {Object} ShareAttestation
- * @property {string} boardAHash - state hash of board A at time of share
- * @property {string} boardBHash - state hash of board B at time of share
- * @property {CellRef[]} cellsFromA - cells given by A (hashes only)
- * @property {CellRef[]} cellsFromB - cells given by B (hashes only)
- * @property {number} tick - board tick at time of share
- */
-
-/**
- * Hash a single cell's data.
- */
 function hashCell(data) {
     return toHex(sha256(data instanceof Uint8Array ? data : new Uint8Array(data)));
 }
 
-/**
- * Build the canonical attestation string for signing.
- * Both parties sign the same content.
- */
-function attestationString(attestation) {
-    return JSON.stringify({
-        boardAHash: attestation.boardAHash,
-        boardBHash: attestation.boardBHash,
-        cellsFromA: attestation.cellsFromA.map(c => ({ i: c.i, j: c.j, hash: c.hash })),
-        cellsFromB: attestation.cellsFromB.map(c => ({ i: c.i, j: c.j, hash: c.hash })),
-        tick: attestation.tick,
-    });
+function hashString(s) {
+    return toHex(sha256(new TextEncoder().encode(s)));
 }
 
 /**
- * Execute a share between two boards.
+ * Create a signed OFFER: cells from my board, available to anyone.
  *
- * @param {Object} engineA - board A (has .controller, .serialize())
- * @param {Object} engineB - board B
- * @param {Array<{i: number, j: number}>} cellsA - cells from A to give to B
- * @param {Array<{i: number, j: number}>} cellsB - cells from B to give to A
- * @param {number} tick - current tick
- * @returns {{ attestation: ShareAttestation, inputA: Object, inputB: Object }}
+ * @param {Object} engine - board engine
+ * @param {Array<{i: number, j: number}>} cells - cells to offer
+ * @param {number} tick - current board tick
+ * @param {Function} signFn - (hash) => signature
+ * @returns {Object} offer message
  */
-export function executeShare(engineA, engineB, cellsA, cellsB, tick = 0) {
-    // Hash board states
-    const boardAHash = toHex(sha256(engineA.serialize()));
-    const boardBHash = toHex(sha256(engineB.serialize()));
+export function createOffer(engine, cells, tick, signFn) {
+    const boardHash = toHex(sha256(engine.serialize()));
+    const cellData = cells.map(({ i, j }) => {
+        const data = readCellMemory(engine.controller, i, j);
+        return { i, j, data: Array.from(data), hash: hashCell(data) };
+    });
 
-    // Read and hash cells from each board
-    const cellDataFromA = cellsA.map(({ i, j }) => ({
-        i, j,
-        data: readCellMemory(engineA.controller, i, j),
-        hash: hashCell(readCellMemory(engineA.controller, i, j)),
-    }));
-    const cellDataFromB = cellsB.map(({ i, j }) => ({
-        i, j,
-        data: readCellMemory(engineB.controller, i, j),
-        hash: hashCell(readCellMemory(engineB.controller, i, j)),
-    }));
-
-    // Build attestation (both parties sign this)
-    const attestation = {
-        boardAHash,
-        boardBHash,
-        cellsFromA: cellDataFromA.map(c => ({ i: c.i, j: c.j, hash: c.hash })),
-        cellsFromB: cellDataFromB.map(c => ({ i: c.i, j: c.j, hash: c.hash })),
+    const content = JSON.stringify({
+        boardHash,
+        cells: cellData.map(c => ({ i: c.i, j: c.j, hash: c.hash })),
         tick,
-    };
+    });
+    const contentHash = hashString(content);
 
-    // Swap: write B's cells to A, A's cells to B
-    for (const cell of cellDataFromB) {
-        writeCellBytes(engineA.controller, cell.i, cell.j, 0, cell.data);
-    }
-    for (const cell of cellDataFromA) {
-        writeCellBytes(engineB.controller, cell.i, cell.j, 0, cell.data);
-    }
-
-    // Build input events for each board's session log
-    const inputA = {
+    return {
+        type: 'offer',
+        boardHash,
         tick,
-        action: {
-            type: 'share',
-            received: cellDataFromB.map(c => ({ i: c.i, j: c.j, data: Array.from(c.data) })),
-            given: attestation.cellsFromA,
-            sourceBoard: boardBHash,
-            attestation,
-        },
+        cells: cellData,
+        contentHash,
+        signature: signFn(contentHash),
     };
-    const inputB = {
-        tick,
-        action: {
-            type: 'share',
-            received: cellDataFromA.map(c => ({ i: c.i, j: c.j, data: Array.from(c.data) })),
-            given: attestation.cellsFromB,
-            sourceBoard: boardAHash,
-            attestation,
-        },
-    };
-
-    return { attestation, inputA, inputB, attestationString: attestationString(attestation) };
 }
 
 /**
- * Verify a share attestation: check that the cell hashes match
- * the actual data in the input event.
+ * Verify an offer: check cell data matches declared hashes.
  */
-export function verifyShareInput(input) {
-    if (input.action.type !== 'share') return { valid: false, error: 'Not a share input' };
-    const att = input.action.attestation;
-    if (!att) return { valid: false, error: 'No attestation' };
-
-    // Verify received cell hashes match the attestation
-    for (const cell of input.action.received) {
-        const data = new Uint8Array(cell.data);
-        const hash = hashCell(data);
-        // Find this cell in the attestation's source cells
-        const sourceKey = input.action.sourceBoard === att.boardAHash ? 'cellsFromA' : 'cellsFromB';
-        const attCell = att[sourceKey].find(c => c.i === cell.i && c.j === cell.j);
-        if (!attCell) return { valid: false, error: `Cell (${cell.i},${cell.j}) not in attestation` };
-        if (attCell.hash !== hash) return { valid: false, error: `Cell (${cell.i},${cell.j}) hash mismatch` };
+export function verifyOffer(offer) {
+    for (const cell of offer.cells) {
+        const actual = hashCell(new Uint8Array(cell.data));
+        if (actual !== cell.hash) {
+            return { valid: false, error: `Cell (${cell.i},${cell.j}) hash mismatch` };
+        }
     }
-
+    // Verify content hash
+    const content = JSON.stringify({
+        boardHash: offer.boardHash,
+        cells: offer.cells.map(c => ({ i: c.i, j: c.j, hash: c.hash })),
+        tick: offer.tick,
+    });
+    if (hashString(content) !== offer.contentHash) {
+        return { valid: false, error: 'Content hash mismatch' };
+    }
     return { valid: true };
 }
 
-export { hashCell, attestationString };
+/**
+ * Apply an offer to my board (paste received cells) and create a signed RECEIPT.
+ *
+ * @param {Object} engine - my board engine
+ * @param {Object} offer - the received offer
+ * @param {Array<{i: number, j: number}>} destCoords - where to paste each cell on my board
+ *   (must be same length as offer.cells; null entries = skip that cell)
+ * @param {number} tick - my current board tick
+ * @param {Function} signFn - (hash) => signature
+ * @returns {Object} receipt message + input event for my session log
+ */
+export function acceptOffer(engine, offer, destCoords, tick, signFn) {
+    const myBoardHash = toHex(sha256(engine.serialize()));
+
+    // Verify offer first
+    const v = verifyOffer(offer);
+    if (!v.valid) throw new Error('Invalid offer: ' + v.error);
+
+    // Apply cells to my board
+    const applied = [];
+    for (let k = 0; k < offer.cells.length; k++) {
+        const dest = destCoords[k];
+        if (!dest) continue;
+        const cellData = new Uint8Array(offer.cells[k].data);
+        writeCellBytes(engine.controller, dest.i, dest.j, 0, cellData);
+        applied.push({
+            srcI: offer.cells[k].i, srcJ: offer.cells[k].j,
+            dstI: dest.i, dstJ: dest.j,
+            hash: offer.cells[k].hash,
+        });
+    }
+
+    // Build receipt
+    const receiptContent = JSON.stringify({
+        offerHash: offer.contentHash,
+        offerBoardHash: offer.boardHash,
+        myBoardHash,
+        applied,
+        tick,
+    });
+    const receiptHash = hashString(receiptContent);
+
+    const receipt = {
+        type: 'receipt',
+        offerHash: offer.contentHash,
+        offerBoardHash: offer.boardHash,
+        myBoardHash,
+        applied,
+        tick,
+        receiptHash,
+        signature: signFn(receiptHash),
+    };
+
+    // Input event for my session log
+    const input = {
+        tick,
+        action: {
+            type: 'share_receive',
+            offer: {
+                contentHash: offer.contentHash,
+                boardHash: offer.boardHash,
+                signature: offer.signature,
+            },
+            applied,
+            receipt: {
+                receiptHash,
+                signature: receipt.signature,
+            },
+        },
+    };
+
+    return { receipt, input };
+}
+
+/**
+ * Check if a pair of chains contains a "successful share":
+ * both parties have an offer and a matching receipt from each other.
+ *
+ * @param {Array} chainA - Alice's input events
+ * @param {Array} chainB - Bob's input events
+ * @returns {Array} list of matched share pairs
+ */
+export function findSuccessfulShares(chainA, chainB) {
+    const shares = [];
+
+    // Find all share_receive events in A that reference offers from B
+    const aReceives = chainA.filter(e => e.action?.type === 'share_receive');
+    const bReceives = chainB.filter(e => e.action?.type === 'share_receive');
+
+    // For each receive in A, look for a matching receive in B
+    for (const ar of aReceives) {
+        const offerHashFromB = ar.action.offer.contentHash;
+        // Find B's receive that references an offer from A
+        for (const br of bReceives) {
+            // B received from A if B's offer.boardHash matches A's board
+            // This is a heuristic — a full implementation would track board IDs
+            if (br.action.offer.boardHash !== ar.action.receipt?.myBoardHash) continue;
+            shares.push({
+                aReceived: ar,
+                bReceived: br,
+                tick: Math.max(ar.tick, br.tick),
+            });
+        }
+    }
+
+    return shares;
+}
+
+export { hashCell, hashString };
