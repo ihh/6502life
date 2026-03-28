@@ -328,7 +328,7 @@ class BoardController {
 
     // Build the 256-entry BRK dispatch table from boardParams.brkOps.
     // Each entry is either null (yield/no-op) or {handler, cycles}.
-    // The cycles field is the Shadow OS cost; if fewer cycles remain
+    // The cycles field is the operation cost; if fewer cycles remain
     // before the next timer IRQ, the BRK silently fails (yields).
     _buildBrkDispatch() {
         this._brkDispatch = new Array(256).fill(null);
@@ -1527,9 +1527,9 @@ class BoardController {
                         const operand = brkOperand;
                         const entry = this._brkDispatch[operand];
                         if (entry) {
-                            // Each BRK op has a cycle cost (from the Shadow OS).
-                            // If fewer cycles remain before the next timer IRQ
-                            // than the op requires, it silently fails (yields).
+                            // Each BRK op has a cycle cost. If fewer cycles
+                            // remain before the next timer IRQ than the op
+                            // requires, it silently fails (yields).
                             const remaining = schedulerCycles - cpuCycles;
                             if (remaining >= entry.cycles) {
                                 entry.handler(this, operand);
