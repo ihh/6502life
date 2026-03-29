@@ -167,15 +167,14 @@
 
         // --- Replicator program (LDA zp,X; STA abs,X; INX; BCC) ---
         const REP_CODE = [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8];
-        // --- Alien-killer: self-referential replicator with shibboleth check ---
-        // JAMs neighbor, copies self, then resets neighbor PC/S AFTER copy.
+        // --- Alien-killer: shibboleth check, JAM+PC before copy, byte 0 last ---
         const ALIEN_KILLER_CODE = [
             0xA9, 0x42, 0xCD, 0x01, 0x04, 0xF0, 0x1C,   // LDA #$42; CMP $0401; BEQ done
             0xA9, 0x02, 0x8D, 0x00, 0x04,                // LDA #$02; STA $0400 (JAM)
-            0xA2, 0x00,                                    // LDX #0
-            0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0xD0, 0xF8, // copy loop
-            0xA9, 0x00, 0x8D, 0xF9, 0x04, 0x8D, 0xFA, 0x04, // LDA #0; STA $04F9; STA $04FA
-            0xA9, 0xFF, 0x8D, 0xFF, 0x04,                // LDA #$FF; STA $04FF
+            0xA9, 0x00, 0x8D, 0xF9, 0x04, 0x8D, 0xFA, 0x04, // PC = 0
+            0xA2, 0x01,                                    // LDX #1
+            0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0xD0, 0xF8, // copy 1-255
+            0xA5, 0x00, 0x8D, 0x00, 0x04,                // copy byte 0 last
             0x00, 0x00,                                    // BRK $00
         ];
 
@@ -438,16 +437,13 @@
                 if(i===0) html+='<span class="dasm-cur">'+escHtml(lines[i].text)+'</span>\n';
                 else html+=escHtml(lines[i].text)+'\n';
             }
-            if (!dasmExpanded && lines.length >= 8) {
-                html += '<a style="color:#080;cursor:pointer" id="dasm-more">More...</a>';
-            } else if (dasmExpanded) {
-                html += '<a style="color:#080;cursor:pointer" id="dasm-less">Less</a>';
-            }
             dasmEl.innerHTML=html;
-            const moreEl = $('dasm-more');
-            if (moreEl) moreEl.onclick = () => { dasmExpanded = true; renderDisasm(); };
-            const lessEl = $('dasm-less');
-            if (lessEl) lessEl.onclick = () => { dasmExpanded = false; renderDisasm(); };
+            // Append clickable toggle link (as DOM, not innerHTML, to preserve handler)
+            const link = document.createElement('a');
+            link.style.cssText = 'color:#080;cursor:pointer';
+            link.textContent = dasmExpanded ? 'Less' : 'More...';
+            link.onclick = () => { dasmExpanded = !dasmExpanded; renderDisasm(); };
+            dasmEl.appendChild(link);
         }
         function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
