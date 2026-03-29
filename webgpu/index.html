@@ -221,14 +221,18 @@
             }
         }
 
+        // --- Render loop: always 60fps, decoupled from simulation ---
         function renderLoop() {
+            // Fetch latest cell views (async; renders whatever is available)
+            if (running) requestCellViews();
+
+            // Render everything
             for(let i=0;i<2048;i++){glowWrite[i]*=GLOW_DECAY;glowFetch[i]*=GLOW_DECAY;}
             animateTrace();
             renderGrid();
             if(lastCellView0) renderCellView(ctx0,lastCellView0.data,0);
             if(lastCellView1) renderCellView(ctx1,lastCellView1.data,1024);
             renderDisasm();
-            if(running) requestCellViews();
             requestAnimationFrame(renderLoop);
         }
 
@@ -323,25 +327,31 @@
             fpsT0 = performance.now(); fpsFrames = 0;
             if (gpuMode) {
                 gpuPassQueue = 0;
-                requestAnimationFrame(gpuLoop);
+                gpuSimLoop(); // fire-and-forget async loop
             } else {
                 workerSend({type:'start', speed});
             }
         }
 
-        // === GPU ===
+        // === GPU sim loop: runs independently, render loop reads latest state ===
         let gpuPassQueue=0;
-        async function gpuLoop() {
-            if(!running||!gpuMode) return;
-            const speed=parseFloat($('speed').value)||1;
-            gpuPassQueue+=speed; const n=Math.floor(gpuPassQueue); gpuPassQueue-=n;
-            for(let i=0;i<n;i++){await gpuSim.runPass();await gpuSim.runPass();}
-            lastCensus=await gpuSim.census(); totalQuanta=gpuSim.totalQuanta;
-            if(gpuSim.getCellView) {
-                lastCellView0=gpuSim.getCellView(inspectI,inspectJ);
-                lastCellView1=gpuSim.getCellView(inspectNI,inspectNJ);
+        async function gpuSimLoop() {
+            while (running && gpuMode && gpuSim) {
+                const speed = parseFloat($('speed').value) || 1;
+                const t0 = performance.now();
+                gpuPassQueue += speed;
+                // Run passes within a time budget per iteration
+                while (gpuPassQueue >= 1 && performance.now() - t0 < 12) {
+                    await gpuSim.runPass();
+                    await gpuSim.runPass();
+                    gpuPassQueue--;
+                }
+                gpuPassQueue = Math.min(gpuPassQueue, speed);
+                lastCensus = await gpuSim.census();
+                totalQuanta = gpuSim.totalQuanta;
+                // Yield to let render loop run
+                await new Promise(r => setTimeout(r, 0));
             }
-            if(running) requestAnimationFrame(gpuLoop);
         }
 
         // === Worker ===
