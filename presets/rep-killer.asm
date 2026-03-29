@@ -1,25 +1,20 @@
-; Replicator-killer: same as alien-killer but shibboleth $06
+; Replicator-killer: same pattern as alien-killer, shibboleth $06
 
-; --- Check shibboleth ---
+@start:
   LDA #$06
   CMP $0401
-  BEQ @done
+  BEQ @start
 
-; --- Jam neighbor ---
   LDA #$02
   STA $0400
   LDA #$00
-  STA $04F9
   STA $04FA
+  STA $04F9
 
-; --- Copy bytes 0-30 (@done), storing byte zero last
-  LDX #30
+  LDX #32
 @copy:
   LDA $00,X
   STA $0400,X
   DEX
   BPL @copy
-
-@done:
-  BRK
-  .byte $00
+  BMI @start
