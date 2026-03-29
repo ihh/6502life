@@ -76,15 +76,20 @@ export class BareSim {
         new Int32Array(opcodeBuffer.getMappedRange()).set(opcodeTable);
         opcodeBuffer.unmap();
 
-        // Pair indices buffer (N × 2 uint32)
+        // Pad buffer sizes to full workgroup (64 threads) so out-of-range
+        // threads read zeros instead of going out of bounds.
+        const WG = 64;
+        const bufferN = Math.ceil(N / WG) * WG;
+
+        // Pair indices buffer (bufferN × 2 uint32, zero-padded)
         const pairBuffer = device.createBuffer({
-            size: N * 2 * 4,
+            size: bufferN * 2 * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
-        // Cycle budgets buffer (N uint32)
+        // Cycle budgets buffer (bufferN uint32, zero-padded)
         const budgetBuffer = device.createBuffer({
-            size: N * 4,
+            size: bufferN * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
