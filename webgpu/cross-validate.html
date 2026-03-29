@@ -255,6 +255,35 @@ async function diagnoseFirstDivergence(B, seed, initFn) {
 async function main() {
     print('Cross-validating GPU WGSL shader against CPU reference...\n');
 
+    // Test MAX_STEPS: INX infinite loop, verify X after 1 pass
+    print('=== MAX_STEPS test (INX loop) ===', 'info');
+    {
+        const B = 8, seed = 42;
+        const cpu = await BareSimCPU.create(B, { seed });
+        const gpu = await initGpu(B);
+        if (gpu) {
+            gpu.rng = new PRNG(seed);
+            // Plant INX;JMP $0005 at cell 0 (infinite loop at known PC)
+            // INX=E8, JMP abs=4C 05 00
+            const code = [0xE8, 0x4C, 0x00, 0x00]; // INX; JMP $0000
+            cpu.writeCell(0, 0, 0, code);
+            cpu.writeCell(0, 0, 0xF9, [0x00, 0x00]); // PC=0
+            cpu.writeCell(0, 0, 0xFF, [0xFF]); // S=FF
+            gpu.writeCell(0, 0, 0, code);
+            gpu.writeCell(0, 0, 0xF9, [0x00, 0x00]);
+            gpu.writeCell(0, 0, 0xFF, [0xFF]);
+            await cpu.runPass();
+            await gpu.runPass();
+            await gpu.census();
+            const cpuX = cpu.storage[0xFD];
+            const gpuX = gpu._storageSnapshot[0xFD];
+            // MAX_STEPS=350. Loop is 2 instructions (INX + JMP). 350/2=175 INX. X should be 175=$AF.
+            print(`  CPU X=$${cpuX.toString(16)} (${cpuX} INX)  GPU X=$${gpuX.toString(16)} (${gpuX} INX)`, cpuX === gpuX ? 'pass' : 'fail');
+            if (cpuX !== gpuX) print(`  MISMATCH: GPU ran ${gpuX} INX vs CPU ${cpuX}`, 'fail');
+        }
+    }
+    print('', 'info');
+
     print('=== Single-pass diagnosis (replicator) ===', 'info');
     await diagnoseFirstDivergence(8, 42, plantReplicator);
     print('', 'info');
