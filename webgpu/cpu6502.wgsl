@@ -273,8 +273,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             else if (op == 4u) { newP = p & ~F_V; }         // CLV
             else if (op == 5u) { newP = p & ~F_D; }         // CLD
             else if (op == 6u) { newP = p | F_D; }          // SED
-            else if (op == 7u) { newA = y; newP = nzFlags(y, p); }     // TAY... wait
-            // TAY=7, TYA=8, TAX=9, TXA=10, TSX=11, TXS=12, DEX=13, DEY=14, INX=15, INY=16, NOP=17
             else if (op == 7u) { newY = a; newP = nzFlags(a, p); }     // TAY
             else if (op == 8u) { newA = y; newP = nzFlags(y, p); }     // TYA
             else if (op == 9u) { newX = a; newP = nzFlags(a, p); }     // TAX
@@ -320,12 +318,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             nextPc = (lo | (hi << 8u)) & 0xFFFFu;
             newS = (s + 3u) & 0xFFu;
         }
-        else if (cls == CLS_BRK) {
-            // BRK = yield. In bare sim, just advance PC and stop.
-            done = true;
-        }
-        else if (cls == CLS_JAM) {
-            done = true;
+        else if (cls == CLS_BRK || cls == CLS_JAM) {
+            // BRK/JAM = yield. Don't advance PC (matches CPU: saves pc at BRK addr).
+            break;
         }
 
         // Apply memory write
@@ -337,14 +332,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let totalCycles = baseCycles + extraCycles + branchExtra;
         let newCyclesUsed = cyclesUsed + totalCycles;
 
+        // Budget exceeded: break WITHOUT updating pc/regs (matches CPU behavior:
+        // CPU breaks after cycles += totalCyc but before pc = nextPc)
         if (newCyclesUsed >= budget) {
-            done = true;
-        } else {
-            pc = nextPc; a = newA & 0xFFu; x = newX & 0xFFu;
-            y = newY & 0xFFu; s = newS & 0xFFu;
-            p = (newP | F_U | F_B) & 0xFFu;
-            cyclesUsed = newCyclesUsed;
+            break;
         }
+        pc = nextPc; a = newA & 0xFFu; x = newX & 0xFFu;
+        y = newY & 0xFFu; s = newS & 0xFFu;
+        p = (newP | F_U | F_B) & 0xFFu;
+        cyclesUsed = newCyclesUsed;
     }
 
     // Save registers
