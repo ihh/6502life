@@ -47,7 +47,6 @@ async function testPasses(label, B, seed, passes, initFn) {
 
     // Run passes
     for (let p = 0; p < passes; p++) {
-        // Snapshot CPU PRNG state before pass
         const cpuRngBefore = cpu.rng.state;
         const gpuRngBefore = gpu.rng.state;
 
@@ -57,9 +56,23 @@ async function testPasses(label, B, seed, passes, initFn) {
         }
 
         await cpu.runPass();
+        const cpuRngMid = cpu.rng.state;
         await cpu.runPass();
+        const cpuRngAfter = cpu.rng.state;
+
         await gpu.runPass();
+        const gpuRngMid = gpu.rng.state;
         await gpu.runPass();
+        const gpuRngAfter = gpu.rng.state;
+
+        if (cpuRngMid !== gpuRngMid) {
+            print(`${label}: PRNG diverged after half-pass ${p}: cpu=${cpuRngMid} gpu=${gpuRngMid}`, 'fail');
+            return false;
+        }
+        if (cpuRngAfter !== gpuRngAfter) {
+            print(`${label}: PRNG diverged after pass ${p}: cpu=${cpuRngAfter} gpu=${gpuRngAfter}`, 'fail');
+            return false;
+        }
     }
 
     // Read GPU storage via census (populates _storageSnapshot)
