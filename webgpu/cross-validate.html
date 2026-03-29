@@ -321,16 +321,35 @@ async function main() {
                 print(`  Cell0 gpu: PC=$${gpu._storageSnapshot[0xF9].toString(16).padStart(2,'0')}${gpu._storageSnapshot[0xFA].toString(16).padStart(2,'0')} X=$${gpu._storageSnapshot[0xFD].toString(16).padStart(2,'0')}`, 'fail');
             }
 
+            // Snapshot cell 0 before half-pass 8
+            const cell0pre8 = new Uint8Array(cpu.storage.subarray(0, M));
+
             // Half-pass 8
             await cpu.runPass();
             await gpu.runPass();
             await gpu.census();
             let diffs8 = 0;
-            for (let i = 0; i < B*B*M; i++) if (cpu.storage[i] !== gpu._storageSnapshot[i]) diffs8++;
+            const diffOffsets = [];
+            for (let i = 0; i < B*B*M; i++) {
+                if (cpu.storage[i] !== gpu._storageSnapshot[i]) {
+                    diffs8++;
+                    if (diffOffsets.length < 20) diffOffsets.push(i);
+                }
+            }
             print(`  After half-pass 8: ${diffs8} diffs`, diffs8===0?'pass':'fail');
             if (diffs8 > 0) {
-                print(`  Cell0 cpu: PC=$${cpu.storage[0xF9].toString(16).padStart(2,'0')}${cpu.storage[0xFA].toString(16).padStart(2,'0')} X=$${cpu.storage[0xFD].toString(16).padStart(2,'0')}`, 'fail');
-                print(`  Cell0 gpu: PC=$${gpu._storageSnapshot[0xF9].toString(16).padStart(2,'0')}${gpu._storageSnapshot[0xFA].toString(16).padStart(2,'0')} X=$${gpu._storageSnapshot[0xFD].toString(16).padStart(2,'0')}`, 'fail');
+                // Show which cell the diffs are in
+                const diffCells = new Set(diffOffsets.map(i => Math.floor(i / M)));
+                print(`  Divergent cells: ${[...diffCells].join(', ')}`, 'fail');
+                // Dump all cell 0 diffs
+                for (let off = 0; off < M; off++) {
+                    const cv = cpu.storage[off], gv = gpu._storageSnapshot[off], pv = cell0pre8[off];
+                    if (cv !== gv) {
+                        print(`  [$${off.toString(16).padStart(3,'0')}] pre=$${pv.toString(16).padStart(2,'0')} cpu=$${cv.toString(16).padStart(2,'0')} gpu=$${gv.toString(16).padStart(2,'0')}`, 'fail');
+                    }
+                }
+                // Also show who cell 0's partner is in this half-pass
+                // (compute from PRNG state we saved)
             }
         }
     }
