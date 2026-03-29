@@ -5,50 +5,102 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>6502life Bare Sim</title>
     <style>
-        body { font-family: monospace; background: #111; color: #0f0; padding: 12px; }
-        #log { white-space: pre; font-size: 11px; line-height: 1.2; max-height: 60px; overflow-y: auto; }
-        #grid { cursor: crosshair; }
-        #stats { font-size: 14px; margin: 8px 0; }
-        #mode { font-size: 12px; color: #0a0; margin-bottom: 8px; }
-        #cellinfo { font-size: 11px; color: #080; margin: 4px 0; }
-        #disasm { font-size: 10px; line-height: 1.3; color: #0a0; white-space: pre; margin: 0; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: monospace; background: #111; color: #0f0; padding: 12px;
+               overscroll-behavior: none; }
+        h3 { margin-bottom: 4px; }
+        #mode { font-size: 12px; color: #0a0; }
+        #stats { font-size: 13px; margin: 4px 0 8px; overflow: hidden;
+                 white-space: nowrap; text-overflow: ellipsis; }
+        #cellinfo { font-size: 11px; color: #080; margin: 2px 0; }
+
+        .main {
+            display: grid;
+            grid-template-columns: 3fr 1fr;
+            grid-template-rows: 1fr auto;
+            gap: 8px;
+            width: 100%;
+            max-width: 900px;
+        }
+        .grid-col { grid-row: 1; grid-column: 1; }
+        #grid {
+            width: 100%;
+            aspect-ratio: 2 / 3;
+            cursor: crosshair;
+            image-rendering: pixelated;
+            display: block;
+            touch-action: none;
+        }
+        .maps {
+            grid-row: 1; grid-column: 2;
+            display: flex; flex-direction: column;
+            gap: 4px;
+        }
+        .maps canvas {
+            width: 100%;
+            image-rendering: pixelated;
+            display: block;
+        }
+        #cv0 { border: 1px solid #006; }
+        #cv1 { border: 1px solid #600; }
+
+        .bottom-left {
+            grid-row: 2; grid-column: 1;
+        }
+        #disasm {
+            font-size: 10px; line-height: 1.3; color: #0a0;
+            white-space: pre; margin: 0;
+            min-height: 8em;
+        }
         .dasm-cur { color: #fff; background: #030; }
-        button, select { font-family: monospace; font-size: 14px; padding: 6px 12px;
-                 background: #030; color: #0f0; border: 1px solid #0f0; cursor: pointer;
-                 margin-right: 6px; margin-bottom: 6px; }
+
+        .bottom-right {
+            grid-row: 2; grid-column: 2;
+            display: flex; flex-direction: column;
+            gap: 4px;
+        }
+        button, select {
+            font-family: monospace; font-size: 13px; padding: 5px 8px;
+            background: #030; color: #0f0; border: 1px solid #0f0;
+            cursor: pointer; width: 100%;
+        }
+        #log { white-space: pre; font-size: 11px; line-height: 1.2;
+               max-height: 60px; overflow-y: auto; margin-top: 8px; }
     </style>
 </head>
 <body>
     <h3>6502life Bare Sim</h3>
     <div id="mode"></div>
     <div id="stats"></div>
-    <div style="display:flex; gap:12px; align-items:flex-start; margin:8px 0;">
-        <canvas id="grid"></canvas>
-        <div id="inspector" style="width:256px;">
-            <canvas id="cv0" width="128" height="64" style="border:1px solid #006; image-rendering:pixelated; width:256px; height:128px; display:block;"></canvas>
-            <canvas id="cv1" width="128" height="64" style="border:1px solid #600; image-rendering:pixelated; width:256px; height:128px; display:block; margin-top:4px;"></canvas>
+
+    <div class="main">
+        <div class="grid-col">
+            <canvas id="grid"></canvas>
+        </div>
+        <div class="maps">
+            <canvas id="cv0" width="64" height="64"></canvas>
             <div id="cellinfo"></div>
+            <canvas id="cv1" width="64" height="64"></canvas>
+        </div>
+        <div class="bottom-left">
             <pre id="disasm"></pre>
         </div>
+        <div class="bottom-right">
+            <button id="toggle">Start</button>
+            <select id="speed">
+                <option value="0.05">crawl</option>
+                <option value="0.1">very slow</option>
+                <option value="0.25">slow</option>
+                <option value="1" selected>normal</option>
+                <option value="5">fast</option>
+                <option value="25">very fast</option>
+                <option value="100">max</option>
+            </select>
+            <button id="soup">Soup</button>
+            <button id="rep">Rep</button>
+        </div>
     </div>
-    <div>
-        <button id="toggle">Start</button>
-        <select id="speed">
-            <option value="0.05">crawl</option>
-            <option value="0.1">very slow</option>
-            <option value="0.25">slow</option>
-            <option value="1" selected>normal</option>
-            <option value="5">fast</option>
-            <option value="25">very fast</option>
-            <option value="100">max</option>
-        </select>
-        <select id="nbrdir">
-            <option value="n">nbr: N</option>
-            <option value="e" selected>nbr: E</option>
-            <option value="s">nbr: S</option>
-            <option value="w">nbr: W</option>
-        </select>
-    </div>
+
     <pre id="log"></pre>
     <script type="module">
         import { disassemble } from './disasm.js';
@@ -62,25 +114,28 @@
 
         let running=false, gpuMode=false, gpuSim=null, worker=null;
         const B=32, MEAN_CYC=4096, CHAR_W=8, CHAR_H=12;
-        let inspectI=0, inspectJ=0, inspectNI=1, inspectNJ=0;
+        let inspectI=Math.floor(B/2), inspectJ=Math.floor(B/2);
+        let inspectNI=inspectI, inspectNJ=inspectJ-1; // S neighbor by default
         let lastCensus=null, lastCellView0=null, lastCellView1=null;
         let totalQuanta=0, rateEMA=0, lastQuanta=0, lastRateTime=0;
         let fpsFrames=0, fpsT0=0, fpsVal=0;
         let currentTrace=null, traceIdx=0;
         let glowWrite=new Float32Array(2048), glowFetch=new Float32Array(2048);
         const GLOW_DECAY=0.93;
+        let nbrDir='s';
+
+        // --- Replicator program (LDA zp,X; STA abs,X; INX; BCC) ---
+        const REP_CODE = [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8];
 
         function updateNeighbor() {
-            const d=$('nbrdir').value;
-            inspectNI=(inspectI+(d==='e'?1:d==='w'?-1:0)+B)%B;
-            inspectNJ=(inspectJ+(d==='n'?1:d==='s'?-1:0)+B)%B;
-            cellInfoEl.textContent='('+inspectI+','+inspectJ+') + ('+inspectNI+','+inspectNJ+')';
+            inspectNI=(inspectI+(nbrDir==='e'?1:nbrDir==='w'?-1:0)+B)%B;
+            inspectNJ=(inspectJ+(nbrDir==='s'?-1:nbrDir==='n'?1:0)+B)%B;
+            cellInfoEl.textContent='('+inspectI+','+inspectJ+') '+nbrDir.toUpperCase()+' ('+inspectNI+','+inspectNJ+')';
             if(worker) worker.postMessage({type:'traceCell',i:inspectI,j:inspectJ});
         }
 
         function initGridCanvas() {
             gridCanvas.width=B*CHAR_W; gridCanvas.height=B*CHAR_H;
-            gridCanvas.style.width=(B*CHAR_W)+'px'; gridCanvas.style.height=(B*CHAR_H)+'px';
             gridCtx.font='10px monospace'; gridCtx.textBaseline='top';
         }
 
@@ -96,7 +151,7 @@
             let r; if(cps>=1e6)r=(cps/1e6).toFixed(1)+'M'; else if(cps>=1e3)r=(cps/1e3).toFixed(1)+'K'; else r=cps.toFixed(0);
             fpsFrames++;
             if(now-fpsT0>1000){fpsVal=Math.round(fpsFrames*1000/(now-fpsT0));fpsFrames=0;fpsT0=now;}
-            statsEl.textContent=c.functional+'/'+c.total+' alive  var='+c.loopVariants+'  '+r+' cyc/cell/s  '+fpsVal+' fps';
+            statsEl.textContent=c.functional+'/'+c.total+' alive '+r+' cyc/cell/s '+fpsVal+'fps';
 
             gridCtx.fillStyle='#111'; gridCtx.fillRect(0,0,gridCanvas.width,gridCanvas.height);
             gridCtx.font='10px monospace'; gridCtx.textBaseline='top';
@@ -112,23 +167,23 @@
             }
         }
 
+        const CELL_VIEW_ROWS = 16;  // first 2 pages (512 bytes); set to 32 for all 4
         function renderCellView(ctx, cellData, glowOff) {
             if(!cellData) return;
-            const img=ctx.createImageData(128,64); const d=img.data;
-            for(let row=0;row<32;row++) for(let col=0;col<32;col++) {
+            const W=64, H=CELL_VIEW_ROWS*4;
+            const img=ctx.createImageData(W,H); const d=img.data;
+            for(let row=0;row<CELL_VIEW_ROWS;row++) for(let col=0;col<32;col++) {
                 const byteIdx=row*32+col, val=cellData[byteIdx];
                 const wI=Math.pow(Math.min(1,glowWrite[glowOff+byteIdx]),0.3);
                 const fI=Math.pow(Math.min(1,glowFetch[glowOff+byteIdx]),0.3);
-                for(let dy=0;dy<2;dy++) for(let dx=0;dx<4;dx++) {
-                    const bit=(val>>(7-(dy*4+dx)))&1;
-                    const pi=((row*2+dy)*128+col*4+dx)*4;
+                for(let dy=0;dy<4;dy++) for(let dx=0;dx<2;dx++) {
+                    const bit=(val>>(7-(dy*2+dx)))&1;
+                    const pi=((row*4+dy)*W+col*2+dx)*4;
                     if(bit) {
-                        // '1' pixel: green=max, plus red/blue glow
                         d[pi]  =Math.min(255,Math.floor(wI*255+20));
-                        d[pi+1]=255; // green always max for '1' bits
+                        d[pi+1]=255;
                         d[pi+2]=Math.min(255,Math.floor(fI*255+20));
                     } else {
-                        // '0' pixel: dim, glow only
                         d[pi]  =Math.min(255,Math.floor(wI*40));
                         d[pi+1]=Math.floor(15);
                         d[pi+2]=Math.min(255,Math.floor(fI*40));
@@ -177,6 +232,103 @@
             requestAnimationFrame(renderLoop);
         }
 
+        // --- SHA-256 soup: fill board with provably random bytes ---
+        async function sha256soup(totalBytes) {
+            const out = new Uint8Array(totalBytes);
+            const seed = crypto.getRandomValues(new Uint8Array(32));
+            let filled = 0, counter = 0;
+            while (filled < totalBytes) {
+                const input = new Uint8Array(36);
+                input.set(seed);
+                input[32] = (counter >> 24) & 0xFF;
+                input[33] = (counter >> 16) & 0xFF;
+                input[34] = (counter >> 8) & 0xFF;
+                input[35] = counter & 0xFF;
+                const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', input));
+                const n = Math.min(32, totalBytes - filled);
+                out.set(hash.subarray(0, n), filled);
+                filled += n;
+                counter++;
+            }
+            return out;
+        }
+
+        async function initSoup() {
+            const wasRunning = running;
+            if (running) { running = false; if (!gpuMode && worker) workerSend({type:'stop'}); }
+            totalQuanta = 0; rateEMA = 0;
+            const totalBytes = B * B * 1024;
+            const data = await sha256soup(totalBytes);
+            if (gpuMode && gpuSim) {
+                gpuSim.totalQuanta = 0;
+                // Write in cell-sized chunks (aligned to 4 bytes)
+                for (let i = 0; i < B; i++)
+                    for (let j = 0; j < B; j++) {
+                        const off = (i * B + j) * 1024;
+                        gpuSim.writeCell(i, j, 0, data.subarray(off, off + 1024));
+                    }
+                lastCensus = await gpuSim.census();
+            } else if (worker) {
+                workerSend({type:'init', B});
+                // Wait for ready, then fill
+                await new Promise(resolve => {
+                    const orig = worker.onmessage;
+                    worker.onmessage = (e) => {
+                        orig(e);
+                        if (e.data.type === 'ready') resolve();
+                    };
+                });
+                for (let i = 0; i < B; i++)
+                    for (let j = 0; j < B; j++) {
+                        const off = (i * B + j) * 1024;
+                        workerSend({type:'writeCell', i, j, offset: 0, data: Array.from(data.subarray(off, off + 1024))});
+                    }
+                workerSend({type:'census'});
+            }
+            glowWrite.fill(0); glowFetch.fill(0);
+            currentTrace = null;
+            updateNeighbor(); requestCellViews();
+            print('Soup: SHA-256 random board initialized.');
+            if (wasRunning) { running = true; startSim(); }
+        }
+
+        function initRep() {
+            const wasRunning = running;
+            if (running) { running = false; if (!gpuMode && worker) workerSend({type:'stop'}); }
+            totalQuanta = 0; rateEMA = 0;
+            if (gpuMode && gpuSim) {
+                gpuSim.totalQuanta = 0;
+                // Zero all cells, then write replicator at (0,0)
+                for (let i = 0; i < B; i++)
+                    for (let j = 0; j < B; j++)
+                        gpuSim.writeCell(i, j, 0, new Uint8Array(1024));
+                gpuSim.writeCell(0, 0, 0, REP_CODE);
+                gpuSim.writeCell(0, 0, 0xF9, [0x00, 0x00]);
+                gpuSim.writeCell(0, 0, 0xFF, [0xFF]);
+                gpuSim.census().then(c => { lastCensus = c; });
+            } else if (worker) {
+                workerSend({type:'init', B});
+                // Worker init creates a fresh zero board; inject replicator on ready
+            }
+            glowWrite.fill(0); glowFetch.fill(0);
+            currentTrace = null;
+            updateNeighbor(); requestCellViews();
+            print('Rep: single replicator at (0,0).');
+            if (wasRunning) { running = true; /* startSim called after worker ready */ }
+        }
+
+        function startSim() {
+            const speed = parseFloat($('speed').value) || 1;
+            lastRateTime = performance.now(); lastQuanta = totalQuanta; rateEMA = 0;
+            fpsT0 = performance.now(); fpsFrames = 0;
+            if (gpuMode) {
+                gpuPassQueue = 0;
+                requestAnimationFrame(gpuLoop);
+            } else {
+                workerSend({type:'start', speed});
+            }
+        }
+
         // === GPU ===
         let gpuPassQueue=0;
         async function gpuLoop() {
@@ -208,11 +360,12 @@
             worker.onmessage=(e)=>{
                 const msg=e.data;
                 if(msg.type==='ready'){
-                    workerSend({type:'writeCell',i:0,j:0,offset:0,data:[0xB5,0x00,0x9D,0x00,0x04,0xE8,0x90,0xF8]});
+                    workerSend({type:'writeCell',i:0,j:0,offset:0,data:[...REP_CODE]});
                     workerSend({type:'writeCell',i:0,j:0,offset:0xF9,data:[0x00,0x00]});
                     workerSend({type:'writeCell',i:0,j:0,offset:0xFF,data:[0xFF]});
                     workerSend({type:'traceCell',i:inspectI,j:inspectJ});
                     workerSend({type:'census'});
+                    if(running) startSim();
                 } else if(msg.type==='census'){
                     lastCensus=msg.data; totalQuanta=msg.totalQuanta;
                 } else if(msg.type==='cellView'){
@@ -224,16 +377,45 @@
             };
         }
 
-        gridCanvas.onclick=(e)=>{
+        // --- Grid interaction: tap to select cell, drag to set neighbor direction ---
+        function selectCellAt(clientX, clientY) {
             const rect=gridCanvas.getBoundingClientRect();
-            const col=Math.floor((e.clientX-rect.left)*gridCanvas.width/rect.width/CHAR_W);
-            const row=B-1-Math.floor((e.clientY-rect.top)*gridCanvas.height/rect.height/CHAR_H);
+            const col=Math.floor((clientX-rect.left)*gridCanvas.width/rect.width/CHAR_W);
+            const row=B-1-Math.floor((clientY-rect.top)*gridCanvas.height/rect.height/CHAR_H);
             if(col>=0&&col<B&&row>=0&&row<B){
                 inspectI=col;inspectJ=row;
                 updateNeighbor(); glowWrite.fill(0);glowFetch.fill(0); requestCellViews();
             }
-        };
-        $('nbrdir').onchange=()=>{updateNeighbor();requestCellViews();};
+        }
+        {
+            let dragStart = null;
+            function onDragStart(x, y) { dragStart = { x, y }; }
+            function onDragEnd(x, y) {
+                if (!dragStart) return;
+                const dx = x - dragStart.x, dy = y - dragStart.y;
+                const sx = dragStart.x, sy = dragStart.y;
+                dragStart = null;
+                if (dx*dx + dy*dy < 64) { selectCellAt(sx, sy); return; }
+                if (Math.abs(dx) > Math.abs(dy)) {
+                    nbrDir = dx > 0 ? 'e' : 'w';
+                } else {
+                    nbrDir = dy > 0 ? 's' : 'n';
+                }
+                updateNeighbor(); requestCellViews();
+            }
+            gridCanvas.addEventListener('mousedown', e => onDragStart(e.clientX, e.clientY));
+            gridCanvas.addEventListener('mouseup', e => onDragEnd(e.clientX, e.clientY));
+            gridCanvas.addEventListener('touchstart', e => {
+                e.preventDefault();
+                onDragStart(e.touches[0].clientX, e.touches[0].clientY);
+            }, { passive: false });
+            gridCanvas.addEventListener('touchend', e => {
+                e.preventDefault();
+                onDragEnd(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+            }, { passive: false });
+            gridCanvas.onclick = null; // handled by mousedown/mouseup
+        }
+
         $('speed').onchange=()=>{if(!gpuMode&&running)workerSend({type:'speed',speed:parseFloat($('speed').value)||1});};
 
         async function main() {
@@ -244,16 +426,17 @@
             }catch(e){print('GPU: '+e.message);}}
             if(gpuMode){
                 modeEl.textContent='[GPU] WebGPU compute shader';
-                gpuSim.writeCell(0,0,0,[0xB5,0x00,0x9D,0x00,0x04,0xE8,0x90,0xF8]);
+                gpuSim.writeCell(0,0,0,REP_CODE);
                 gpuSim.writeCell(0,0,0xF9,[0x00,0x00]);gpuSim.writeCell(0,0,0xFF,[0xFF]);
                 lastCensus=await gpuSim.census();totalQuanta=gpuSim.totalQuanta;
-                if(gpuSim.getCellView){lastCellView0=gpuSim.getCellView(0,0);lastCellView1=gpuSim.getCellView(1,0);}
+                if(gpuSim.getCellView){lastCellView0=gpuSim.getCellView(inspectI,inspectJ);lastCellView1=gpuSim.getCellView(inspectNI,inspectNJ);}
             } else {
                 modeEl.textContent='[CPU] Web Worker';
                 setupWorker();workerSend({type:'init',B});
             }
-            print(B+'x'+B+' board. Click grid to inspect.');
+            print(B+'x'+B+' board. Click to inspect, drag to set neighbor direction.');
             initGridCanvas(); fpsT0=lastRateTime=performance.now();
+            updateNeighbor();
             requestAnimationFrame(renderLoop);
         }
 
@@ -261,16 +444,15 @@
             running=!running;
             $('toggle').textContent=running?'Stop':'Start';
             if(running){
-                lastRateTime=performance.now();lastQuanta=totalQuanta;rateEMA=0;
-                fpsT0=performance.now();fpsFrames=0;
-                const speed=parseFloat($('speed').value)||1;
-                if(gpuMode){gpuSim.totalQuanta=0;totalQuanta=0;gpuPassQueue=0;requestAnimationFrame(gpuLoop);}
-                else workerSend({type:'start',speed});
+                startSim();
             } else {
                 if(!gpuMode){workerSend({type:'stop'});workerSend({type:'census'});}
                 requestCellViews();
             }
         };
+
+        $('soup').onclick = () => initSoup();
+        $('rep').onclick = () => initRep();
 
         main();
     </script>

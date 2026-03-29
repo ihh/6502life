@@ -10,7 +10,6 @@ import { Board6502Engine } from './engine-browser.js';
 import { GridRenderer } from './renderer.js';
 import { initWallet } from './wallet.js';
 import { listPresets } from './presets-browser.js';
-import { SocialPlay } from './social-play.js';
 import './style.css';
 
 // --- Configuration ---
@@ -26,7 +25,6 @@ let engine = null;
 if (typeof window !== 'undefined') window.__engine = null;
 let renderer = null;
 let wallet = null;
-let social = null;
 let running = false;
 let speed = DEFAULT_SPEED;
 let coins = 0;
@@ -77,15 +75,6 @@ function createUI() {
         <span class="value" id="copies">0</span>
       </div>
     </div>
-    <div class="social-bar" id="social-bar">
-      <span class="status-dot" id="social-dot" title="Connection status"></span>
-      <span class="peer-id" id="peer-id" title="Click to copy your Peer ID">...</span>
-      <div class="social-connect">
-        <input type="text" id="peer-input" placeholder="Enter peer ID..." />
-        <button id="btn-connect">Connect</button>
-      </div>
-    </div>
-    <div class="social-info" id="social-info"></div>
     <div class="controls">
       <button id="btn-start" class="active">Start</button>
       <button id="btn-stop">Stop</button>
@@ -146,9 +135,6 @@ async function init() {
   // Render initial state
   renderer.render((x, y) => engine.getCell(x, y));
 
-  // Init social play
-  await initSocial();
-
   // Wire up controls
   document.getElementById('btn-start').addEventListener('click', start);
   document.getElementById('btn-stop').addEventListener('click', stop);
@@ -192,103 +178,6 @@ async function init() {
   start();
 }
 
-// --- Social Play ---
-
-async function initSocial() {
-  social = new SocialPlay(engine, wallet, {
-    exportEdge: 'north',
-    shareInterval: 100,
-    onNotification: showNotification,
-  });
-
-  try {
-    const peerId = await social.start();
-    updatePeerIdDisplay(peerId);
-  } catch (err) {
-    console.warn('Social play unavailable:', err.message);
-    document.getElementById('peer-id').textContent = 'offline';
-    document.getElementById('peer-id').title = err.message;
-  }
-
-  // Copy peer ID on click
-  document.getElementById('peer-id').addEventListener('click', () => {
-    const id = social.getPeerId();
-    if (!id) return;
-    navigator.clipboard.writeText(id).then(() => {
-      const el = document.getElementById('peer-id');
-      el.classList.add('copied');
-      setTimeout(() => el.classList.remove('copied'), 1500);
-    }).catch(() => {
-      // Fallback: select the text
-    });
-  });
-
-  // Connect button
-  document.getElementById('btn-connect').addEventListener('click', async () => {
-    const input = document.getElementById('peer-input');
-    const remotePeerId = input.value.trim();
-    if (!remotePeerId) return;
-
-    const btn = document.getElementById('btn-connect');
-    btn.textContent = '...';
-    btn.disabled = true;
-
-    try {
-      await social.connectTo(remotePeerId);
-      input.value = '';
-    } catch (err) {
-      showNotification(`Failed: ${err.message}`);
-    } finally {
-      btn.textContent = 'Connect';
-      btn.disabled = false;
-    }
-  });
-
-  // Enter key in input
-  document.getElementById('peer-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      document.getElementById('btn-connect').click();
-    }
-  });
-}
-
-function updatePeerIdDisplay(peerId) {
-  const el = document.getElementById('peer-id');
-  el.textContent = peerId;
-  el.title = 'Click to copy: ' + peerId;
-}
-
-function updateSocialUI() {
-  if (!social) return;
-
-  const stats = social.getStats();
-  const dot = document.getElementById('social-dot');
-  const info = document.getElementById('social-info');
-
-  // Update connection dot
-  if (stats.connected) {
-    dot.classList.add('connected');
-  } else {
-    dot.classList.remove('connected');
-  }
-
-  // Update info line
-  if (stats.connected) {
-    const shortId = stats.partnerId.length > 20
-      ? stats.partnerId.slice(0, 20) + '...'
-      : stats.partnerId;
-    info.innerHTML =
-      `<span class="partner">Connected: ${shortId}</span> ` +
-      `<span class="multiplier">${stats.miningMultiplier}x</span> ` +
-      `| Shares: ${stats.sharesSent}/${stats.sharesReceived}` +
-      (stats.nicheEvents > 0
-        ? ` | Niches: ${stats.nicheEvents} (+${stats.nicheCoins.toFixed(2)})`
-        : '');
-  } else {
-    info.textContent = '';
-  }
-}
-
 // --- Run Loop ---
 
 function start() {
@@ -318,32 +207,13 @@ function loop() {
   // Step the engine
   engine.step(speed);
 
-  // Handle social edge sharing
-  if (social) {
-    social.tick(speed);
-  }
-
-  // Get mining multiplier (1.0 solo, 1.5 social)
-  const multiplier = social ? social.getMiningMultiplier() : 1.0;
-
-  // Check for block (coin) — apply social multiplier
-  ticksSinceBlock += speed * multiplier;
+  // Check for block (coin)
+  ticksSinceBlock += speed;
   while (ticksSinceBlock >= BLOCK_INTERVAL) {
     ticksSinceBlock -= BLOCK_INTERVAL;
     coins++;
   }
-
-  // Add niche coins if any
-  if (social) {
-    const stats = social.getStats();
-    // Niche coins are tracked in social stats, add them to display total
-    const totalCoins = coins + stats.nicheCoins;
-    document.getElementById('coins').textContent = totalCoins % 1 === 0
-      ? totalCoins
-      : totalCoins.toFixed(2);
-  } else {
-    document.getElementById('coins').textContent = coins;
-  }
+  document.getElementById('coins').textContent = coins;
 
   // Render
   renderer.render((x, y) => engine.getCell(x, y));
@@ -353,7 +223,6 @@ function loop() {
   if (frameCount % 30 === 0) {
     const summary = engine.summarize();
     cachedActive = summary.activeCells;
-    updateSocialUI();
   }
   document.getElementById('ticks').textContent = formatNum(engine.clock());
   document.getElementById('active').textContent = cachedActive;
