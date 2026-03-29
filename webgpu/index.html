@@ -119,6 +119,7 @@
             <div class="ctrl-col">
                 <button id="soup">Soup</button>
                 <button id="rep">Rep</button>
+                <button id="jam">Jam</button>
                 <button id="capture">Capture</button>
             </div>
             <div class="ctrl-col">
@@ -166,6 +167,16 @@
 
         // --- Replicator program (LDA zp,X; STA abs,X; INX; BCC) ---
         const REP_CODE = [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8];
+        // --- Alien-killer: self-referential replicator with shibboleth check ---
+        const ALIEN_KILLER_CODE = [
+            0xA9, 0x42, 0xCD, 0x01, 0x04, 0xF0, 0x1C, // LDA #$42; CMP $0401; BEQ done
+            0xA9, 0x02, 0x8D, 0x00, 0x04,              // LDA #$02; STA $0400 (JAM neighbor)
+            0xA9, 0x00, 0x8D, 0xF9, 0x04, 0x8D, 0xFA, 0x04, // LDA #0; STA $04F9; STA $04FA
+            0xA2, 0x00,                                  // LDX #0
+            0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0xD0, 0xF8, // copy loop
+            0xA9, 0xFF, 0x8D, 0xFF, 0x04,               // LDA #$FF; STA $04FF
+            0x00, 0x00,                                   // BRK $00
+        ];
 
         // --- Brush ---
         function initBrush() {
@@ -560,6 +571,37 @@
             if (wasRunning) { running = true; /* startSim called after worker ready */ }
         }
 
+        let pendingJam = false;  // flag for worker ready handler
+        function initJam() {
+            const wasRunning = running;
+            if (running) { running = false; if (!gpuMode && worker) workerSend({type:'stop'}); }
+            totalQuanta = 0; rateEMA = 0;
+            const ci = Math.floor(B/2), cj = Math.floor(B/2);
+            if (gpuMode && gpuSim) {
+                gpuSim.totalQuanta = 0;
+                for (let i = 0; i < B; i++)
+                    for (let j = 0; j < B; j++)
+                        gpuSim.writeCell(i, j, 0, new Uint8Array(1024));
+                // Replicator at (0,0)
+                gpuSim.writeCell(0, 0, 0, REP_CODE);
+                gpuSim.writeCell(0, 0, 0xF9, [0x00, 0x00]);
+                gpuSim.writeCell(0, 0, 0xFF, [0xFF]);
+                // Alien-killer at center
+                gpuSim.writeCell(ci, cj, 0, ALIEN_KILLER_CODE);
+                gpuSim.writeCell(ci, cj, 0xF9, [0x00, 0x00]);
+                gpuSim.writeCell(ci, cj, 0xFF, [0xFF]);
+                gpuSim.census().then(c => { lastCensus = c; });
+            } else if (worker) {
+                pendingJam = true;
+                workerSend({type:'init', B});
+            }
+            glowWrite.fill(0); glowFetch.fill(0);
+            currentTrace = null;
+            updateNeighbor(); requestCellViews();
+            print('Jam: replicator at (0,0) vs alien-killer at ('+ci+','+cj+').');
+            if (wasRunning) { running = true; }
+        }
+
         function startSim() {
             lastRateTime = performance.now(); lastQuanta = totalQuanta; rateEMA = 0;
             fpsT0 = performance.now(); fpsFrames = 0;
@@ -589,9 +631,18 @@
                 const msg=e.data;
                 if(msg.type==='ready'){
                     if (!gpuMode) {
+                        // Always place replicator at (0,0)
                         workerSend({type:'writeCell',i:0,j:0,offset:0,data:[...REP_CODE]});
                         workerSend({type:'writeCell',i:0,j:0,offset:0xF9,data:[0x00,0x00]});
                         workerSend({type:'writeCell',i:0,j:0,offset:0xFF,data:[0xFF]});
+                        // Jam mode: also place alien-killer at center
+                        if (pendingJam) {
+                            const ci = Math.floor(B/2), cj = Math.floor(B/2);
+                            workerSend({type:'writeCell',i:ci,j:cj,offset:0,data:[...ALIEN_KILLER_CODE]});
+                            workerSend({type:'writeCell',i:ci,j:cj,offset:0xF9,data:[0x00,0x00]});
+                            workerSend({type:'writeCell',i:ci,j:cj,offset:0xFF,data:[0xFF]});
+                            pendingJam = false;
+                        }
                         workerSend({type:'traceCell',i:inspectI,j:inspectJ});
                         workerSend({type:'census'});
                         if(running) startSim();
@@ -728,6 +779,7 @@
 
         $('soup').onclick = () => initSoup();
         $('rep').onclick = () => initRep();
+        $('jam').onclick = () => initJam();
 
         main();
     </script>
