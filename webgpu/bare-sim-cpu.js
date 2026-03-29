@@ -68,7 +68,7 @@ function runQuantum(mem, budget, hasRegisterSave = true, writeLog = null, fetchL
             else if (op === 3) { a = a ^ val; rp = nzFlags(a, p); }
             else if (op === 4) { a = a & val; rp = nzFlags(a, p); }
             else if (op === 5) { a = a | val; rp = nzFlags(a, p); }
-            else if (op === 6) { const sum = a + val + (p & F_C); a = sum & 0xFF; const co = sum > 255 ? F_C : 0; const v = ((a ^ (sum&0xFF)) & (val ^ (sum&0xFF)) & 0x80) ? F_V : 0; rp = nzFlags(sum & 0xFF, (p & ~(F_C|F_V)) | co | v); a = sum & 0xFF; }
+            else if (op === 6) { const sum = a + val + (p & F_C); const r = sum & 0xFF; const co = sum > 255 ? F_C : 0; const v = ((a ^ r) & (val ^ r) & 0x80) ? F_V : 0; rp = nzFlags(r, (p & ~(F_C|F_V)) | co | v); a = r; }
             else if (op === 7) { const inv = val ^ 0xFF; const sum = a + inv + (p & F_C); const r = sum & 0xFF; const co = sum > 255 ? F_C : 0; const v = ((a ^ r) & (inv ^ r) & 0x80) ? F_V : 0; rp = nzFlags(r, (p & ~(F_C|F_V)) | co | v); a = r; }
             else if (op === 8) { rp = nzFlags((a - val) & 0xFF, (p & ~F_C) | (a >= val ? F_C : 0)); }
             else if (op === 9) { rp = nzFlags((x - val) & 0xFF, (p & ~F_C) | (x >= val ? F_C : 0)); }

@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>GPU/CPU Cross-Validation</title>
+<style>body{font-family:monospace;background:#111;color:#0f0;padding:12px}
+.pass{color:#0f0}.fail{color:#f00}.info{color:#888}pre{margin:0}</style>
+</head>
+<body>
+<h3>GPU/CPU Cross-Validation</h3>
+<pre id="log"></pre>
+<script type="module">
+import { BareSimCPU } from './bare-sim-cpu.js';
+import { PRNG } from './prng.js';
+
+const log = document.getElementById('log');
+function print(msg, cls='info') {
+    const span = document.createElement('span');
+    span.className = cls;
+    span.textContent = msg + '\n';
+    log.appendChild(span);
+}
+
+let BareSim = null;
+let gpuAvailable = false;
+
+async function initGpu(B) {
+    if (!navigator.gpu) return null;
+    try {
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) return null;
+        const mod = await import('./bare-sim.js');
+        BareSim = mod.BareSim;
+        return await BareSim.create(B);
+    } catch(e) { print('GPU init failed: ' + e.message, 'fail'); return null; }
+}
+
+// Run N passes on both engines with same seed, compare storage byte-for-byte
+async function testPasses(label, B, seed, passes, initFn) {
+    const cpu = await BareSimCPU.create(B, { seed });
+    const gpu = await initGpu(B);
+    if (!gpu) { print(label + ': SKIP (no GPU)', 'info'); return true; }
+
+    // Reset GPU PRNG to same seed
+    gpu.rng = new PRNG(seed);
+
+    // Apply init (e.g. plant replicator)
+    if (initFn) { initFn(cpu); initFn(gpu); }
+
+    // Run passes
+    for (let p = 0; p < passes; p++) {
+        // Snapshot CPU PRNG state before pass
+        const cpuRngBefore = cpu.rng.state;
+        const gpuRngBefore = gpu.rng.state;
+
+        if (cpuRngBefore !== gpuRngBefore) {
+            print(`${label}: PRNG diverged before pass ${p}: cpu=${cpuRngBefore} gpu=${gpuRngBefore}`, 'fail');
+            return false;
+        }
+
+        await cpu.runPass();
+        await cpu.runPass();
+        await gpu.runPass();
+        await gpu.runPass();
+    }
+
+    // Read GPU storage via census (populates _storageSnapshot)
+    await gpu.census();
+    const gpuSnap = gpu._storageSnapshot;
+
+    // Compare byte-by-byte
+    const totalBytes = B * B * 1024;
+    let diffs = 0;
+    let firstDiff = -1;
+    for (let i = 0; i < totalBytes; i++) {
+        if (cpu.storage[i] !== gpuSnap[i]) {
+            if (firstDiff < 0) firstDiff = i;
+            diffs++;
+        }
+    }
+
+    if (diffs === 0) {
+        print(`${label}: PASS (${passes} passes, ${totalBytes} bytes match)`, 'pass');
+        return true;
+    } else {
+        const cell = Math.floor(firstDiff / 1024);
+        const off = firstDiff % 1024;
+        print(`${label}: FAIL — ${diffs} byte diffs. First at cell ${cell} offset $${off.toString(16)}: cpu=$${cpu.storage[firstDiff].toString(16)} gpu=$${gpuSnap[firstDiff].toString(16)}`, 'fail');
+        // Show context
+        for (let d = Math.max(0, firstDiff-4); d < Math.min(totalBytes, firstDiff+8); d++) {
+            if (cpu.storage[d] !== gpuSnap[d]) {
+                print(`  [$${d.toString(16)}] cpu=$${cpu.storage[d].toString(16).padStart(2,'0')} gpu=$${gpuSnap[d].toString(16).padStart(2,'0')} <--`, 'fail');
+            }
+        }
+        return false;
+    }
+}
+
+function plantReplicator(sim) {
+    sim.writeCell(0, 0, 0, [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8]);
+    sim.writeCell(0, 0, 0xF9, [0x00, 0x00]);
+    sim.writeCell(0, 0, 0xFF, [0xFF]);
+}
+
+function plantAlienKiller(sim) {
+    const code = [
+        0xA9, 0x42, 0xCD, 0x01, 0x04, 0xF0, 0xF9,
+        0xA9, 0x02, 0x8D, 0x00, 0x04,
+        0xA9, 0x00, 0x8D, 0xFA, 0x04, 0x8D, 0xF9, 0x04,
+        0xA2, 0x1F,
+        0xB5, 0x00, 0x9D, 0x00, 0x04, 0xCA, 0x10, 0xF8,
+        0x30, 0xE0,
+    ];
+    sim.writeCell(0, 0, 0, code);
+    sim.writeCell(0, 0, 0xF9, [0x00, 0x00]);
+    sim.writeCell(0, 0, 0xFF, [0xFF]);
+}
+
+function plantSoup(sim, seed) {
+    const rng = new PRNG(seed);
+    const B = sim.B, M = sim.M;
+    for (let ci = 0; ci < B; ci++) {
+        for (let cj = 0; cj < B; cj++) {
+            const data = new Uint8Array(M);
+            for (let k = 0; k < M; k++) data[k] = rng.below(256);
+            sim.writeCell(ci, cj, 0, data);
+        }
+    }
+}
+
+async function main() {
+    print('Cross-validating GPU WGSL shader against CPU reference...\n');
+
+    const B = 8; // small board for fast tests
+    let passed = 0, failed = 0, skipped = 0;
+
+    async function run(label, seed, passes, initFn) {
+        const ok = await testPasses(label, B, seed, passes, initFn);
+        if (ok) passed++; else failed++;
+    }
+
+    // Test 1: Empty board
+    await run('empty board (10 passes)', 42, 10, null);
+
+    // Test 2: Single replicator, short run
+    await run('replicator (10 passes)', 42, 10, plantReplicator);
+
+    // Test 3: Single replicator, longer run
+    await run('replicator (50 passes)', 42, 50, plantReplicator);
+
+    // Test 4: Alien-killer
+    await run('alien-killer (20 passes)', 42, 20, plantAlienKiller);
+
+    // Test 5: Replicator vs alien-killer
+    await run('rep vs killer (30 passes)', 42, 30, (sim) => {
+        plantReplicator(sim);
+        const code = [
+            0xA9, 0x42, 0xCD, 0x01, 0x04, 0xF0, 0xF9,
+            0xA9, 0x02, 0x8D, 0x00, 0x04,
+            0xA9, 0x00, 0x8D, 0xFA, 0x04, 0x8D, 0xF9, 0x04,
+            0xA2, 0x1F,
+            0xB5, 0x00, 0x9D, 0x00, 0x04, 0xCA, 0x10, 0xF8,
+            0x30, 0xE0,
+        ];
+        sim.writeCell(4, 4, 0, code);
+        sim.writeCell(4, 4, 0xF9, [0x00, 0x00]);
+        sim.writeCell(4, 4, 0xFF, [0xFF]);
+    });
+
+    // Test 6-15: Random soups with different seeds
+    for (let s = 0; s < 10; s++) {
+        const seed = 1000 + s;
+        await run(`soup seed=${seed} (20 passes)`, seed, 20, (sim) => plantSoup(sim, seed * 7));
+    }
+
+    // Test 16-25: Multiple seeds, longer runs
+    for (let s = 0; s < 5; s++) {
+        const seed = 5000 + s;
+        await run(`soup seed=${seed} (100 passes)`, seed, 100, (sim) => plantSoup(sim, seed * 13));
+    }
+
+    // Test 26: Different board seeds, same soup init
+    for (let s = 0; s < 5; s++) {
+        await run(`board-seed=${s} soup-seed=42 (30 passes)`, s, 30, (sim) => plantSoup(sim, 42));
+    }
+
+    print(`\n${passed} passed, ${failed} failed`);
+    if (failed === 0) {
+        print('ALL TESTS PASSED — GPU and CPU are bit-exact.', 'pass');
+    } else {
+        print(`${failed} TESTS FAILED — GPU/CPU divergence detected.`, 'fail');
+    }
+}
+
+main().catch(e => print('Error: ' + e.message + '\n' + e.stack, 'fail'));
+</script>
+</body>
+</html>
