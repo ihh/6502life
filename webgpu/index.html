@@ -167,15 +167,14 @@
 
         // --- Replicator program (LDA zp,X; STA abs,X; INX; BCC) ---
         const REP_CODE = [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8];
-        // --- Alien-killer: shibboleth check, JAM+PC before copy, byte 0 last ---
+        // --- Alien-killer: shibboleth $42, JAM+PC before copy, DEX/BPL so byte 0 last ---
         const ALIEN_KILLER_CODE = [
-            0xA9, 0x42, 0xCD, 0x01, 0x04, 0xF0, 0x1C,   // LDA #$42; CMP $0401; BEQ done
+            0xA9, 0x42, 0xCD, 0x01, 0x04, 0xF0, 0x17,   // LDA #$42; CMP $0401; BEQ @done
             0xA9, 0x02, 0x8D, 0x00, 0x04,                // LDA #$02; STA $0400 (JAM)
             0xA9, 0x00, 0x8D, 0xF9, 0x04, 0x8D, 0xFA, 0x04, // PC = 0
-            0xA2, 0x01,                                    // LDX #1
-            0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0xD0, 0xF8, // copy 1-255
-            0xA5, 0x00, 0x8D, 0x00, 0x04,                // copy byte 0 last
-            0x00, 0x00,                                    // BRK $00
+            0xA2, 0x1E,                                    // LDX #30
+            0xB5, 0x00, 0x9D, 0x00, 0x04, 0xCA, 0x10, 0xF8, // LDA zp,X; STA abs,X; DEX; BPL
+            0x00, 0x00,                                    // @done: BRK $00
         ];
 
         // --- Brush ---
@@ -426,10 +425,15 @@
         }
 
         let dasmExpanded = false;
+        let lastDasmKey = '';
         function renderDisasm() {
-            if(!lastCellView0) { dasmEl.textContent=''; return; }
+            if(!lastCellView0) { dasmEl.textContent=''; lastDasmKey=''; return; }
             const mem=lastCellView0.data;
             const pc=(mem[0xF9]<<8)|mem[0xFA];
+            // Only rebuild if PC or expansion state changed
+            const key = pc + '/' + (dasmExpanded ? 'x' : '');
+            if (key === lastDasmKey) return;
+            lastDasmKey = key;
             const nLines = dasmExpanded ? 32 : 8;
             const lines=disassemble(mem,pc,nLines,0x3FF);
             let html='';
@@ -438,11 +442,10 @@
                 else html+=escHtml(lines[i].text)+'\n';
             }
             dasmEl.innerHTML=html;
-            // Append clickable toggle link (as DOM, not innerHTML, to preserve handler)
             const link = document.createElement('a');
             link.style.cssText = 'color:#080;cursor:pointer';
             link.textContent = dasmExpanded ? 'Less' : 'More...';
-            link.onclick = () => { dasmExpanded = !dasmExpanded; renderDisasm(); };
+            link.onclick = () => { dasmExpanded = !dasmExpanded; lastDasmKey=''; renderDisasm(); };
             dasmEl.appendChild(link);
         }
         function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}

@@ -21,17 +21,13 @@
   STA $04F9           ; PC high = 0
   STA $04FA           ; PC low = 0 (points at JAM)
 
-; --- Copy bytes 1-255 (skip byte 0 — JAM stays) ---
-  LDX #$01
+; --- Copy bytes 0-30 (@done), storing byte zero last
+  LDX #30
 @copy:
   LDA $00,X
   STA $0400,X
-  INX
-  BNE @copy
-
-; --- Write byte 0 last (replaces JAM with our entry instruction) ---
-  LDA $00
-  STA $0400
+  DEX
+  BPL @copy
 
 @done:
   BRK
