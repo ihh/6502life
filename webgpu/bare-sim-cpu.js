@@ -213,13 +213,19 @@ export class BareSimCPU {
         const tiling = rv & 1, offI = (rv >> 1) & 1, offJ = (rv >> 2) & 1;
         const mem = new Uint8Array(2048);
 
+        // Build pairs + budgets in one pass (must match GPU PRNG consumption order:
+        // role, budget_r, budget_real for each pair, interleaved)
         const pairs = [];
+        const budgets = [];
         if (tiling === 0) {
             for (let k = 0; k < B / 2; k++)
                 for (let j = 0; j < B; j++) {
                     const role = rng.int() & 1;
                     const i0 = (2*k + offI) % B, i1 = (2*k+1 + offI) % B, jj = (j + offJ) % B;
                     pairs.push(role === 0 ? [i0,jj,i1,jj] : [i1,jj,i0,jj]);
+                    let r = rng.int(), hl = 0;
+                    while (hl < 32 && (r & 1)) { r >>= 1; hl++; }
+                    budgets.push(Math.max(1, Math.ceil(16 * 177 * (hl + rng.real()))));
                 }
         } else {
             for (let i = 0; i < B; i++)
@@ -227,6 +233,9 @@ export class BareSimCPU {
                     const role = rng.int() & 1;
                     const ii = (i + offI) % B, j0 = (2*k + offJ) % B, j1 = (2*k+1 + offJ) % B;
                     pairs.push(role === 0 ? [ii,j0,ii,j1] : [ii,j1,ii,j0]);
+                    let r = rng.int(), hl = 0;
+                    while (hl < 32 && (r & 1)) { r >>= 1; hl++; }
+                    budgets.push(Math.max(1, Math.ceil(16 * 177 * (hl + rng.real()))));
                 }
         }
 
@@ -234,14 +243,12 @@ export class BareSimCPU {
         const writeLog = new Uint16Array(2048);
         const fetchLog = new Uint16Array(2048);
 
-        for (const [ci, cj, ni, nj] of pairs) {
+        for (let pi = 0; pi < pairs.length; pi++) {
+            const [ci, cj, ni, nj] = pairs[pi];
+            const budget = budgets[pi];
             const cb = (ci * B + cj) * M, nb = (ni * B + nj) * M;
             mem.set(this.storage.subarray(cb, cb + M), 0);
             mem.set(this.storage.subarray(nb, nb + M), M);
-
-            let r = rng.int(), hl = 0;
-            while (hl < 32 && (r & 1)) { r >>= 1; hl++; }
-            const budget = Math.max(1, Math.ceil(16 * 177 * (hl + rng.real())));
 
             writeLog.fill(0);
             fetchLog.fill(0);
