@@ -1,0 +1,256 @@
+\documentclass[10pt,landscape]{article}
+\usepackage[landscape,margin=0.5in]{geometry}
+\usepackage{multicol}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{colortbl}
+\usepackage{tikz}
+\usepackage{fancyhdr}
+
+\definecolor{rom}{HTML}{224488}
+\definecolor{zp}{HTML}{448822}
+\definecolor{dim}{HTML}{888888}
+
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{3pt}
+\newcommand{\hex}[1]{\texttt{\$#1}}
+\newcommand{\sect}[1]{\vspace{4pt}{\large\bfseries\color{rom}#1}\vspace{2pt}\hrule\vspace{3pt}}
+\newcommand{\code}[1]{\texttt{\small #1}}
+
+\begin{document}
+\begin{multicols}{3}
+
+\begin{center}
+{\LARGE\bfseries 6502life ROM Cheat Sheet}\\[2pt]
+{\small Geometry tables at \hex{E000}--\hex{EE3F}}
+\end{center}
+
+% ---- Cell Index Grid ----
+\sect{Neighborhood Cell Indices}
+
+49 cells in spiral order. Cell $n$ at address $n \times 1024$.
+
+\smallskip
+{\small\centering
+\begin{tabular}{r|ccccccc}
+      & \multicolumn{7}{c}{$x$} \\
+ $y$  & $-3$ & $-2$ & $-1$ & 0 & $+1$ & $+2$ & $+3$ \\ \midrule
+ $+3$ & 48 & 44 & 36 & 25 & 29 & 37 & 45 \\
+ $+2$ & 43 & 24 & 20 &  9 & 13 & 21 & 38 \\
+ $+1$ & 35 & 19 &  8 &  \cellcolor{zp!20}\textbf{1} &  \cellcolor{zp!20}\textbf{5} & 14 & 30 \\
+   0  & 28 & 12 &  \cellcolor{zp!20}\textbf{4} &  \cellcolor{rom!20}\textbf{0} &  \cellcolor{zp!20}\textbf{2} & 10 & 26 \\
+ $-1$ & 34 & 18 &  7 &  \cellcolor{zp!20}\textbf{3} &  \cellcolor{zp!20}\textbf{6} & 15 & 31 \\
+ $-2$ & 42 & 23 & 17 & 11 & 16 & 22 & 39 \\
+ $-3$ & 47 & 41 & 33 & 27 & 32 & 40 & 46 \\
+\end{tabular}
+}
+
+\smallskip
+{\footnotesize
+\textbf{0}=self,
+\textbf{1}=N$(0,\!+\!1)$,
+\textbf{2}=E$(+\!1,\!0)$,
+\textbf{3}=S$(0,\!-\!1)$,
+\textbf{4}=W$(-\!1,\!0)$\\
+\textbf{5}=NE, \textbf{6}=SE, \textbf{7}=SW, \textbf{8}=NW,
+\textbf{9--12}=N$^2$E$^2$S$^2$W$^2$
+}
+
+% ---- Cell address ----
+\sect{Cell Base Address}
+
+\code{base = cell\_index * \$0400}\\
+High byte = \code{cell\_index * 4} \quad (low byte always \hex{00})
+
+\smallskip
+{\small
+\begin{tabular}{lll}
+Cell 0 (self) & \hex{0000} & Cell 5 (NE) \hex{1400} \\
+Cell 1 (N)    & \hex{0400} & Cell 6 (SE) \hex{1800} \\
+Cell 2 (E)    & \hex{0800} & Cell 7 (SW) \hex{1C00} \\
+Cell 3 (S)    & \hex{0C00} & Cell 8 (NW) \hex{2000} \\
+Cell 4 (W)    & \hex{1000} & Cell 9 (N$^2$) \hex{2400} \\
+\end{tabular}
+}
+
+\smallskip
+{\footnotesize\textbf{At runtime:}
+\code{ASL; ASL} to get high byte from cell index.\\
+Store in ZP pointer, use \code{LDA (\$ptr),Y} for indirect access.}
+
+% ---- ROM tables ----
+\sect{ROM Table Map}
+
+Each row = 64 bytes. \code{row\_addr = \$E000 + row * 64}.\\
+Index by cell index (0--48). Out-of-range returns \hex{FF}.
+
+\smallskip
+{\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+Address & Row & Operation \\ \midrule
+\hex{E000}+$64j$ & 0--48 & Translate by cell $j$ \\
+\hex{EC40} & 49 & Rotate 90\textdegree{} CW \\
+\hex{EC80} & 50 & Rotate 180\textdegree \\
+\hex{ECC0} & 51 & Rotate 270\textdegree{} CW \\
+\hex{ED00} & 52 & Reflect X (flip $y$) \\
+\hex{ED40} & 53 & Reflect Y (flip $x$) \\
+\hex{ED80} & 54 & $x$-coord $+\,3$ \\
+\hex{EDC0} & 55 & $y$-coord $+\,3$ \\
+\hex{EE00} & 56 & $(x,y) \to$ cell index \\
+\bottomrule
+\end{tabular}
+}
+
+% ---- Translation ----
+\sect{Translation (Vector Addition)}
+
+\code{translate[j][i]} = cell at $\vec{v}_i + \vec{v}_j$
+
+\smallskip
+{\footnotesize
+\textbf{Example:} cell 1's east neighbor = cell at $(0,+1)+(+1,0)$:}
+
+\code{LDX \#2; LDA \$E040,X} $\to$ \code{A=5} (NE)
+
+\smallskip
+{\footnotesize
+\textbf{Use:} find neighbor-of-neighbor, compose directions,\\
+check reachability (result $\neq$ \hex{FF} means in range).}
+
+% ---- Rotation ----
+\sect{Rotation \& Reflection}
+
+\begin{tabular}{@{}lll@{}}
+\code{LDA \$EC40,X} & Rot 90 CW  & N$\to$E$\to$S$\to$W \\
+\code{LDA \$EC80,X} & Rot 180    & N$\to$S, E$\to$W \\
+\code{LDA \$ECC0,X} & Rot 270 CW & N$\to$W$\to$S$\to$E \\
+\code{LDA \$ED00,X} & Reflect X  & N$\leftrightarrow$S \\
+\code{LDA \$ED40,X} & Reflect Y  & E$\leftrightarrow$W \\
+\end{tabular}
+
+\smallskip
+{\footnotesize\textbf{Iterate cardinals:}}
+
+\code{LDX \#1 / @loop: ... LDA \$EC40,X / TAX / CPX \#1 / BNE @loop}
+
+% ---- Coordinates ----
+\sect{Coordinate Tables}
+
+\code{LDX \#\textit{cell}; LDA \$ED80,X} $\to$ $x + 3$ \quad(range 0--6)\\
+\code{LDX \#\textit{cell}; LDA \$EDC0,X} $\to$ $y + 3$ \quad(range 0--6)
+
+\smallskip
+Origin (cell 0) = coordinate $(3,3)$.
+
+\smallskip
+{\footnotesize\textbf{Reverse:} \hex{EE00}\code{+}$(x+3)$\code{+}$(y+3)*8$ $\to$ cell index.}
+
+\code{LDA \$EE14} $\to$ 6 \quad{\footnotesize (offset $(+1,-1)$: $x$\code{=4}, $y$\code{=2}, addr \hex{EE00}+4+16)}
+
+% ---- Oriented Registers ----
+\sect{Oriented Registers (\$F0--\$F8)}
+
+Top 6 bits = cell index, auto-rotated by memory mapper.\\
+Bottom 2 bits = user data (preserved across rotations).
+
+\code{value = (cell\_index << 2) | flags}
+
+\smallskip
+{\footnotesize
+Write a direction to \hex{F0}; after interrupt + re-orientation,\\
+\hex{F0} still points to the \emph{same relative neighbor}.\\
+No compass needed for rotation-invariant programs.
+
+\smallskip
+\textbf{Note:} \hex{F9} (PCHI) is also auto-rotated but is\\
+reserved for the saved program counter high byte.}
+
+% ---- Compass ----
+\sect{Compass (\$FA)}
+
+Requires \code{hasCompass=true}.
+\hex{FA}\code{ = orientation << 2}.
+
+\smallskip
+\begin{tabular}{@{}cccc@{}}
+\hex{00} = 0\textdegree &
+\hex{04} = 90\textdegree &
+\hex{08} = 180\textdegree &
+\hex{0C} = 270\textdegree \\
+\end{tabular}
+
+\smallskip
+To access absolute direction $d$ (S=1,E=2,N=3,W=4):\\
+\code{local = ((d-1-orient+4) \% 4) + 1}
+
+\smallskip
+{\footnotesize\textbf{Lookup table} (16 bytes, indexed by \hex{FA}\code{+}$(d-1)$):}
+
+{\ttfamily\footnotesize
+\begin{tabular}{l@{\,}l}
+orient 0: & 1 2 3 4 \\
+orient 1: & 4 1 2 3 \\
+orient 2: & 3 4 1 2 \\
+orient 3: & 2 3 4 1 \\
+\end{tabular}
+}
+
+\code{LDX \$FA; LDA tbl+2,X} $\to$ local index for abs.\ North
+
+% ---- Zero Page Conventions ----
+\sect{Zero Page Layout (cell 0)}
+
+{\small
+\begin{tabular}{@{}ll@{}}
+\hex{00}--\hex{9F}  & Code / scratch \\
+\hex{A0}            & Key input buffer \\
+\hex{A1}            & Cell unique ID \\
+\hex{A5}            & Type tag \\
+\hex{A6}            & State length \\
+\hex{A8}--\hex{B7}  & State string (16 chars) \\
+\hex{F0}--\hex{F8}  & Oriented registers \\
+\hex{F9}            & Saved PC high (oriented) \\
+\hex{FA}            & Compass / saved PC low \\
+\hex{FB}            & Saved P register \\
+\hex{FC}--\hex{FF}  & RNG (refreshed each interrupt) \\
+\end{tabular}
+}
+
+% ---- Indirect pattern ----
+\sect{Runtime Cell Access Pattern}
+
+{\footnotesize
+When the target cell index is computed at runtime (e.g.\ from\\
+compass resolution), use indirect addressing:}
+
+\begin{verbatim}
+  ASL             ; cell_index * 2
+  ASL             ; * 4 = addr high byte
+  STA $02         ; store high byte
+  LDA #$00
+  STA $01         ; low byte = 0
+  LDY #$A5        ; TYPE_TAG_OFFSET
+  LDA ($01),Y     ; read type tag
+\end{verbatim}
+
+% ---- Quick Reference ----
+\sect{BRK Operations}
+
+{\small
+\begin{tabular}{@{}lll@{}}
+\code{BRK \$00}    & Reset  & PC $\to$ 0, yield \\
+\code{BRK \$01--30}& Swap   & cell 0 $\leftrightarrow$ cell $b$ \\
+\code{BRK \$31--60}& Copy   & cell 0 $\to$ cell $(b{-}48)$ \\
+\end{tabular}
+}
+
+\smallskip
+{\footnotesize
+Swap is $O(1)$ ($\sim$49 cyc). Copy is $O(M)$ ($\sim$6000 cyc).\\
+Fails silently if remaining cycles $<$ cost.}
+
+\end{multicols}
+\end{document}

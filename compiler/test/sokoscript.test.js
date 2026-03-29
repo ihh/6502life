@@ -156,22 +156,22 @@ describe('address helpers', () => {
     });
 
     it('resolves relative directions', () => {
-        expect(resolveDirection({ op: 'reldir', dir: 'F' })).toBe(1);
-        expect(resolveDirection({ op: 'reldir', dir: 'R' })).toBe(2);
-        expect(resolveDirection({ op: 'reldir', dir: 'B' })).toBe(3);
-        expect(resolveDirection({ op: 'reldir', dir: 'L' })).toBe(4);
+        expect(resolveDirection({ op: 'reldir', dir: 'F' })).toEqual({ idx: 1, abs: false });
+        expect(resolveDirection({ op: 'reldir', dir: 'R' })).toEqual({ idx: 2, abs: false });
+        expect(resolveDirection({ op: 'reldir', dir: 'B' })).toEqual({ idx: 3, abs: false });
+        expect(resolveDirection({ op: 'reldir', dir: 'L' })).toEqual({ idx: 4, abs: false });
     });
 
     it('resolves absolute directions', () => {
-        expect(resolveDirection({ op: 'absdir', dir: 'N' })).toBe(3);
-        expect(resolveDirection({ op: 'absdir', dir: 'E' })).toBe(2);
-        expect(resolveDirection({ op: 'absdir', dir: 'S' })).toBe(1);
-        expect(resolveDirection({ op: 'absdir', dir: 'W' })).toBe(4);
+        expect(resolveDirection({ op: 'absdir', dir: 'N' })).toEqual({ idx: 3, abs: true });
+        expect(resolveDirection({ op: 'absdir', dir: 'E' })).toEqual({ idx: 2, abs: true });
+        expect(resolveDirection({ op: 'absdir', dir: 'S' })).toEqual({ idx: 1, abs: true });
+        expect(resolveDirection({ op: 'absdir', dir: 'W' })).toEqual({ idx: 4, abs: true });
     });
 
     it('defaults to forward when no address given', () => {
-        expect(resolveDirection(null)).toBe(1);
-        expect(resolveDirection(undefined)).toBe(1);
+        expect(resolveDirection(null)).toEqual({ idx: 1, abs: false });
+        expect(resolveDirection(undefined)).toEqual({ idx: 1, abs: false });
     });
 });
 
