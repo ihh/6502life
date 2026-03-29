@@ -47,7 +47,7 @@
         .bottom {
             grid-row: 2; grid-column: 1 / -1;
             display: grid;
-            grid-template-columns: 1fr auto auto;
+            grid-template-columns: 1fr auto auto auto;
             gap: 6px;
             align-items: start;
         }
@@ -68,6 +68,17 @@
             background: #030; color: #0f0; border: 1px solid #0f0;
             cursor: pointer; width: 100%;
         }
+        #specimens { display: flex; flex-direction: column; gap: 2px; }
+        .specimen {
+            font-family: monospace; font-size: 10px; padding: 2px 4px;
+            background: #020; color: #0a0; border: 1px solid #040;
+            cursor: pointer; display: flex; justify-content: space-between;
+            align-items: center; gap: 4px;
+        }
+        .specimen:hover { background: #030; border-color: #0f0; }
+        .specimen .spec-x { color: #600; cursor: pointer; padding: 0 2px; }
+        .specimen .spec-x:hover { color: #f00; }
+
         #log { white-space: pre; font-size: 11px; line-height: 1.2;
                max-height: 60px; overflow-y: auto; margin-top: 8px; }
     </style>
@@ -85,6 +96,7 @@
             <canvas id="cv0" width="64" height="64"></canvas>
             <div id="cellinfo"></div>
             <canvas id="cv1" width="64" height="64"></canvas>
+            <div id="specimens"></div>
         </div>
         <div class="bottom">
             <pre id="disasm"></pre>
@@ -106,6 +118,17 @@
             <div class="ctrl-col">
                 <button id="soup">Soup</button>
                 <button id="rep">Rep</button>
+                <button id="capture">Capture</button>
+            </div>
+            <div class="ctrl-col">
+                <select id="noise">
+                    <option value="0" selected>noise:0</option>
+                    <option value="0.00006">1/16K</option>
+                    <option value="0.00012">1/8K</option>
+                    <option value="0.0005">1/2K</option>
+                    <option value="0.001">1/1K</option>
+                    <option value="0.004">1/256</option>
+                </select>
             </div>
         </div>
     </div>
@@ -140,6 +163,98 @@
 
         // --- Replicator program (LDA zp,X; STA abs,X; INX; BCC) ---
         const REP_CODE = [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8];
+
+        // --- Specimens ---
+        const MAX_SPECIMENS = 8;
+        const specimens = []; // { data: Uint8Array(1024), char, time, copies }
+
+        function captureSpecimen() {
+            if (!lastCellView0 || !lastCensus) return;
+            if (specimens.length >= MAX_SPECIMENS) {
+                print('Specimen list full (max ' + MAX_SPECIMENS + ').');
+                return;
+            }
+            const data = new Uint8Array(lastCellView0.data.slice(0, 1024));
+            // Compute hash for copy count
+            let h = 5381;
+            for (let k = 0; k < 0xF0; k++) h = ((h * 33) ^ data[k]) >>> 0;
+            for (let k = 0x200; k < 0x400; k++) h = ((h * 33) ^ data[k]) >>> 0;
+            const ch = String.fromCharCode(33 + (h % 94));
+            // Count copies: cells with same char in census
+            const c = lastCensus;
+            let copies = 0;
+            for (let k = 0; k < c.cellChars.length; k++)
+                if (c.cellChars[k] === ch.charCodeAt(0)) copies++;
+            const now = new Date();
+            const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            specimens.push({ data, char: ch, time, copies });
+            renderSpecimens();
+        }
+
+        function injectSpecimen(idx) {
+            const spec = specimens[idx];
+            if (!spec) return;
+            if (gpuMode && gpuSim) {
+                gpuSim.writeCell(inspectI, inspectJ, 0, spec.data);
+            } else if (worker) {
+                workerSend({type:'writeCell', i: inspectI, j: inspectJ, offset: 0,
+                            data: Array.from(spec.data)});
+            }
+            requestCellViews();
+        }
+
+        function removeSpecimen(idx) {
+            specimens.splice(idx, 1);
+            renderSpecimens();
+        }
+
+        function renderSpecimens() {
+            const el = $('specimens');
+            el.innerHTML = '';
+            specimens.forEach((s, i) => {
+                const div = document.createElement('div');
+                div.className = 'specimen';
+                const label = document.createElement('span');
+                label.textContent = s.char + ' ' + s.time + ' x' + s.copies;
+                label.onclick = () => injectSpecimen(i);
+                const x = document.createElement('span');
+                x.className = 'spec-x';
+                x.textContent = 'X';
+                x.onclick = (e) => { e.stopPropagation(); removeSpecimen(i); };
+                div.appendChild(label);
+                div.appendChild(x);
+                el.appendChild(div);
+            });
+        }
+
+        // --- Cosmic ray noise: random bit flips per pass ---
+        function getNoiseRate() { return parseFloat($('noise').value) || 0; }
+        const TOTAL_BITS = B * B * 1024 * 8;
+
+        function applyCosmicRays(sim) {
+            const p = getNoiseRate();
+            if (p <= 0) return;
+            const rng = sim.rng;
+            // Expected flips = p * TOTAL_BITS. Poisson sample using board PRNG.
+            const lambda = p * TOTAL_BITS;
+            let nFlips;
+            if (lambda < 30) {
+                let L = Math.exp(-lambda), k = 0, pr = 1;
+                do { k++; pr *= rng.real(); } while (pr > L);
+                nFlips = k - 1;
+            } else {
+                // Box-Muller with seeded PRNG
+                const u1 = rng.real() || 1e-10, u2 = rng.real();
+                const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+                nFlips = Math.max(0, Math.round(lambda + Math.sqrt(lambda) * z));
+            }
+            const totalBytes = B * B * 1024;
+            for (let i = 0; i < nFlips; i++) {
+                const byteIdx = rng.below(totalBytes);
+                const bitIdx = rng.below(8);
+                sim.storage[byteIdx] ^= (1 << bitIdx);
+            }
+        }
 
         function updateNeighbor() {
             inspectNI=(inspectI+(nbrDir==='e'?1:nbrDir==='w'?-1:0)+B)%B;
@@ -176,7 +291,7 @@
             let rateStr = formatRate(cps);
             if (running && ratio < 0.85) {
                 rateStr += ' <' + formatRate(target);
-                statsEl.style.color = '#f88';
+                statsEl.style.color = '#ccc';
             } else {
                 statsEl.style.color = '';
             }
@@ -257,13 +372,16 @@
             if (running && gpuMode && gpuSim) {
                 gpuPassDebt += passesPerTick();
                 const t0 = performance.now();
+                let didPass = false;
                 while (gpuPassDebt >= 1 && performance.now() - t0 < 10) {
                     await gpuSim.runPass();
                     await gpuSim.runPass();
                     gpuPassDebt--;
+                    didPass = true;
                 }
-                // Cap debt so we don't try to "catch up" unboundedly
                 if (gpuPassDebt > 3) gpuPassDebt = 3;
+                // Cosmic rays: CPU-only (GPU storage not directly accessible)
+                if (didPass && gpuSim.storage && gpuSim.rng) applyCosmicRays(gpuSim);
                 lastCensus = await gpuSim.census();
                 totalQuanta = gpuSim.totalQuanta;
             }
@@ -371,6 +489,7 @@
             fpsT0 = performance.now(); fpsFrames = 0;
             gpuPassDebt = 0;
             if (!gpuMode) {
+                workerSend({type:'noise', rate: getNoiseRate()});
                 workerSend({type:'start', speed: passesPerTick()});
             }
         }
@@ -452,6 +571,8 @@
         }
 
         $('speed').onchange=()=>{if(!gpuMode&&running)workerSend({type:'speed',speed:passesPerTick()});};
+        $('noise').onchange=()=>{if(!gpuMode&&worker)workerSend({type:'noise',rate:getNoiseRate()});};
+        $('capture').onclick = () => captureSpecimen();
 
         function switchToGpu() {
             gpuMode = true;

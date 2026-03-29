@@ -8,6 +8,28 @@ let sim = null;
 let running = false;
 let passesPerTick = 1;
 let passQueue = 0;
+let noiseRate = 0;
+
+function applyCosmicRays() {
+    if (noiseRate <= 0 || !sim) return;
+    const rng = sim.rng;
+    const totalBytes = sim.B * sim.B * sim.M;
+    const totalBits = totalBytes * 8;
+    const lambda = noiseRate * totalBits;
+    let nFlips;
+    if (lambda < 30) {
+        let L = Math.exp(-lambda), k = 0, p = 1;
+        do { k++; p *= rng.real(); } while (p > L);
+        nFlips = k - 1;
+    } else {
+        const u1 = rng.real() || 1e-10, u2 = rng.real();
+        const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+        nFlips = Math.max(0, Math.round(lambda + Math.sqrt(lambda) * z));
+    }
+    for (let i = 0; i < nFlips; i++) {
+        sim.storage[rng.below(totalBytes)] ^= (1 << rng.below(8));
+    }
+}
 
 async function init(B) {
     sim = await BareSimCPU.create(B);
@@ -24,6 +46,9 @@ async function runLoop() {
             await sim.runPass();
             await sim.runPass();
         }
+
+        // Apply cosmic rays after passes
+        if (n > 0) applyCosmicRays();
 
         // Send census
         const c = await sim.census();
@@ -60,6 +85,9 @@ onmessage = async (e) => {
         case 'speed':
             passesPerTick = msg.speed || 1;
             passQueue = 0;
+            break;
+        case 'noise':
+            noiseRate = msg.rate || 0;
             break;
         case 'traceCell':
             if (sim) sim._traceCell = msg.i >= 0 ? [msg.i, msg.j] : null;
