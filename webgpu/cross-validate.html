@@ -371,9 +371,32 @@ async function main() {
     await diagnosePassByPass('soup-pbp', 8, 1000, 10, (sim) => plantSoup(sim, 7000));
     print('', 'info');
 
-    // Test at B=32 (production size) first
-    print('=== B=32 replicator (5 passes) ===', 'info');
-    await diagnosePassByPass('B32-rep', 32, 42, 5, plantReplicator);
+    // Test at B=32 (production size)
+    print('=== B=32 replicator (5 passes, parity) ===', 'info');
+    await diagnosePassByPass('B32-rep-5', 32, 42, 5, plantReplicator);
+    print('', 'info');
+
+    print('=== B=32 replicator (50 passes, parity) ===', 'info');
+    await diagnosePassByPass('B32-rep-50', 32, 42, 50, plantReplicator);
+    print('', 'info');
+
+    // Verify replicator fills the board at B=32
+    print('=== B=32 replicator spread test (200 passes) ===', 'info');
+    {
+        const tB = 32, seed = 42;
+        const cpu = await BareSimCPU.create(tB, { seed });
+        plantReplicator(cpu);
+        for (let p = 0; p < 400; p++) await cpu.runPass(); // 200 full rounds
+        const c = await cpu.census();
+        const pct = Math.round(100 * c.functional / c.total);
+        print(`  ${c.functional}/${c.total} alive (${pct}%)`, pct > 50 ? 'pass' : 'fail');
+        if (pct <= 50) print(`  Replicator failed to colonize >50% after 200 rounds`, 'fail');
+    }
+    print('', 'info');
+
+    // B=32 soup parity
+    print('=== B=32 soup (10 passes, parity) ===', 'info');
+    await diagnosePassByPass('B32-soup', 32, 1000, 10, (sim) => plantSoup(sim, 7000));
     print('', 'info');
 
     const B = 8; // small board for detailed tests
