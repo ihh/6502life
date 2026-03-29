@@ -44,8 +44,12 @@
         #cv0 { border: 1px solid #006; }
         #cv1 { border: 1px solid #600; }
 
-        .bottom-left {
-            grid-row: 2; grid-column: 1;
+        .bottom {
+            grid-row: 2; grid-column: 1 / -1;
+            display: grid;
+            grid-template-columns: 1fr auto auto;
+            gap: 6px;
+            align-items: start;
         }
         #disasm {
             font-size: 10px; line-height: 1.3; color: #0a0;
@@ -54,10 +58,10 @@
         }
         .dasm-cur { color: #fff; background: #030; }
 
-        .bottom-right {
-            grid-row: 2; grid-column: 2;
+        .ctrl-col {
             display: flex; flex-direction: column;
             gap: 4px;
+            min-width: 80px;
         }
         button, select {
             font-family: monospace; font-size: 13px; padding: 5px 8px;
@@ -82,22 +86,27 @@
             <div id="cellinfo"></div>
             <canvas id="cv1" width="64" height="64"></canvas>
         </div>
-        <div class="bottom-left">
+        <div class="bottom">
             <pre id="disasm"></pre>
-        </div>
-        <div class="bottom-right">
-            <button id="toggle">Start</button>
-            <select id="speed">
-                <option value="0.05">crawl</option>
-                <option value="0.1">very slow</option>
-                <option value="0.25">slow</option>
-                <option value="1" selected>normal</option>
-                <option value="5">fast</option>
-                <option value="25">very fast</option>
-                <option value="100">max</option>
-            </select>
-            <button id="soup">Soup</button>
-            <button id="rep">Rep</button>
+            <div class="ctrl-col">
+                <button id="toggle">Start</button>
+                <select id="speed">
+                    <option value="50">50K</option>
+                    <option value="100">100K</option>
+                    <option value="200">200K</option>
+                    <option value="300" selected>300K</option>
+                    <option value="400">400K</option>
+                    <option value="500">500K</option>
+                </select>
+                <select id="engine">
+                    <option value="gpu">GPU</option>
+                    <option value="cpu">CPU</option>
+                </select>
+            </div>
+            <div class="ctrl-col">
+                <button id="soup">Soup</button>
+                <button id="rep">Rep</button>
+            </div>
         </div>
     </div>
 
@@ -112,8 +121,13 @@
         const ctx0 = $('cv0').getContext('2d'), ctx1 = $('cv1').getContext('2d');
         function print(msg) { logEl.textContent += msg + '\n'; }
 
-        let running=false, gpuMode=false, gpuSim=null, worker=null;
+        let running=false, gpuMode=false, gpuAvailable=false, gpuSim=null, worker=null;
         const B=32, MEAN_CYC=4096, CHAR_W=8, CHAR_H=12;
+
+        // Target speed in cycles/cell/sec from dropdown (value is in K)
+        function targetCycPerSec() { return (parseFloat($('speed').value) || 300) * 1000; }
+        // Passes per tick at ~60fps. Each pass = 1 quantum per cell = MEAN_CYC cycles.
+        function passesPerTick() { return targetCycPerSec() / (MEAN_CYC * 60); }
         let inspectI=Math.floor(B/2), inspectJ=Math.floor(B/2);
         let inspectNI=inspectI, inspectNJ=inspectJ-1; // S neighbor by default
         let lastCensus=null, lastCellView0=null, lastCellView1=null;
@@ -322,14 +336,13 @@
         }
 
         function startSim() {
-            const speed = parseFloat($('speed').value) || 1;
             lastRateTime = performance.now(); lastQuanta = totalQuanta; rateEMA = 0;
             fpsT0 = performance.now(); fpsFrames = 0;
             if (gpuMode) {
                 gpuPassQueue = 0;
-                gpuSimLoop(); // fire-and-forget async loop
+                gpuSimLoop();
             } else {
-                workerSend({type:'start', speed});
+                workerSend({type:'start', speed: passesPerTick()});
             }
         }
 
@@ -337,16 +350,16 @@
         let gpuPassQueue=0;
         async function gpuSimLoop() {
             while (running && gpuMode && gpuSim) {
-                const speed = parseFloat($('speed').value) || 1;
+                const ppt = passesPerTick();
                 const t0 = performance.now();
-                gpuPassQueue += speed;
+                gpuPassQueue += ppt;
                 // Run passes within a time budget per iteration
                 while (gpuPassQueue >= 1 && performance.now() - t0 < 12) {
                     await gpuSim.runPass();
                     await gpuSim.runPass();
                     gpuPassQueue--;
                 }
-                gpuPassQueue = Math.min(gpuPassQueue, speed);
+                gpuPassQueue = Math.min(gpuPassQueue, ppt);
                 lastCensus = await gpuSim.census();
                 totalQuanta = gpuSim.totalQuanta;
                 // Yield to let render loop run
@@ -370,12 +383,14 @@
             worker.onmessage=(e)=>{
                 const msg=e.data;
                 if(msg.type==='ready'){
-                    workerSend({type:'writeCell',i:0,j:0,offset:0,data:[...REP_CODE]});
-                    workerSend({type:'writeCell',i:0,j:0,offset:0xF9,data:[0x00,0x00]});
-                    workerSend({type:'writeCell',i:0,j:0,offset:0xFF,data:[0xFF]});
-                    workerSend({type:'traceCell',i:inspectI,j:inspectJ});
-                    workerSend({type:'census'});
-                    if(running) startSim();
+                    if (!gpuMode) {
+                        workerSend({type:'writeCell',i:0,j:0,offset:0,data:[...REP_CODE]});
+                        workerSend({type:'writeCell',i:0,j:0,offset:0xF9,data:[0x00,0x00]});
+                        workerSend({type:'writeCell',i:0,j:0,offset:0xFF,data:[0xFF]});
+                        workerSend({type:'traceCell',i:inspectI,j:inspectJ});
+                        workerSend({type:'census'});
+                        if(running) startSim();
+                    }
                 } else if(msg.type==='census'){
                     lastCensus=msg.data; totalQuanta=msg.totalQuanta;
                 } else if(msg.type==='cellView'){
@@ -426,23 +441,60 @@
             gridCanvas.onclick = null; // handled by mousedown/mouseup
         }
 
-        $('speed').onchange=()=>{if(!gpuMode&&running)workerSend({type:'speed',speed:parseFloat($('speed').value)||1});};
+        $('speed').onchange=()=>{if(!gpuMode&&running)workerSend({type:'speed',speed:passesPerTick()});};
+
+        function switchToGpu() {
+            gpuMode = true;
+            modeEl.textContent = '[GPU]';
+            $('engine').value = 'gpu';
+            // Init with replicator
+            gpuSim.writeCell(0,0,0,REP_CODE);
+            gpuSim.writeCell(0,0,0xF9,[0x00,0x00]);
+            gpuSim.writeCell(0,0,0xFF,[0xFF]);
+        }
+
+        function switchToCpu() {
+            gpuMode = false;
+            modeEl.textContent = '[CPU]';
+            $('engine').value = 'cpu';
+            if (!worker) { setupWorker(); }
+            workerSend({type:'init', B});
+            // Worker ready handler will inject replicator
+        }
+
+        $('engine').onchange = () => {
+            const wasRunning = running;
+            if (running) { running = false; if (!gpuMode && worker) workerSend({type:'stop'}); }
+            totalQuanta = 0; rateEMA = 0;
+            if ($('engine').value === 'gpu' && gpuAvailable) {
+                switchToGpu();
+            } else {
+                switchToCpu();
+            }
+            glowWrite.fill(0); glowFetch.fill(0);
+            updateNeighbor(); requestCellViews();
+            if (wasRunning) { running = true; startSim(); }
+        };
 
         async function main() {
             logEl.textContent='';
+            // Try GPU init
             if(navigator.gpu){try{
                 const adapter=await navigator.gpu.requestAdapter();
-                if(adapter){const{BareSim}=await import('./bare-sim.js');gpuSim=await BareSim.create(B);gpuMode=true;}
+                if(adapter){const{BareSim}=await import('./bare-sim.js');gpuSim=await BareSim.create(B);gpuAvailable=true;}
             }catch(e){print('GPU: '+e.message);}}
-            if(gpuMode){
-                modeEl.textContent='[GPU] WebGPU compute shader';
-                gpuSim.writeCell(0,0,0,REP_CODE);
-                gpuSim.writeCell(0,0,0xF9,[0x00,0x00]);gpuSim.writeCell(0,0,0xFF,[0xFF]);
+            // Always set up worker (needed for CPU mode)
+            setupWorker();
+            if(gpuAvailable){
+                switchToGpu();
                 lastCensus=await gpuSim.census();totalQuanta=gpuSim.totalQuanta;
                 if(gpuSim.getCellView){lastCellView0=gpuSim.getCellView(inspectI,inspectJ);lastCellView1=gpuSim.getCellView(inspectNI,inspectNJ);}
             } else {
-                modeEl.textContent='[CPU] Web Worker';
-                setupWorker();workerSend({type:'init',B});
+                // Disable GPU option if not available
+                $('engine').querySelector('[value=gpu]').disabled = true;
+                $('engine').value = 'cpu';
+                modeEl.textContent='[CPU]';
+                workerSend({type:'init',B});
             }
             print(B+'x'+B+' board. Click to inspect, drag to set neighbor direction.');
             initGridCanvas(); fpsT0=lastRateTime=performance.now();
