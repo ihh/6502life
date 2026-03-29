@@ -139,6 +139,45 @@ function plantSoup(sim, seed) {
     }
 }
 
+// Multi-pass diagnostic: find the first pass where divergence appears
+async function diagnosePassByPass(label, B, seed, passes, initFn) {
+    const cpu = await BareSimCPU.create(B, { seed });
+    const gpu = await initGpu(B);
+    if (!gpu) { print('No GPU', 'fail'); return; }
+    gpu.rng = new PRNG(seed);
+    if (initFn) { initFn(cpu); initFn(gpu); }
+
+    const M = 1024, totalBytes = B * B * M;
+    for (let p = 0; p < passes; p++) {
+        await cpu.runPass();
+        await cpu.runPass();
+        await gpu.runPass();
+        await gpu.runPass();
+        await gpu.census();
+
+        let diffs = 0, firstDiff = -1;
+        for (let i = 0; i < totalBytes; i++) {
+            if (cpu.storage[i] !== gpu._storageSnapshot[i]) {
+                if (firstDiff < 0) firstDiff = i;
+                diffs++;
+            }
+        }
+        if (diffs > 0) {
+            const cell = Math.floor(firstDiff / M);
+            const off = firstDiff % M;
+            print(`${label}: DIVERGED at pass ${p+1}/${passes} — ${diffs} diffs. First: cell ${cell} offset $${off.toString(16)}`, 'fail');
+            // Show registers of first divergent cell
+            const base = cell * M;
+            for (const [nm, o] of [['PChi',0xF9],['PClo',0xFA],['P',0xFB],['A',0xFC],['X',0xFD],['Y',0xFE],['S',0xFF]]) {
+                const cv = cpu.storage[base+o], gv = gpu._storageSnapshot[base+o];
+                if (cv !== gv) print(`  ${nm}: cpu=$${cv.toString(16).padStart(2,'0')} gpu=$${gv.toString(16).padStart(2,'0')}`, 'fail');
+            }
+            return;
+        }
+    }
+    print(`${label}: PASS (${passes} passes match)`, 'pass');
+}
+
 // Single-pass diagnostic: find the first pair that diverges
 async function diagnoseFirstDivergence(B, seed, initFn) {
     const cpu = await BareSimCPU.create(B, { seed });
@@ -202,9 +241,16 @@ async function diagnoseFirstDivergence(B, seed, initFn) {
 async function main() {
     print('Cross-validating GPU WGSL shader against CPU reference...\n');
 
-    // First: diagnose single-pass divergence with replicator
     print('=== Single-pass diagnosis (replicator) ===', 'info');
     await diagnoseFirstDivergence(8, 42, plantReplicator);
+    print('', 'info');
+
+    print('=== Pass-by-pass diagnosis (replicator, 20 passes) ===', 'info');
+    await diagnosePassByPass('replicator-pbp', 8, 42, 20, plantReplicator);
+    print('', 'info');
+
+    print('=== Pass-by-pass diagnosis (soup seed=1000, 10 passes) ===', 'info');
+    await diagnosePassByPass('soup-pbp', 8, 1000, 10, (sim) => plantSoup(sim, 7000));
     print('', 'info');
 
     const B = 8; // small board for fast tests
