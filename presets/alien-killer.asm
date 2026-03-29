@@ -20,8 +20,8 @@
   STA $04FA           ; PC low = 0
   STA $04F9           ; PC high = 0
 
-; --- Copy bytes 0-32, storing byte zero last ---
-  LDX #32
+; --- Copy bytes 0-31, storing byte zero last ---
+  LDX #31
 @copy:
   LDA $00,X
   STA $0400,X

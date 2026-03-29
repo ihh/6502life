@@ -11,7 +11,7 @@
   STA $04FA
   STA $04F9
 
-  LDX #32
+  LDX #31
 @copy:
   LDA $00,X
   STA $0400,X
