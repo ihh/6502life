@@ -284,6 +284,58 @@ async function main() {
     }
     print('', 'info');
 
+    // Test: exact repro of pass-4 divergence. Run 3 matching passes, then
+    // run half-passes individually and compare after each.
+    print('=== Half-pass diagnosis (replicator, around pass 4) ===', 'info');
+    {
+        const B = 8, seed = 42, M = 1024;
+        const cpu = await BareSimCPU.create(B, { seed });
+        const gpu = await initGpu(B);
+        if (gpu) {
+            gpu.rng = new PRNG(seed);
+            plantReplicator(cpu); plantReplicator(gpu);
+            // Run 3 full passes (6 runPass calls) — should match
+            for (let p = 0; p < 6; p++) { await cpu.runPass(); await gpu.runPass(); }
+            await gpu.census();
+            let ok = true;
+            for (let i = 0; i < B*B*M; i++) if (cpu.storage[i] !== gpu._storageSnapshot[i]) { ok = false; break; }
+            print(`  After 6 half-passes: ${ok ? 'MATCH' : 'DIVERGED'}`, ok ? 'pass' : 'fail');
+
+            // Now run half-pass 7 individually
+            const cpuRngPre = cpu.rng.state;
+            const gpuRngPre = gpu.rng.state;
+            print(`  PRNG before half-pass 7: cpu=${cpuRngPre} gpu=${gpuRngPre} ${cpuRngPre===gpuRngPre?'MATCH':'MISMATCH'}`, cpuRngPre===gpuRngPre?'pass':'fail');
+
+            // Show cell 0 state before this pass
+            const c0base = 0;
+            print(`  Cell0 pre: PC=$${cpu.storage[c0base+0xF9].toString(16).padStart(2,'0')}${cpu.storage[c0base+0xFA].toString(16).padStart(2,'0')} X=$${cpu.storage[c0base+0xFD].toString(16).padStart(2,'0')}`, 'info');
+
+            await cpu.runPass();
+            await gpu.runPass();
+            await gpu.census();
+            let diffs7 = 0;
+            for (let i = 0; i < B*B*M; i++) if (cpu.storage[i] !== gpu._storageSnapshot[i]) diffs7++;
+            print(`  After half-pass 7: ${diffs7} diffs`, diffs7===0?'pass':'fail');
+            if (diffs7 > 0) {
+                print(`  Cell0 cpu: PC=$${cpu.storage[0xF9].toString(16).padStart(2,'0')}${cpu.storage[0xFA].toString(16).padStart(2,'0')} X=$${cpu.storage[0xFD].toString(16).padStart(2,'0')}`, 'fail');
+                print(`  Cell0 gpu: PC=$${gpu._storageSnapshot[0xF9].toString(16).padStart(2,'0')}${gpu._storageSnapshot[0xFA].toString(16).padStart(2,'0')} X=$${gpu._storageSnapshot[0xFD].toString(16).padStart(2,'0')}`, 'fail');
+            }
+
+            // Half-pass 8
+            await cpu.runPass();
+            await gpu.runPass();
+            await gpu.census();
+            let diffs8 = 0;
+            for (let i = 0; i < B*B*M; i++) if (cpu.storage[i] !== gpu._storageSnapshot[i]) diffs8++;
+            print(`  After half-pass 8: ${diffs8} diffs`, diffs8===0?'pass':'fail');
+            if (diffs8 > 0) {
+                print(`  Cell0 cpu: PC=$${cpu.storage[0xF9].toString(16).padStart(2,'0')}${cpu.storage[0xFA].toString(16).padStart(2,'0')} X=$${cpu.storage[0xFD].toString(16).padStart(2,'0')}`, 'fail');
+                print(`  Cell0 gpu: PC=$${gpu._storageSnapshot[0xF9].toString(16).padStart(2,'0')}${gpu._storageSnapshot[0xFA].toString(16).padStart(2,'0')} X=$${gpu._storageSnapshot[0xFD].toString(16).padStart(2,'0')}`, 'fail');
+            }
+        }
+    }
+    print('', 'info');
+
     print('=== Single-pass diagnosis (replicator) ===', 'info');
     await diagnoseFirstDivergence(8, 42, plantReplicator);
     print('', 'info');
