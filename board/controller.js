@@ -269,10 +269,7 @@ class BoardController {
             hasRegisterSave: true,   // save/restore registers to $F9-$FF between quanta
             neighborhoodSize: 7,    // neighborhood dimension: 2, 3, 5, or 7
             schedulerMode: 'random', // 'random' or 'checkerboard'
-            decayRate: 0,            // random bytes zeroed per quantum (0 = off)
-            wordDecayRate: 0,        // local pairwise word-decay comparisons per quantum (0 = off)
-            pWordDecayBitNoise: 0.01, // per-bit resample probability when words match
-            pWordDecayBitNoiseZero: 0.5, // P(resampled bit = 0) for word decay
+            decayRate: 0,            // per-bit flip probability per quantum (cosmic rays, 0 = off)
             diversityBonus: false,   // neighborhood diversity affects quantum length
             similarityCopyNoise: false, // BRK copy noise scales with src/dest similarity
         }, boardParams);
@@ -401,8 +398,7 @@ class BoardController {
             for (const key of ['pBitNoise', 'pBitNoiseZero', 'hasCompass',
                                'hasAtomicWrites', 'hasLookupTables', 'hasOrientedRegisters', 'hasRNG',
                                'neighborhoodSize', 'schedulerMode', 'hasRegisterSave',
-                               'decayRate', 'wordDecayRate', 'pWordDecayBitNoise', 'pWordDecayBitNoiseZero',
-                               'diversityBonus', 'similarityCopyNoise']) {
+                               'decayRate', 'diversityBonus', 'similarityCopyNoise']) {
                 if (incoming[key] !== undefined) this.boardParams[key] = incoming[key];
             }
             // Restore brkOps: prefer brkOps if present, else synthesize from legacy flags
@@ -1591,68 +1587,29 @@ class BoardController {
                     this.execProfile[cellIdx] = ((profile ^ pc) * 16777619) >>> 0;
                 }
 
-                // ── Decay: zero random bytes in board storage ("cosmic rays") ──
+                // ── Cosmic rays: flip random bits in board storage ──
+                // decayRate = per-bit flip probability per quantum.
+                // Poisson-sampled using the board PRNG for deterministic replay.
                 if (this.boardParams.decayRate > 0) {
                     const mt = this.memory.mt;
-                    const storageSize = this.memory.storageSize;
-                    for (let d = 0; d < this.boardParams.decayRate; d++) {
-                        const addr = mt.int() % storageSize;
-                        this.memory.storage[addr] = 0;
+                    const storage = this.memory.storage;
+                    const totalBits = this.memory.storageSize * 8;
+                    const lambda = this.boardParams.decayRate * totalBits;
+                    let nFlips;
+                    if (lambda < 30) {
+                        let L = Math.exp(-lambda), k = 0, p = 1;
+                        do { k++; p *= mt.real(); } while (p > L);
+                        nFlips = k - 1;
+                    } else {
+                        const u1 = mt.real() || 1e-10, u2 = mt.real();
+                        const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+                        nFlips = Math.max(0, Math.round(lambda + Math.sqrt(lambda) * z));
                     }
-                }
-                // ── Local word decay via lookup table ──
-                // Build a 2^16 count table of all 16-bit words in the mapped
-                // address space (active cell + neighbor). For each word position
-                // where the word count K > 1, resample each bit with probability
-                // pWordDecayBitNoise * (K-1). Duplicated words decay faster —
-                // O(K) per copy. Unique words are immune.
-                // Fires with probability wordDecayRate per quantum (fractional ok).
-                if (this.boardParams.wordDecayRate > 0) {
-                    const mt = this.memory.mt;
-                    const s = this.memory.storage;
-                    const M = this.memory.M;
-                    const Nsq = this.memory.Nsquared;
-                    const eps = this.boardParams.pWordDecayBitNoise ?? 0.001;
-                    const q = this.boardParams.pWordDecayBitNoiseZero ?? 0.5;
-                    const rate = this.boardParams.wordDecayRate;
-                    const doScan = rate >= 1 ? true : (mt.real() < rate);
-                    if (doScan) {
-                        // Precompute storage bases for mapped cells
-                        const bases = [];
-                        for (let c = 0; c < Nsq; c++) {
-                            bases.push(this.memory.neighborCellStorageBase(c));
-                        }
-                        // Build word count table (2^16 entries)
-                        const wordCount = new Uint16Array(65536);
-                        const wordPositions = []; // [storageAddr, ...]
-                        for (let c = 0; c < Nsq; c++) {
-                            const base = bases[c];
-                            for (let off = 0; off < M - 1; off++) {
-                                const w = s[base + off] | (s[base + off + 1] << 8);
-                                wordCount[w]++;
-                                wordPositions.push(base + off);
-                            }
-                        }
-                        // Scan all word positions; apply noise where K > 1
-                        let posIdx = 0;
-                        for (let c = 0; c < Nsq; c++) {
-                            const base = bases[c];
-                            for (let off = 0; off < M - 1; off++) {
-                                const sa = wordPositions[posIdx++];
-                                const w = s[sa] | (s[sa + 1] << 8);
-                                const K = wordCount[w];
-                                if (K <= 1) continue;
-                                const effEps = Math.min(eps * (K - 1), 1.0);
-                                for (let bit = 0; bit < 16; bit++) {
-                                    if (mt.real() < effEps) {
-                                        const byteIdx = bit < 8 ? 0 : 1;
-                                        const bitIdx = bit & 7;
-                                        const nv = (mt.real() >= q) ? 1 : 0;
-                                        s[sa + byteIdx] = (s[sa + byteIdx] & ~(1 << bitIdx)) | (nv << bitIdx);
-                                    }
-                                }
-                            }
-                        }
+                    const storageSize = this.memory.storageSize;
+                    for (let d = 0; d < nFlips; d++) {
+                        const addr = mt.int() % storageSize;
+                        const bit = mt.int() & 7;
+                        storage[addr] ^= (1 << bit);
                     }
                 }
                 break;
