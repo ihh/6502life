@@ -84,7 +84,7 @@ fn opcLookup(opcode: u32, field: u32) -> u32 {
     return opcodeTable[opcode * 7u + field];
 }
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(32)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
     let budget = cycleBudgets[idx];

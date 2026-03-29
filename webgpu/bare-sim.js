@@ -78,7 +78,7 @@ export class BareSim {
 
         // Pad buffer sizes to full workgroup (64 threads) so out-of-range
         // threads read zeros instead of going out of bounds.
-        const WG = 64;
+        const WG = 32;
         const bufferN = Math.ceil(N / WG) * WG;
 
         // Pair indices buffer (bufferN × 2 uint32, zero-padded)
@@ -175,7 +175,7 @@ export class BareSim {
 
         // Upload pairs and budgets, padded to full workgroup size.
         // Extra entries are zero (budget=0 makes shader skip execution).
-        const WG = 64;
+        const WG = 32;
         const paddedN = Math.ceil(N / WG) * WG;
         const paddedPairs = new Uint32Array(paddedN * 2); // zero-filled
         paddedPairs.set(pairs);
@@ -200,7 +200,7 @@ export class BareSim {
         const pass = commandEncoder.beginComputePass();
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, bindGroup);
-        pass.dispatchWorkgroups(Math.ceil(N / 64)); // workgroup_size = 64
+        pass.dispatchWorkgroups(Math.ceil(N / 32)); // workgroup_size = 32
         pass.end();
         this.device.queue.submit([commandEncoder.finish()]);
         await this.device.queue.onSubmittedWorkDone();
