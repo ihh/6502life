@@ -148,6 +148,7 @@ async function diagnosePassByPass(label, B, seed, passes, initFn) {
     if (initFn) { initFn(cpu); initFn(gpu); }
 
     const M = 1024, totalBytes = B * B * M;
+    let prevCpuSnap = null;
     for (let p = 0; p < passes; p++) {
         await cpu.runPass();
         await cpu.runPass();
@@ -166,14 +167,27 @@ async function diagnosePassByPass(label, B, seed, passes, initFn) {
             const cell = Math.floor(firstDiff / M);
             const off = firstDiff % M;
             print(`${label}: DIVERGED at pass ${p+1}/${passes} — ${diffs} diffs. First: cell ${cell} offset $${off.toString(16)}`, 'fail');
-            // Show registers of first divergent cell
             const base = cell * M;
             for (const [nm, o] of [['PChi',0xF9],['PClo',0xFA],['P',0xFB],['A',0xFC],['X',0xFD],['Y',0xFE],['S',0xFF]]) {
                 const cv = cpu.storage[base+o], gv = gpu._storageSnapshot[base+o];
                 if (cv !== gv) print(`  ${nm}: cpu=$${cv.toString(16).padStart(2,'0')} gpu=$${gv.toString(16).padStart(2,'0')}`, 'fail');
             }
+            // Dump cell's pre-pass state (from previous pass's snapshot)
+            if (prevCpuSnap) {
+                let hex = '';
+                for (let i = 0; i < 32; i++) hex += prevCpuSnap[base+i].toString(16).padStart(2,'0') + ' ';
+                print(`  pre-code: ${hex}`, 'info');
+                const regs = [];
+                for (const [nm, o] of [['PC',-1],['P',0xFB],['A',0xFC],['X',0xFD],['Y',0xFE],['S',0xFF]]) {
+                    if (o < 0) regs.push(`PC=$${prevCpuSnap[base+0xF9].toString(16).padStart(2,'0')}${prevCpuSnap[base+0xFA].toString(16).padStart(2,'0')}`);
+                    else regs.push(`${nm}=$${prevCpuSnap[base+o].toString(16).padStart(2,'0')}`);
+                }
+                print(`  pre-regs: ${regs.join(' ')}`, 'info');
+            }
             return;
         }
+        // Snapshot for next iteration
+        prevCpuSnap = new Uint8Array(cpu.storage);
     }
     print(`${label}: PASS (${passes} passes match)`, 'pass');
 }
