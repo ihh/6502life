@@ -94,9 +94,9 @@
             <canvas id="grid"></canvas>
         </div>
         <div class="maps">
-            <canvas id="cv0" width="64" height="64"></canvas>
+            <canvas id="cv0" width="64" height="128"></canvas>
             <div id="cellinfo"></div>
-            <canvas id="cv1" width="64" height="64"></canvas>
+            <canvas id="cv1" width="64" height="128"></canvas>
             <div id="specimens"></div>
         </div>
         <div class="bottom">
@@ -375,7 +375,7 @@
             }
         }
 
-        const CELL_VIEW_ROWS = 16;  // first 2 pages (512 bytes); set to 32 for all 4
+        const CELL_VIEW_ROWS = 32;  // all 4 pages (1024 bytes)
         const CELL_VIEW_BITS = CELL_VIEW_ROWS * 32 * 8;  // 4096 bits per cell view
         // EMA buffers for bitmap smoothing (one per cell view)
         const bitmapEma = [new Float32Array(CELL_VIEW_BITS), new Float32Array(CELL_VIEW_BITS)];
