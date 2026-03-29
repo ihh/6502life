@@ -182,16 +182,19 @@
         function getBrushSize() { return parseInt($('brush').value) || 1; }
 
         // --- Specimens ---
-        const MAX_SPECIMENS = 8;
+        const MAX_SPECIMENS = 3;
         const specimens = []; // { data: Uint8Array(1024), char, time, copies }
         let activeSpecimen = -1; // index of highlighted specimen for auto-placement
 
+        function updateCaptureButton() {
+            const btn = $('capture');
+            btn.disabled = specimens.length >= MAX_SPECIMENS;
+            btn.style.opacity = btn.disabled ? '0.4' : '';
+        }
+
         function captureSpecimen() {
             if (!lastCellView0 || !lastCensus) return;
-            if (specimens.length >= MAX_SPECIMENS) {
-                print('Specimen list full (max ' + MAX_SPECIMENS + ').');
-                return;
-            }
+            if (specimens.length >= MAX_SPECIMENS) return;
             const data = new Uint8Array(lastCellView0.data.slice(0, 1024));
             // Compute hash for copy count
             let h = 5381;
@@ -280,6 +283,7 @@
                 div.appendChild(x);
                 el.appendChild(div);
             });
+            updateCaptureButton();
         }
 
         // --- Cosmic ray noise: random bit flips per pass ---
