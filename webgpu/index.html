@@ -431,7 +431,7 @@
             const mem=lastCellView0.data;
             const pc=(mem[0xF9]<<8)|mem[0xFA];
             // Only rebuild if PC or expansion state changed
-            const key = pc + '/' + (dasmExpanded ? 'x' : '');
+            const key = inspectI + ',' + inspectJ + '/' + pc + '/' + (dasmExpanded ? 'x' : '');
             if (key === lastDasmKey) return;
             lastDasmKey = key;
             const nLines = dasmExpanded ? 32 : 8;
