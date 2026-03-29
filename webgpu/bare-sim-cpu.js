@@ -185,7 +185,7 @@ export class BareSimCPU {
     constructor(B = 16, M = 1024, opts = {}) {
         this.B = B;
         this.M = M;
-        this.seed = opts.seed || 42;
+        this.seed = opts.seed !== undefined ? opts.seed : 42;
         this.rng = new PRNG(this.seed);
         this.storage = new Uint8Array(B * B * M);
         this.totalQuanta = 0;
