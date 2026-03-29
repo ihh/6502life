@@ -76,6 +76,7 @@
             align-items: center; gap: 4px;
         }
         .specimen:hover { background: #030; border-color: #0f0; }
+        .specimen.active { background: #041; border-color: #0f0; color: #0f0; }
         .specimen .spec-x { color: #600; cursor: pointer; padding: 0 2px; }
         .specimen .spec-x:hover { color: #f00; }
 
@@ -168,6 +169,7 @@
         // --- Specimens ---
         const MAX_SPECIMENS = 8;
         const specimens = []; // { data: Uint8Array(1024), char, time, copies }
+        let activeSpecimen = -1; // index of highlighted specimen for auto-placement
 
         function captureSpecimen() {
             if (!lastCellView0 || !lastCensus) return;
@@ -207,8 +209,14 @@
             requestCellViews();
         }
 
+        function clearActiveSpecimen() {
+            activeSpecimen = -1;
+            renderSpecimens();
+        }
+
         function removeSpecimen(idx) {
             specimens.splice(idx, 1);
+            activeSpecimen = -1;
             renderSpecimens();
         }
 
@@ -217,10 +225,26 @@
             el.innerHTML = '';
             specimens.forEach((s, i) => {
                 const div = document.createElement('div');
-                div.className = 'specimen';
+                div.className = 'specimen' + (i === activeSpecimen ? ' active' : '');
                 const label = document.createElement('span');
                 label.textContent = s.char + ' ' + s.time + ' x' + s.copies;
-                label.onclick = () => injectSpecimen(i);
+                // Single click: inject once; if a different specimen is active, switch to it
+                label.onclick = () => {
+                    if (activeSpecimen >= 0 && activeSpecimen !== i) {
+                        clearActiveSpecimen();
+                    }
+                    injectSpecimen(i);
+                };
+                // Double click: toggle auto-placement mode
+                label.ondblclick = (e) => {
+                    e.preventDefault();
+                    if (activeSpecimen === i) {
+                        clearActiveSpecimen();
+                    } else {
+                        activeSpecimen = i;
+                        renderSpecimens();
+                    }
+                };
                 const x = document.createElement('span');
                 x.className = 'spec-x';
                 x.textContent = 'X';
@@ -552,6 +576,10 @@
             if(col>=0&&col<B&&row>=0&&row<B){
                 inspectI=col;inspectJ=row;
                 updateNeighbor(); glowWrite.fill(0);glowFetch.fill(0); requestCellViews();
+                // Auto-place active specimen at new cell
+                if (activeSpecimen >= 0 && specimens[activeSpecimen]) {
+                    injectSpecimen(activeSpecimen);
+                }
             }
         }
         {
