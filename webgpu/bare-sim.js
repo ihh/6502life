@@ -38,7 +38,7 @@ export class BareSim {
         const device = await adapter.requestDevice();
 
         // Load shader
-        const shaderCode = await (await fetch('./cpu6502.wgsl')).text();
+        const shaderCode = await (await fetch('./cpu6502.wgsl?v=' + Date.now())).text();
         const shaderModule = device.createShaderModule({ code: shaderCode });
 
         // Check for compilation errors
@@ -173,9 +173,16 @@ export class BareSim {
             }
         }
 
-        // Upload pairs and budgets
-        this.device.queue.writeBuffer(this.pairBuffer, 0, pairs);
-        this.device.queue.writeBuffer(this.budgetBuffer, 0, budgets);
+        // Upload pairs and budgets, padded to full workgroup size.
+        // Extra entries are zero (budget=0 makes shader skip execution).
+        const WG = 64;
+        const paddedN = Math.ceil(N / WG) * WG;
+        const paddedPairs = new Uint32Array(paddedN * 2); // zero-filled
+        paddedPairs.set(pairs);
+        const paddedBudgets = new Uint32Array(paddedN); // zero-filled
+        paddedBudgets.set(budgets);
+        this.device.queue.writeBuffer(this.pairBuffer, 0, paddedPairs);
+        this.device.queue.writeBuffer(this.budgetBuffer, 0, paddedBudgets);
 
         // Create bind group
         const bindGroup = this.device.createBindGroup({
