@@ -126,8 +126,73 @@ function plantSoup(sim, seed) {
     }
 }
 
+// Single-pass diagnostic: find the first pair that diverges
+async function diagnoseFirstDivergence(B, seed, initFn) {
+    const cpu = await BareSimCPU.create(B, { seed });
+    const gpu = await initGpu(B);
+    if (!gpu) { print('No GPU', 'fail'); return; }
+    gpu.rng = new PRNG(seed);
+    if (initFn) { initFn(cpu); initFn(gpu); }
+
+    // Snapshot CPU storage BEFORE the pass
+    const cpuBefore = new Uint8Array(cpu.storage);
+
+    // Run 1 pass on CPU (2 runPass calls = 1 full round)
+    await cpu.runPass();
+    await cpu.runPass();
+
+    // Run 1 pass on GPU
+    await gpu.runPass();
+    await gpu.runPass();
+    await gpu.census(); // reads storage back
+
+    // Compare cell by cell
+    const M = 1024;
+    let firstDiffCell = -1;
+    for (let ci = 0; ci < B * B; ci++) {
+        const base = ci * M;
+        for (let off = 0; off < M; off++) {
+            if (cpu.storage[base + off] !== gpu._storageSnapshot[base + off]) {
+                if (firstDiffCell < 0) firstDiffCell = ci;
+                break;
+            }
+        }
+    }
+    if (firstDiffCell < 0) { print('1-pass: no divergence', 'pass'); return; }
+
+    const ci = Math.floor(firstDiffCell / B), cj = firstDiffCell % B;
+    print(`First divergent cell: (${ci},${cj}) = flat index ${firstDiffCell}`, 'fail');
+
+    // Show register diffs for this cell
+    const base = firstDiffCell * M;
+    for (const [name, off] of [['PChi',0xF9],['PClo',0xFA],['P',0xFB],['A',0xFC],['X',0xFD],['Y',0xFE],['S',0xFF]]) {
+        const cv = cpu.storage[base+off], gv = gpu._storageSnapshot[base+off];
+        const mark = cv !== gv ? ' <--' : '';
+        print(`  ${name}: cpu=$${cv.toString(16).padStart(2,'0')} gpu=$${gv.toString(16).padStart(2,'0')}${mark}`, cv !== gv ? 'fail' : 'info');
+    }
+
+    // Show first 32 bytes of code
+    print('  Code (first 32 bytes):', 'info');
+    let codeLine = '  cpu: ';
+    for (let i = 0; i < 32; i++) codeLine += cpu.storage[base+i].toString(16).padStart(2,'0') + ' ';
+    print(codeLine, 'info');
+    codeLine = '  gpu: ';
+    for (let i = 0; i < 32; i++) codeLine += gpu._storageSnapshot[base+i].toString(16).padStart(2,'0') + ' ';
+    print(codeLine, 'info');
+
+    // Show what was there BEFORE the pass
+    codeLine = '  pre: ';
+    for (let i = 0; i < 32; i++) codeLine += cpuBefore[base+i].toString(16).padStart(2,'0') + ' ';
+    print(codeLine, 'info');
+}
+
 async function main() {
     print('Cross-validating GPU WGSL shader against CPU reference...\n');
+
+    // First: diagnose single-pass divergence with replicator
+    print('=== Single-pass diagnosis (replicator) ===', 'info');
+    await diagnoseFirstDivergence(8, 42, plantReplicator);
+    print('', 'info');
 
     const B = 8; // small board for fast tests
     let passed = 0, failed = 0, skipped = 0;

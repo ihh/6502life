@@ -27,6 +27,8 @@ export class BareSim {
         this.pairBuffer = pairBuffer;
         this.budgetBuffer = budgetBuffer;
         this.totalQuanta = 0;
+        // Shadow buffer for read-modify-write in writeCell
+        this._storageSnapshot = new Uint8Array(B * B * M);
     }
 
     static async create(B = 16, M = 1024, opts = {}) {
@@ -94,16 +96,24 @@ export class BareSim {
     }
 
     writeCell(i, j, offset, data) {
-        // writeBuffer offset must be multiple of 4 on some GPUs
         const base = (i * this.B + j) * this.M + offset;
-        const alignedBase = base & ~3;  // round down to 4-byte boundary
-        const skip = base - alignedBase;
-        // Read-modify-write: read aligned chunk, patch bytes, write back
-        const len = skip + data.length;
-        const padded = new Uint8Array(Math.ceil(len / 4) * 4);
-        // We don't have the current content, so just write — initial zeros are fine
-        for (let k = 0; k < data.length; k++) padded[skip + k] = data[k];
-        this.device.queue.writeBuffer(this.storageBuffer, alignedBase, padded);
+        // Update shadow buffer (used by census/getCellView)
+        if (this._storageSnapshot) {
+            for (let k = 0; k < data.length; k++) this._storageSnapshot[base + k] = data[k];
+        }
+        // writeBuffer offset must be a multiple of 4 on some GPUs.
+        // Align and do read-modify-write using the snapshot as source of truth.
+        const alignedBase = base & ~3;
+        const alignedEnd = ((base + data.length) + 3) & ~3;
+        const alignedLen = alignedEnd - alignedBase;
+        const buf = new Uint8Array(alignedLen);
+        // Fill from snapshot (or zeros if no snapshot yet)
+        if (this._storageSnapshot) {
+            buf.set(this._storageSnapshot.subarray(alignedBase, alignedEnd));
+        }
+        // Patch in the new data
+        for (let k = 0; k < data.length; k++) buf[base - alignedBase + k] = data[k];
+        this.device.queue.writeBuffer(this.storageBuffer, alignedBase, buf);
     }
 
     async runPass() {
