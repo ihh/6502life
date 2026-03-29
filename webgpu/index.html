@@ -376,27 +376,35 @@
         }
 
         const CELL_VIEW_ROWS = 16;  // first 2 pages (512 bytes); set to 32 for all 4
-        function renderCellView(ctx, cellData, glowOff) {
+        const CELL_VIEW_BITS = CELL_VIEW_ROWS * 32 * 8;  // 4096 bits per cell view
+        // EMA buffers for bitmap smoothing (one per cell view)
+        const bitmapEma = [new Float32Array(CELL_VIEW_BITS), new Float32Array(CELL_VIEW_BITS)];
+        // Half-life in seconds; alpha = 1 - 2^(-dt/halfLife)
+        const BITMAP_EMA_HALFLIFE = 0.4;  // ~400ms ≈ 24 frames at 60fps
+
+        function renderCellView(ctx, cellData, glowOff, emaIdx) {
             if(!cellData) return;
             const W=64, H=CELL_VIEW_ROWS*4;
+            const ema = bitmapEma[emaIdx];
+            // Alpha for ~16.7ms frame at 60fps
+            const alpha = 1 - Math.pow(0.5, (1/60) / BITMAP_EMA_HALFLIFE);
             const img=ctx.createImageData(W,H); const d=img.data;
+            let bitIdx = 0;
             for(let row=0;row<CELL_VIEW_ROWS;row++) for(let col=0;col<32;col++) {
                 const byteIdx=row*32+col, val=cellData[byteIdx];
                 const wI=Math.pow(Math.min(1,glowWrite[glowOff+byteIdx]),0.3);
                 const fI=Math.pow(Math.min(1,glowFetch[glowOff+byteIdx]),0.3);
                 for(let dy=0;dy<4;dy++) for(let dx=0;dx<2;dx++) {
                     const bit=(val>>(7-(dy*2+dx)))&1;
+                    ema[bitIdx] += alpha * (bit - ema[bitIdx]);
+                    const v = ema[bitIdx];
                     const pi=((row*4+dy)*W+col*2+dx)*4;
-                    if(bit) {
-                        d[pi]  =Math.min(255,Math.floor(wI*255+20));
-                        d[pi+1]=255;
-                        d[pi+2]=Math.min(255,Math.floor(fI*255+20));
-                    } else {
-                        d[pi]  =Math.min(255,Math.floor(wI*40));
-                        d[pi+1]=Math.floor(15);
-                        d[pi+2]=Math.min(255,Math.floor(fI*40));
-                    }
+                    // Brightness from EMA value (0..1), tinted by write/fetch glow
+                    d[pi]  =Math.min(255,Math.floor(v*(wI*255+20)));
+                    d[pi+1]=Math.min(255,Math.floor(v*255));
+                    d[pi+2]=Math.min(255,Math.floor(v*(fI*255+20)));
                     d[pi+3]=255;
+                    bitIdx++;
                 }
             }
             ctx.putImageData(img,0,0);
@@ -457,8 +465,8 @@
             for(let i=0;i<2048;i++){glowWrite[i]*=GLOW_DECAY;glowFetch[i]*=GLOW_DECAY;}
             animateTrace();
             renderGrid();
-            if(lastCellView0) renderCellView(ctx0,lastCellView0.data,0);
-            if(lastCellView1) renderCellView(ctx1,lastCellView1.data,1024);
+            if(lastCellView0) renderCellView(ctx0,lastCellView0.data,0,0);
+            if(lastCellView1) renderCellView(ctx1,lastCellView1.data,1024,1);
             renderDisasm();
             requestAnimationFrame(renderLoop);
         }
@@ -602,7 +610,9 @@
             const row=B-1-Math.floor((clientY-rect.top)*gridCanvas.height/rect.height/CHAR_H);
             if(col>=0&&col<B&&row>=0&&row<B){
                 inspectI=col;inspectJ=row;
-                updateNeighbor(); glowWrite.fill(0);glowFetch.fill(0); requestCellViews();
+                updateNeighbor(); glowWrite.fill(0);glowFetch.fill(0);
+                bitmapEma[0].fill(0); bitmapEma[1].fill(0);
+                requestCellViews();
                 // Auto-place active specimen at new cell
                 if (activeSpecimen >= 0 && specimens[activeSpecimen]) {
                     injectSpecimen(activeSpecimen);
