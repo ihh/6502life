@@ -131,6 +131,7 @@
                     <option value="1e-5">1/100K</option>
                     <option value="0.0001">1/10K</option>
                 </select>
+                <select id="brush"></select>
             </div>
         </div>
     </div>
@@ -166,6 +167,20 @@
         // --- Replicator program (LDA zp,X; STA abs,X; INX; BCC) ---
         const REP_CODE = [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8];
 
+        // --- Brush ---
+        function initBrush() {
+            const sel = $('brush');
+            const maxB = Math.floor(B / 4);
+            for (let b = 1; b <= maxB; b++) {
+                const opt = document.createElement('option');
+                opt.value = b;
+                const side = 2 * b - 1;
+                opt.textContent = b === 1 ? 'brush:1' : `brush:${side}\u00D7${side}`;
+                sel.appendChild(opt);
+            }
+        }
+        function getBrushSize() { return parseInt($('brush').value) || 1; }
+
         // --- Specimens ---
         const MAX_SPECIMENS = 8;
         const specimens = []; // { data: Uint8Array(1024), char, time, copies }
@@ -197,13 +212,25 @@
         async function injectSpecimen(idx) {
             const spec = specimens[idx];
             if (!spec) return;
+            const brush = getBrushSize();
+            const r = brush - 1; // radius: brush=1 -> r=0 (single cell)
+            for (let di = -r; di <= r; di++) {
+                for (let dj = -r; dj <= r; dj++) {
+                    const ci = ((inspectI + di) % B + B) % B;
+                    const cj = ((inspectJ + dj) % B + B) % B;
+                    if (gpuMode && gpuSim) {
+                        gpuSim.writeCell(ci, cj, 0, spec.data);
+                    } else if (worker) {
+                        workerSend({type:'writeCell', i: ci, j: cj, offset: 0,
+                                    data: Array.from(spec.data)});
+                    }
+                }
+            }
+            // Refresh census so grid updates
             if (gpuMode && gpuSim) {
-                gpuSim.writeCell(inspectI, inspectJ, 0, spec.data);
                 lastCensus = await gpuSim.census();
                 totalQuanta = gpuSim.totalQuanta;
             } else if (worker) {
-                workerSend({type:'writeCell', i: inspectI, j: inspectJ, offset: 0,
-                            data: Array.from(spec.data)});
                 workerSend({type:'census'});
             }
             requestCellViews();
@@ -669,7 +696,7 @@
                 workerSend({type:'init',B});
             }
             print(B+'x'+B+' board. Click to inspect, drag to set neighbor direction.');
-            initGridCanvas(); fpsT0=lastRateTime=performance.now();
+            initGridCanvas(); initBrush(); fpsT0=lastRateTime=performance.now();
             updateNeighbor();
             requestAnimationFrame(renderLoop);
         }
