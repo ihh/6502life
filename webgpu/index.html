@@ -759,7 +759,7 @@
             // Try GPU init
             if(navigator.gpu){try{
                 const adapter=await navigator.gpu.requestAdapter();
-                if(adapter){const{BareSim}=await import('./bare-sim.js');gpuSim=await BareSim.create(B);gpuAvailable=true;}
+                if(adapter){const{BareSim}=await import('./bare-sim.js?v=2');gpuSim=await BareSim.create(B);gpuAvailable=true;}
             }catch(e){print('GPU: '+e.message);}}
             // Always set up worker (needed for CPU mode)
             setupWorker();
