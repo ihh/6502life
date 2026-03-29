@@ -153,6 +153,12 @@
             gridCtx.font='10px monospace'; gridCtx.textBaseline='top';
         }
 
+        function formatRate(cps) {
+            if(cps>=1e6) return (cps/1e6).toFixed(1)+'M';
+            if(cps>=1e3) return Math.round(cps/1e3)+'K';
+            return cps.toFixed(0);
+        }
+
         function renderGrid() {
             if(!lastCensus) return;
             const c=lastCensus, now=performance.now();
@@ -162,10 +168,19 @@
                 lastQuanta=totalQuanta; lastRateTime=now;
             }
             const cps=running?rateEMA:0;
-            let r; if(cps>=1e6)r=(cps/1e6).toFixed(1)+'M'; else if(cps>=1e3)r=(cps/1e3).toFixed(1)+'K'; else r=cps.toFixed(0);
             fpsFrames++;
             if(now-fpsT0>1000){fpsVal=Math.round(fpsFrames*1000/(now-fpsT0));fpsFrames=0;fpsT0=now;}
-            statsEl.textContent=c.functional+'/'+c.total+' alive '+r+' cyc/cell/s '+fpsVal+'fps';
+            // Show rate with target comparison when underperforming
+            const target = targetCycPerSec();
+            const ratio = target > 0 ? cps / target : 1;
+            let rateStr = formatRate(cps);
+            if (running && ratio < 0.85) {
+                rateStr += ' <' + formatRate(target);
+                statsEl.style.color = '#f88';
+            } else {
+                statsEl.style.color = '';
+            }
+            statsEl.textContent=c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s '+fpsVal+'fps';
 
             gridCtx.fillStyle='#111'; gridCtx.fillRect(0,0,gridCanvas.width,gridCanvas.height);
             gridCtx.font='10px monospace'; gridCtx.textBaseline='top';
@@ -224,8 +239,8 @@
 
         function animateTrace() {
             if(!currentTrace||traceIdx>=currentTrace.length) return;
-            const speed=parseFloat($('speed').value)||1;
-            const cycPerFrame=speed<1?4:speed<5?20:99999;
+            const ppt = passesPerTick();
+            const cycPerFrame = ppt < 0.5 ? 4 : ppt < 2 ? 20 : 99999;
             let cyc=0;
             while(traceIdx<currentTrace.length&&cyc<cycPerFrame) {
                 const insn=currentTrace[traceIdx];
@@ -235,9 +250,25 @@
             }
         }
 
-        // --- Render loop: always 60fps, decoupled from simulation ---
-        function renderLoop() {
-            // Fetch latest cell views (async; renders whatever is available)
+        // --- Render loop: always 60fps. GPU sim runs inline with time budget. ---
+        let gpuPassDebt = 0;
+        async function renderLoop() {
+            // GPU sim: run passes for this frame (fractional accumulator)
+            if (running && gpuMode && gpuSim) {
+                gpuPassDebt += passesPerTick();
+                const t0 = performance.now();
+                while (gpuPassDebt >= 1 && performance.now() - t0 < 10) {
+                    await gpuSim.runPass();
+                    await gpuSim.runPass();
+                    gpuPassDebt--;
+                }
+                // Cap debt so we don't try to "catch up" unboundedly
+                if (gpuPassDebt > 3) gpuPassDebt = 3;
+                lastCensus = await gpuSim.census();
+                totalQuanta = gpuSim.totalQuanta;
+            }
+
+            // Fetch latest cell views
             if (running) requestCellViews();
 
             // Render everything
@@ -338,34 +369,13 @@
         function startSim() {
             lastRateTime = performance.now(); lastQuanta = totalQuanta; rateEMA = 0;
             fpsT0 = performance.now(); fpsFrames = 0;
-            if (gpuMode) {
-                gpuPassQueue = 0;
-                gpuSimLoop();
-            } else {
+            gpuPassDebt = 0;
+            if (!gpuMode) {
                 workerSend({type:'start', speed: passesPerTick()});
             }
         }
 
-        // === GPU sim loop: runs independently, render loop reads latest state ===
-        let gpuPassQueue=0;
-        async function gpuSimLoop() {
-            while (running && gpuMode && gpuSim) {
-                const ppt = passesPerTick();
-                const t0 = performance.now();
-                gpuPassQueue += ppt;
-                // Run passes within a time budget per iteration
-                while (gpuPassQueue >= 1 && performance.now() - t0 < 12) {
-                    await gpuSim.runPass();
-                    await gpuSim.runPass();
-                    gpuPassQueue--;
-                }
-                gpuPassQueue = Math.min(gpuPassQueue, ppt);
-                lastCensus = await gpuSim.census();
-                totalQuanta = gpuSim.totalQuanta;
-                // Yield to let render loop run
-                await new Promise(r => setTimeout(r, 0));
-            }
-        }
+        // (GPU sim runs inline in renderLoop — no separate loop needed)
 
         // === Worker ===
         function workerSend(msg){worker.postMessage(msg);}
