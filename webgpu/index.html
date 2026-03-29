@@ -2,10 +2,10 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <title>6502life Bare Sim</title>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        * { box-sizing: border-box; margin: 0; padding: 0; touch-action: manipulation; }
         body { font-family: monospace; background: #111; color: #0f0; padding: 12px;
                overscroll-behavior: none; }
         h3 { margin-bottom: 4px; }
@@ -571,7 +571,7 @@
         }
 
         $('speed').onchange=()=>{if(!gpuMode&&running)workerSend({type:'speed',speed:passesPerTick()});};
-        $('noise').onchange=()=>{if(!gpuMode&&worker)workerSend({type:'noise',rate:getNoiseRate()});};
+        $('noise').onchange=()=>{if(worker)workerSend({type:'noise',rate:getNoiseRate()});};
         $('capture').onclick = () => captureSpecimen();
 
         function switchToGpu() {
