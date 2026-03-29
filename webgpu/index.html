@@ -192,14 +192,17 @@
             renderSpecimens();
         }
 
-        function injectSpecimen(idx) {
+        async function injectSpecimen(idx) {
             const spec = specimens[idx];
             if (!spec) return;
             if (gpuMode && gpuSim) {
                 gpuSim.writeCell(inspectI, inspectJ, 0, spec.data);
+                lastCensus = await gpuSim.census();
+                totalQuanta = gpuSim.totalQuanta;
             } else if (worker) {
                 workerSend({type:'writeCell', i: inspectI, j: inspectJ, offset: 0,
                             data: Array.from(spec.data)});
+                workerSend({type:'census'});
             }
             requestCellViews();
         }
