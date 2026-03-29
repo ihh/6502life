@@ -161,13 +161,16 @@ function runQuantum(mem, budget, hasRegisterSave = true, writeLog = null, fetchL
             if (_traceEntry) _traceEntry.writes.push(wa);
         }
 
+        // Commit all state including PC (real 6502 IRQ fires between
+        // instructions — completed instruction's full effect is visible)
+        pc = nextPc;
+        a &= 0xFF; x &= 0xFF; y &= 0xFF; s &= 0xFF;
+        p = (p | F_U | F_B) & 0xFF;
+
         const totalCyc = baseCyc + extra + brExtra;
         if (_traceEntry) { _traceEntry.cycles = totalCyc; trace.push(_traceEntry); }
         cycles += totalCyc;
         if (cycles >= budget) break;
-        pc = nextPc;
-        a &= 0xFF; x &= 0xFF; y &= 0xFF; s &= 0xFF;
-        p = (p | F_U | F_B) & 0xFF;
     }
 
     // Save registers (only if enabled)

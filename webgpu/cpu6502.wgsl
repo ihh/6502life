@@ -328,19 +328,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             memWrite(cellBase, nbrBase, writeAddr, writeVal);
         }
 
-        // Update state
-        let totalCycles = baseCycles + extraCycles + branchExtra;
-        let newCyclesUsed = cyclesUsed + totalCycles;
-
-        // Budget exceeded: break WITHOUT updating pc/regs (matches CPU behavior:
-        // CPU breaks after cycles += totalCyc but before pc = nextPc)
-        if (newCyclesUsed >= budget) {
-            break;
-        }
-        pc = nextPc; a = newA & 0xFFu; x = newX & 0xFFu;
+        // Commit all state: registers AND pc (real 6502 IRQ fires between
+        // instructions — the completed instruction's full effect is visible)
+        a = newA & 0xFFu; x = newX & 0xFFu;
         y = newY & 0xFFu; s = newS & 0xFFu;
         p = (newP | F_U | F_B) & 0xFFu;
-        cyclesUsed = newCyclesUsed;
+        pc = nextPc;
+
+        let totalCycles = baseCycles + extraCycles + branchExtra;
+        cyclesUsed += totalCycles;
+        if (cyclesUsed >= budget) {
+            break;
+        }
     }
 
     // Save registers

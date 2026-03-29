@@ -203,14 +203,14 @@ function wgslRunQuantum(mem, budget) {
 
         if (doWrite) { mem[writeAddr & ADDR_MASK] = writeVal & 0xFF; }
 
-        const totalCycles = baseCycles + extraCycles + branchExtra;
-        const newCyclesUsed = cyclesUsed + totalCycles;
-        if (newCyclesUsed >= budget) break;
-
-        pc = nextPc; a = newA & 0xFF; x = newX & 0xFF;
+        a = newA & 0xFF; x = newX & 0xFF;
         y = newY & 0xFF; s = newS & 0xFF;
         p = (newP | F_U | F_B) & 0xFF;
-        cyclesUsed = newCyclesUsed;
+        pc = nextPc;
+
+        const totalCycles = baseCycles + extraCycles + branchExtra;
+        cyclesUsed += totalCycles;
+        if (cyclesUsed >= budget) break;
     }
 
     mem[0xF9] = (pc >> 8) & 0xFF;
@@ -406,12 +406,12 @@ describe('CPU vs WGSL instruction parity', () => {
             }
 
             if (doWrite) { mem[wAddr & ADDR_MASK] = wVal & 0xFF; }
-            const totalCyc = baseCyc + extra + brExtra;
-            cycles += totalCyc;
-            if (cycles >= budget) break;
             pc = nextPc;
             a &= 0xFF; x &= 0xFF; y &= 0xFF; s &= 0xFF;
             p = (p | F_U | F_B) & 0xFF;
+            const totalCyc = baseCyc + extra + brExtra;
+            cycles += totalCyc;
+            if (cycles >= budget) break;
         }
         mem[0xF9] = (pc >> 8) & 0xFF; mem[0xFA] = pc & 0xFF;
         mem[0xFB] = p; mem[0xFC] = a; mem[0xFD] = x; mem[0xFE] = y; mem[0xFF] = s;
