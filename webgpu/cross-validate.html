@@ -321,8 +321,10 @@ async function main() {
                 print(`  Cell0 gpu: PC=$${gpu._storageSnapshot[0xF9].toString(16).padStart(2,'0')}${gpu._storageSnapshot[0xFA].toString(16).padStart(2,'0')} X=$${gpu._storageSnapshot[0xFD].toString(16).padStart(2,'0')}`, 'fail');
             }
 
-            // Snapshot cell 0 before half-pass 8
+            // Snapshot cell 0 AND cell 7 (active partner) before half-pass 8
             const cell0pre8 = new Uint8Array(cpu.storage.subarray(0, M));
+            const cell7base = 7 * M;
+            print(`  Cell7(active) pre: PC=$${cpu.storage[cell7base+0xF9].toString(16).padStart(2,'0')}${cpu.storage[cell7base+0xFA].toString(16).padStart(2,'0')} X=$${cpu.storage[cell7base+0xFD].toString(16).padStart(2,'0')} budget=3967`, 'info');
 
             // Half-pass 8
             await cpu.runPass();
@@ -337,8 +339,10 @@ async function main() {
                 }
             }
             print(`  After half-pass 8: ${diffs8} diffs`, diffs8===0?'pass':'fail');
+            // Show cell 7 post-state (it was active in this half-pass)
+            print(`  Cell7(active) cpu-post: PC=$${cpu.storage[cell7base+0xF9].toString(16).padStart(2,'0')}${cpu.storage[cell7base+0xFA].toString(16).padStart(2,'0')} X=$${cpu.storage[cell7base+0xFD].toString(16).padStart(2,'0')}`, 'info');
+            print(`  Cell7(active) gpu-post: PC=$${gpu._storageSnapshot[cell7base+0xF9].toString(16).padStart(2,'0')}${gpu._storageSnapshot[cell7base+0xFA].toString(16).padStart(2,'0')} X=$${gpu._storageSnapshot[cell7base+0xFD].toString(16).padStart(2,'0')}`, 'info');
             if (diffs8 > 0) {
-                // Show which cell the diffs are in
                 const diffCells = new Set(diffOffsets.map(i => Math.floor(i / M)));
                 print(`  Divergent cells: ${[...diffCells].join(', ')}`, 'fail');
                 // Dump all cell 0 diffs
