@@ -371,7 +371,12 @@ async function main() {
     await diagnosePassByPass('soup-pbp', 8, 1000, 10, (sim) => plantSoup(sim, 7000));
     print('', 'info');
 
-    const B = 8; // small board for fast tests
+    // Test at B=32 (production size) first
+    print('=== B=32 replicator (5 passes) ===', 'info');
+    await diagnosePassByPass('B32-rep', 32, 42, 5, plantReplicator);
+    print('', 'info');
+
+    const B = 8; // small board for detailed tests
     let passed = 0, failed = 0, skipped = 0;
 
     async function run(label, seed, passes, initFn) {
