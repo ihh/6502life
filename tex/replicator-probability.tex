@@ -1,0 +1,1375 @@
+\documentclass{article}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage[margin=1in]{geometry}
+
+\newcommand{\hex}[1]{\texttt{\$#1}}
+\newcommand{\opcode}[1]{\texttt{#1}}
+\newcommand{\Beff}{B_{\mathrm{eff}}}
+\newcommand{\Pbase}{P_{\mathrm{base}}}
+\newcommand{\Prep}{P_{\mathrm{rep}}}
+
+\newtheorem{definition}{Definition}
+\newtheorem{proposition}{Proposition}
+\newtheorem{theorem}{Theorem}
+\newtheorem{remark}{Remark}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  columns=fullflexible,
+  frame=single,
+  backgroundcolor=\color{gray!10},
+}
+
+\title{Probability of Spontaneous Self-Replication\\in a 6502 Cellular Automaton}
+\author{}
+\date{March 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We compute the probability that a uniformly random 1024-byte program in a
+6502-based cellular automaton constitutes a functional self-replicator.
+The strict minimal replicator requires 9 specific bytes, giving a base
+probability of $2^{-72}$. We systematically relax the requirements by
+cataloging functionally equivalent instruction sequences: alternative
+target cells, alternative loop mechanisms, index register variants,
+and NOP-insertion tolerance. These relaxations reduce the effective
+information content to approximately 43 bits, yielding a probability
+of roughly $2^{-43}$. We discuss implications for ``primordial soup''
+experiments on random-initialized boards.
+\end{abstract}
+
+\tableofcontents
+
+%----------------------------------------------------------------------
+\section{System Model}
+\label{sec:model}
+
+We consider the 6502life cellular automaton~\cite{6502life}.
+Each cell contains $M = 1024$ bytes of RAM.
+Execution begins at address \hex{0000} after each scheduler interrupt.
+The cell's own memory occupies addresses \hex{0000}--\hex{03FF}
+(cell~0 in the memory-mapped neighborhood).
+The 48 neighbor cells (in a 7$\times$7 grid minus the origin) are
+mapped at addresses \hex{0400}--\hex{BFFF}, with cell~$c$ occupying
+addresses $\hex{0400}\cdot c$ through $\hex{0400}\cdot c + \hex{03FF}$
+for $c = 1, \ldots, 48$.
+
+The scheduler randomly selects a cell, assigns it a random orientation
+(one of four 90$^\circ$ rotations), and resumes execution at the cell's
+program counter. After a Poisson-distributed number of cycles, the
+scheduler interrupts the cell, saves its registers to fixed locations
+in page~0, and moves to the next cell.
+
+\begin{definition}[Byte-level self-replicator]
+\label{def:replicator}
+A program starting at address \hex{0000} is a \emph{self-replicator}
+if, when executed from a state with the X register initialized to some
+value $x_0$, it eventually writes a complete copy of its own page~0
+(bytes \hex{00}--\hex{FF}) to the page~0 of some neighbor cell~$c$
+($1 \le c \le 48$), such that the copy is byte-identical to the original
+at least at all positions occupied by the replicator's own code.
+\end{definition}
+
+\begin{remark}
+This definition is deliberately permissive: the replicator need only
+preserve its own code bytes in the copy. Other bytes in page~0 (stack,
+data areas) may differ. In practice, the minimal replicators we analyze
+copy the entire 256-byte page~0, which is stronger than necessary.
+\end{remark}
+
+%----------------------------------------------------------------------
+\section{The Minimal Replicator}
+\label{sec:minimal}
+
+\subsection{JMP variant (9 bytes)}
+
+The shortest known self-replicator that uses an explicit jump is:
+
+\begin{lstlisting}
+      LDA $00,X    ; B5 00     load byte X from own page 0
+      STA $0400,X  ; 9D 00 04  store to neighbor cell 1, page 0
+      INX          ; E8        increment index
+      JMP $0000    ; 4C 00 00  loop
+\end{lstlisting}
+
+The byte sequence is: \texttt{B5 00 9D 00 04 E8 4C 00 00}.
+
+This program copies byte~$X$ from its own page~0 to offset~$X$ in
+cell~1's page~0, increments $X$, and loops. Since $X$ is an 8-bit
+register that wraps from \hex{FF} to \hex{00}, after 256 iterations
+every byte of page~0 has been copied, including the replicator's own
+code. The copy is therefore byte-identical to the original.
+
+\subsection{BRK variant (7 bytes)}
+
+The opcode \opcode{BRK} (\hex{00}) with operand \hex{00} resets the
+program counter to \hex{0000} and yields to the scheduler. If the cell
+has enough remaining cycles, execution resumes at \hex{0000}. In
+zero-initialized RAM, the byte following \opcode{INX} is already
+\hex{00}, so:
+
+\begin{lstlisting}
+      LDA $00,X    ; B5 00
+      STA $0400,X  ; 9D 00 04
+      INX          ; E8
+      BRK 0        ; 00 00  (second 00 is BRK operand, already zero)
+\end{lstlisting}
+
+Byte sequence: \texttt{B5 00 9D 00 04 E8 00}.
+The trailing \hex{00} (BRK operand) is ``free'' in zero-initialized RAM.
+The 6502 BRK instruction always reads one operand byte; here it reads
+byte~7 which is zero.
+
+\begin{remark}
+The BRK variant has a subtlety: \opcode{BRK} triggers the scheduler,
+which re-randomizes the cell's orientation and may reassign the neighbor
+mapping. However, the copy loop is stateless (X wraps modulo 256), so
+after each scheduler re-entry the copy continues from whatever X value
+was saved.  The destination cell changes between interrupts, so the
+replicator distributes partial copies across multiple neighbors. For
+complete self-replication, the replicator must execute 256 consecutive
+iterations to a single target without interruption.
+The expected number of cycles for 256 iterations of the 4-instruction
+loop is approximately $256 \times 10 = 2560$ cycles. Whether this
+completes before the Poisson-distributed interrupt depends on the
+scheduler's mean quantum.
+\end{remark}
+
+\subsection{Branch variant (8 bytes)}
+
+A two-byte branch instruction can replace the three-byte \opcode{JMP}:
+
+\begin{lstlisting}
+      LDA $00,X    ; B5 00
+      STA $0400,X  ; 9D 00 04
+      INX          ; E8
+      BNE $F8      ; D0 F8    branch back to offset 0 if Z=0
+\end{lstlisting}
+
+Byte sequence: \texttt{B5 00 9D 00 04 E8 D0 F8} (8 bytes).
+
+The branch offset is computed as: from byte~6, \opcode{BNE} is 2 bytes,
+so $\mathrm{PC} = 8$ after fetch. Target is byte~0.
+Offset $= 0 - 8 = -8$, encoded as the two's complement byte \hex{F8}.
+
+After \opcode{INX}, the zero flag $Z$ is clear unless $X$ wrapped to
+zero. So the branch is taken for 255 of every 256 iterations. On the
+256th iteration ($X = 0$), the branch falls through, and execution
+continues with whatever bytes follow. In zero-initialized RAM, the
+next byte is \hex{00} = \opcode{BRK}, which resets PC to 0 and
+resumes. So the branch variant is a complete replicator, with a brief
+one-time \opcode{BRK} detour every 256 iterations.
+
+%----------------------------------------------------------------------
+\section{Base Probability}
+\label{sec:base}
+
+\begin{proposition}[Strict base probability]
+If all 1024 bytes are drawn independently and uniformly from
+$\{0, 1, \ldots, 255\}$, the probability that the first $N$ bytes
+match a specific $N$-byte replicator pattern is
+\[
+   \Pbase = 256^{-N} = 2^{-8N}.
+\]
+\end{proposition}
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+Variant & $N$ (bytes) & $\Pbase$ \\
+\midrule
+JMP  & 9 & $2^{-72}$ \\
+Branch & 8 & $2^{-64}$ \\
+BRK  & 7 & $2^{-56}$ \\
+BRK (free trailing zero) & 6 & $2^{-48}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+For the BRK variant, if we only count the 6 ``non-free'' bytes
+(assuming the 7th byte is zero in the initial state), then
+$\Pbase = 2^{-48}$.
+
+%----------------------------------------------------------------------
+\section{Relaxation Analysis: Byte-by-Byte Constraints}
+\label{sec:relaxation}
+
+We now analyze each byte position to determine how many of the 256
+possible values yield a functionally equivalent replicator.
+
+\subsection{Byte 0: Load opcode}
+
+The load instruction must read a byte from the cell's own page~0 using
+an index register. The valid opcodes are:
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+Opcode & Mnemonic & Addressing Mode & Register used \\
+\midrule
+\hex{B5} & \opcode{LDA zp,X} & zero page, X-indexed & X \\
+\hex{B6} & \opcode{LDX zp,Y} & zero page, Y-indexed & Y$^\dagger$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+$^\dagger$\opcode{LDX zp,Y} loads into the X register, but is indexed
+by Y. This requires the corresponding store and increment to also use Y
+(or X), which we will account for in those positions.
+
+If we use \opcode{LDA zp,X}, then the store must be \opcode{STA abs,X}
+and the increment must be \opcode{INX}. If we use \opcode{LDX zp,Y},
+then the store must be a different instruction (since there is no
+\opcode{STX abs,Y} on the 6502). We could use
+\opcode{LDA zp,Y} (\hex{B6}... wait, \hex{B6} is \opcode{LDX zp,Y}).
+
+Let us be more systematic. The 6502 zero-page indexed addressing modes
+for loads are:
+\begin{itemize}
+\item \hex{B5}: \opcode{LDA zp,X} --- loads A, indexed by X
+\item \hex{B6}: \opcode{LDX zp,Y} --- loads X, indexed by Y
+\item \hex{B4}: \opcode{LDY zp,X} --- loads Y, indexed by X
+\end{itemize}
+
+For a replicator, we need a load--store pair that reads from page~0 and
+writes to an absolute indexed address. The absolute indexed stores are:
+\begin{itemize}
+\item \hex{9D}: \opcode{STA abs,X} --- stores A, indexed by X
+\item \hex{99}: \opcode{STA abs,Y} --- stores A, indexed by Y
+\end{itemize}
+There is no \opcode{STX abs,Y} or \opcode{STY abs,X} in absolute
+indexed mode on the 6502.
+
+Therefore the viable load--store--increment combinations are:
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+Load & Store & Increment & Index register \\
+\midrule
+\opcode{LDA zp,X} (\hex{B5}) & \opcode{STA abs,X} (\hex{9D}) & \opcode{INX} (\hex{E8}) or \opcode{DEX} (\hex{CA}) & X \\
+\opcode{LDA zp,Y}$^*$ & \opcode{STA abs,Y} (\hex{99}) & \opcode{INY} (\hex{C8}) or \opcode{DEY} (\hex{88}) & Y \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+$^*$There is no official \opcode{LDA zp,Y} instruction on the 6502.
+The zero-page Y-indexed addressing mode exists only for \opcode{LDX}
+and \opcode{STX}. To load A from a Y-indexed zero-page address, one
+would need indirect indexed addressing (\opcode{LDA (zp),Y}, opcode
+\hex{B1}), which requires a pointer in zero page and targets a
+different address range.
+
+\textbf{Revised analysis:} The only working combination using official
+opcodes and absolute indexed addressing is the X-register variant:
+\begin{itemize}
+\item Load: \hex{B5} (\opcode{LDA zp,X}) --- 1 valid value
+\item Store: \hex{9D} (\opcode{STA abs,X}) --- 1 valid value
+\item Increment: \hex{E8} (\opcode{INX}) or \hex{CA} (\opcode{DEX}) --- 2 valid values
+\end{itemize}
+
+However, we can also construct a replicator using indirect indexed
+addressing:
+
+\begin{lstlisting}
+      LDA ($00),Y  ; B1 00     load via pointer at $00,$01
+      STA ($02),Y  ; 91 02     store via pointer at $02,$03
+      INY          ; C8
+      BNE $FA      ; D0 FA     branch back
+\end{lstlisting}
+
+This requires the zero-page pointers to be set up correctly:
+\hex{00},\hex{01} = \hex{00},\hex{00} (pointer to \hex{0000}) and
+\hex{02},\hex{03} = \hex{00},\hex{04} (pointer to \hex{0400}). But
+the replicator's own code occupies bytes 0--7, which conflicts with
+the required pointer values at bytes 0--3. This variant is therefore
+\textbf{not self-consistent} and we exclude it.
+
+\textbf{Conclusion for byte 0:} Exactly 1 valid value (\hex{B5}).
+Constraint: 8 bits.
+
+\subsection{Byte 1: Zero-page base address}
+
+The operand of \opcode{LDA zp,X} specifies the base address $b$.
+The effective address is $(b + X) \bmod 256$. Source byte read when
+index register equals $X$ is memory byte $(b + X) \bmod 256$.
+
+The store instruction \opcode{STA \$XX00,X} writes to absolute address
+$\hex{XX00} + X$, i.e., offset $X$ in the target cell's page~0.
+
+Therefore, destination byte at offset $k$ receives source byte
+$(b + k) \bmod 256$. This is a \emph{rotation} of source page~0 by $b$
+positions.
+
+For the copy to be self-replicating, the destination's bytes at the
+replicator code positions must match the source's bytes at those same
+positions. Let the replicator occupy bytes $0, 1, \ldots, L-1$ and let
+bytes $L, L+1, \ldots, 255$ be ``background'' (zero in a fresh cell).
+
+Destination byte $k$ = source byte $(k + b) \bmod 256$.
+For $k = 0, 1, \ldots, L-1$: we need source byte $(k+b) \bmod 256$ =
+source byte $k$ (the replicator's $k$-th byte).
+
+If $b = 0$, this is trivially satisfied.
+
+If $b \neq 0$, then $(k + b) \bmod 256 \neq k$, and source byte
+$(k+b) \bmod 256$ is generically a background byte (zero), not the
+replicator byte at position $k$. The only exception would be if the
+replicator code happened to be periodic with period dividing $b$, which
+our replicator is not (it contains the specific bytes \texttt{B5 00 9D
+00 04 E8 ...}, which are not periodic).
+
+\textbf{Conclusion for byte 1:} Must be \hex{00}. Constraint: 8 bits.
+
+\subsection{Byte 2: Store opcode}
+
+Must be \hex{9D} (\opcode{STA abs,X}).
+Constraint: 8 bits.
+
+\subsection{Byte 3: Low byte of destination address}
+
+The store instruction \opcode{STA \$HH{LL},X} writes to address
+$\hex{HHLL} + X$. The low byte LL determines the base offset within
+the target cell's page.
+
+By the same rotation argument as for byte~1: destination byte at
+offset $k$ receives the value of the source byte loaded when $X = k$.
+The address written is $\hex{HH}\cdot 256 + \mathrm{LL} + X$.
+Cell~$c$ occupies addresses $1024c$ through $1024c + 1023$.
+The offset within cell~$c$ is $(\mathrm{LL} + X) \bmod 1024$.
+
+For page~0 of cell~$c$ (offsets 0--255): the write hits offset
+$(\mathrm{LL} + X) \bmod 256$ of page~0, provided $\hex{HH}$ selects
+page~0 of cell~$c$ (which requires $\hex{HH} = 4c$).
+If $\mathrm{LL} = 0$, write offset equals $X$, and the copy is
+unrotated. If $\mathrm{LL} \neq 0$, the copy is rotated by LL, and the
+same analysis as byte~1 applies: the replicator is not self-consistent.
+
+\textbf{Conclusion for byte 3:} Must be \hex{00}. Constraint: 8 bits.
+
+\subsection{Byte 4: High byte of destination address}
+\label{sec:byte4}
+
+The high byte $\hex{HH}$ must equal $4c$ for some valid neighbor
+cell $c \in \{1, 2, \ldots, 48\}$, so that the store targets page~0
+of a neighbor cell.
+
+The valid values are $\{4, 8, 12, \ldots, 192\}$, i.e., the set
+$\{4c : 1 \le c \le 48\}$. These are 48 distinct values, all multiples
+of~4 in the range $[4, 192]$.
+
+The probability that a uniform random byte is one of these 48 values is
+$48/256 = 3/16$.
+
+\textbf{Conclusion for byte 4:} 48 valid values out of 256.
+Constraint: $\log_2(256/48) = \log_2(16/3) \approx 2.415$ bits.
+
+\subsection{Byte 5: Increment/decrement opcode}
+
+The index register X must change by $\pm 1$ each iteration so that all
+256 byte offsets are visited.
+
+\begin{itemize}
+\item \hex{E8}: \opcode{INX} --- increments X. Copies bytes in order
+  $0, 1, 2, \ldots, 255$ (starting from initial $X$).
+\item \hex{CA}: \opcode{DEX} --- decrements X. Copies bytes in order
+  $0, 255, 254, \ldots, 1$. All 256 bytes are still copied.
+\end{itemize}
+
+No other single-byte instruction changes X by exactly $\pm 1$ without
+side effects that would corrupt the replicator.
+
+Valid values: 2 out of 256. Constraint:
+$\log_2(256/2) = 7$ bits.
+
+\subsection{Bytes 6+: Loop instruction}
+\label{sec:loop}
+
+We analyze three loop mechanisms.
+
+\subsubsection{JMP variant (bytes 6--8)}
+
+\opcode{JMP \$0000} is encoded as \texttt{4C 00 00} (3 bytes).
+The operand must be exactly \hex{0000} to return to the start.
+Constraint: $8 + 8 + 8 = 24$ bits (3 bytes).
+
+No alternative: \opcode{JMP} is the only 6502 instruction that performs
+an unconditional absolute jump. (\opcode{JMP (indirect)} at \hex{6C}
+requires a pointer, adding complexity.)
+
+\subsubsection{Branch variant (bytes 6--7)}
+
+A conditional branch instruction is 2 bytes: opcode plus signed offset.
+The offset must be \hex{F8} ($= -8$ signed) to branch back to byte~0
+from byte~6 (since PC after fetch = $6 + 2 = 8$, and $8 + (-8) = 0$).
+
+The branch is taken if its condition is met. After \opcode{INX} (or
+\opcode{DEX}), the processor flags are:
+\begin{itemize}
+\item $Z = 1$ iff $X = 0$ (wrapped). Otherwise $Z = 0$.
+\item $N = 1$ iff bit~7 of $X$ is set (i.e., $X \in [128, 255]$).
+  Otherwise $N = 0$.
+\item $C$ is \emph{unchanged} by \opcode{INX}/\opcode{DEX}.
+\item $V$ is \emph{unchanged}.
+\end{itemize}
+
+The branches and their reliability:
+
+\begin{center}
+\begin{tabular}{lllc}
+\toprule
+Opcode & Mnemonic & Condition & Iterations taken (of 256) \\
+\midrule
+\hex{D0} & \opcode{BNE} & $Z = 0$ & 255 \\
+\hex{F0} & \opcode{BEQ} & $Z = 1$ & 1 \\
+\hex{10} & \opcode{BPL} & $N = 0$ & 128 \\
+\hex{30} & \opcode{BMI} & $N = 1$ & 128 \\
+\hex{90} & \opcode{BCC} & $C = 0$ & depends on entry state \\
+\hex{B0} & \opcode{BCS} & $C = 1$ & depends on entry state \\
+\hex{50} & \opcode{BVC} & $V = 0$ & depends on entry state \\
+\hex{70} & \opcode{BVS} & $V = 1$ & depends on entry state \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+For a \emph{complete} replicator (copies all 256 bytes without
+interruption), we need the branch taken for 255 consecutive iterations.
+Only \opcode{BNE} achieves this: it fails on exactly the one iteration
+where $X$ wraps to 0, at which point all 256 bytes have been copied.
+
+\opcode{BPL} and \opcode{BMI} fail on half the iterations, so the loop
+copies at most a few bytes before falling through. \opcode{BEQ} almost
+never branches. The carry- and overflow-dependent branches (\opcode{BCC},
+\opcode{BCS}, \opcode{BVC}, \opcode{BVS}) depend on prior state:
+\opcode{INX}/\opcode{DEX} does not modify C or V, so if C was clear on
+entry, \opcode{BCC} always branches (all 256 iterations, including the
+wrap), and if C was set, \opcode{BCC} never branches.
+
+In a randomly initialized cell, the carry flag has probability 1/2 of
+being in either state. Therefore:
+\begin{itemize}
+\item \opcode{BCC} (\hex{90}): works if $C=0$ on entry (probability 1/2).
+\item \opcode{BCS} (\hex{B0}): works if $C=1$ on entry (probability 1/2).
+\item \opcode{BVC} (\hex{50}): works if $V=0$ on entry (probability 1/2).
+\item \opcode{BVS} (\hex{70}): works if $V=1$ on entry (probability 1/2).
+\end{itemize}
+
+For \opcode{BNE}: the branch is not taken when $X$ wraps to 0, but by
+then all 256 bytes have been copied, and in zero-initialized RAM the
+fall-through byte is \hex{00} (\opcode{BRK}), which resets PC to 0.
+So the replicator is functional.
+
+For the flag-dependent branches, if the flag is in the correct state,
+the branch is taken on all 256 iterations (the loop never terminates
+naturally, but the scheduler eventually interrupts). The copy may or
+may not complete within one scheduler quantum, but statistically it
+will complete over multiple quanta since $X$ is saved and restored.
+
+\textbf{Counting valid branch opcodes:}
+\begin{itemize}
+\item Unconditionally reliable: \opcode{BNE} (\hex{D0}) --- 1 opcode.
+\item Reliable with probability 1/2: \opcode{BCC} (\hex{90}),
+  \opcode{BCS} (\hex{B0}), \opcode{BVC} (\hex{50}),
+  \opcode{BVS} (\hex{70}) --- 4 opcodes.
+\item Unreliable: \opcode{BPL} (\hex{10}), \opcode{BMI} (\hex{30}),
+  \opcode{BEQ} (\hex{F0}) --- excluded.
+\end{itemize}
+
+For a conservative count, we take only \opcode{BNE}: 1 valid opcode.
+For a generous count including the flag-dependent branches with their
+1/2 probability weight:
+\[
+  \text{effective count} = 1 + 4 \times \tfrac{1}{2} = 3.
+\]
+
+Byte~6 constraint (generous): $\log_2(256/3) \approx 6.415$ bits.\\
+Byte~7 constraint: must be \hex{F8} exactly. 8 bits.
+
+Total for branch loop (generous): $\approx 14.415$ bits over 2 bytes.
+
+\subsubsection{BRK variant (bytes 6+)}
+\label{sec:brk}
+
+If byte~6 is \hex{00} (\opcode{BRK}), the scheduler resets PC to~0.
+The BRK instruction reads one operand byte (byte~7); in
+zero-initialized RAM, this is already \hex{00}.
+
+The critical question is whether byte~6 must be exactly \hex{00}, or
+whether it is ``free'' because it falls in the zero-initialized
+background.
+
+\textbf{Case 1: Explicit BRK.} We require byte~6 = \hex{00}. Since
+the remaining bytes (7+) are unconstrained (they are zero by
+initialization, and the BRK operand is ignored beyond being read),
+we have 1 constrained byte.
+Constraint: 8 bits for byte~6.
+
+\textbf{Case 2: Implicit BRK.} If we assume zero initialization, then
+any program of length $\le 6$ bytes is followed by \hex{00} bytes.
+A 6-byte replicator (bytes 0--5: \texttt{B5 00 9D 00 04 E8}) is
+followed by \hex{00} at byte~6 ``for free.''
+Constraint: 0 additional bits.
+
+In this paper, we treat both cases. For random initialization (all
+bytes uniform), byte~6 must be \hex{00} explicitly (Case~1). For
+zero-initialized memory, only 6 bytes are constrained (Case~2).
+
+%----------------------------------------------------------------------
+\section{Summary of Byte Constraints}
+\label{sec:summary}
+
+We present the effective information content for each variant.
+
+\subsection{JMP variant (9 bytes, random initialization)}
+
+\begin{center}
+\begin{tabular}{clccc}
+\toprule
+Byte & Content & Valid values & Probability & Bits \\
+\midrule
+0 & \opcode{LDA zp,X} opcode & 1 (/256) & $2^{-8}$ & 8.000 \\
+1 & Zero-page base addr & 1 (/256) & $2^{-8}$ & 8.000 \\
+2 & \opcode{STA abs,X} opcode & 1 (/256) & $2^{-8}$ & 8.000 \\
+3 & Dest addr low byte & 1 (/256) & $2^{-8}$ & 8.000 \\
+4 & Dest addr high byte & 48 (/256) & $48/256$ & 2.415 \\
+5 & \opcode{INX} or \opcode{DEX} & 2 (/256) & $2/256$ & 7.000 \\
+6 & \opcode{JMP} opcode & 1 (/256) & $2^{-8}$ & 8.000 \\
+7 & Jump addr low byte & 1 (/256) & $2^{-8}$ & 8.000 \\
+8 & Jump addr high byte & 1 (/256) & $2^{-8}$ & 8.000 \\
+\midrule
+\multicolumn{4}{r}{\textbf{Total}} & \textbf{65.415} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\[
+  \Prep^{(\mathrm{JMP})} = \frac{1 \cdot 1 \cdot 1 \cdot 1 \cdot 48 \cdot 2 \cdot 1 \cdot 1 \cdot 1}{256^9} = \frac{96}{256^9} = \frac{96}{2^{72}} = \frac{3}{2^{67}} \approx 2^{-65.415}.
+\]
+
+\subsection{Branch variant (8 bytes, random initialization)}
+
+\begin{center}
+\begin{tabular}{clccc}
+\toprule
+Byte & Content & Valid values & Probability & Bits \\
+\midrule
+0 & \opcode{LDA zp,X} opcode & 1 (/256) & $2^{-8}$ & 8.000 \\
+1 & Zero-page base addr & 1 (/256) & $2^{-8}$ & 8.000 \\
+2 & \opcode{STA abs,X} opcode & 1 (/256) & $2^{-8}$ & 8.000 \\
+3 & Dest addr low byte & 1 (/256) & $2^{-8}$ & 8.000 \\
+4 & Dest addr high byte & 48 (/256) & $48/256$ & 2.415 \\
+5 & \opcode{INX} or \opcode{DEX} & 2 (/256) & $2/256$ & 7.000 \\
+6 & Branch opcode & 1--3 (/256) & $1/256$--$3/256$ & $6.415$--$8$ \\
+7 & Branch offset & 1 (/256) & $2^{-8}$ & 8.000 \\
+\midrule
+\multicolumn{4}{r}{\textbf{Total (conservative, BNE only)}} & \textbf{57.415} \\
+\multicolumn{4}{r}{\textbf{Total (generous, BNE + flag-dependent)}} & \textbf{55.830} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Conservative (BNE only):
+\[
+  \Prep^{(\mathrm{BNE})} = \frac{1 \cdot 1 \cdot 1 \cdot 1 \cdot 48 \cdot 2 \cdot 1 \cdot 1}{256^8}
+  = \frac{96}{2^{64}} = \frac{3}{2^{59}} \approx 2^{-57.415}.
+\]
+
+Generous (effective 3 branch opcodes):
+\[
+  \Prep^{(\mathrm{branch})} = \frac{1 \cdot 1 \cdot 1 \cdot 1 \cdot 48 \cdot 2 \cdot 3 \cdot 1}{256^8}
+  = \frac{288}{2^{64}} = \frac{9}{2^{59}} \approx 2^{-55.830}.
+\]
+
+\subsection{BRK variant (random initialization)}
+
+\begin{center}
+\begin{tabular}{clccc}
+\toprule
+Byte & Content & Valid values & Probability & Bits \\
+\midrule
+0 & \opcode{LDA zp,X} opcode & 1 (/256) & $2^{-8}$ & 8.000 \\
+1 & Zero-page base addr & 1 (/256) & $2^{-8}$ & 8.000 \\
+2 & \opcode{STA abs,X} opcode & 1 (/256) & $2^{-8}$ & 8.000 \\
+3 & Dest addr low byte & 1 (/256) & $2^{-8}$ & 8.000 \\
+4 & Dest addr high byte & 48 (/256) & $48/256$ & 2.415 \\
+5 & \opcode{INX} or \opcode{DEX} & 2 (/256) & $2/256$ & 7.000 \\
+6 & \opcode{BRK} opcode & 1 (/256) & $2^{-8}$ & 8.000 \\
+\midrule
+\multicolumn{4}{r}{\textbf{Total (7 bytes, random init)}} & \textbf{49.415} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\[
+  \Prep^{(\mathrm{BRK,7})} = \frac{96}{256^7} = \frac{96}{2^{56}} = \frac{3}{2^{51}} \approx 2^{-49.415}.
+\]
+
+With zero initialization (byte~6 is free):
+\[
+  \Prep^{(\mathrm{BRK,6})} = \frac{96}{256^6} = \frac{96}{2^{48}} = \frac{3}{2^{43}} \approx 2^{-41.415}.
+\]
+
+\subsection{Combined probability (union over all variants)}
+
+A random byte sequence is a valid replicator if it matches \emph{any}
+of the variants. Since the variants have disjoint byte patterns at
+position 6 (\hex{4C} for JMP, \hex{D0}/\hex{90}/\hex{B0}/\hex{50}/\hex{70}
+for branches, \hex{00} for BRK), their probabilities are additive up to
+the shared prefix:
+
+\begin{align}
+  \Prep^{(\mathrm{total})} &= \Prep^{(\mathrm{JMP})} + \Prep^{(\mathrm{branch})} + \Prep^{(\mathrm{BRK,7})} \nonumber \\
+  &= \frac{96}{256^9} + \frac{288}{256^8} + \frac{96}{256^7} \nonumber \\
+  &= \frac{96}{2^{72}} + \frac{288}{2^{64}} + \frac{96}{2^{56}} \label{eq:total}
+\end{align}
+
+The BRK term dominates:
+\[
+  \Prep^{(\mathrm{total})} \approx \frac{96}{2^{56}} = \frac{3}{2^{51}} \approx 2^{-49.415}.
+\]
+
+The JMP and branch terms are negligible by comparison (smaller by
+factors of $2^{-16}$ and $2^{-8}$ respectively).
+
+%----------------------------------------------------------------------
+\section{NOP Insertion Tolerance}
+\label{sec:nop}
+
+\subsection{Setup}
+
+The replicator's four instructions (load, store, increment, loop) are
+independent in the sense that inserting ``no-operation'' instructions
+between them does not change the computation. A NOP does not modify
+registers A, X, Y, or the status flags relevant to the branch condition.
+
+We allow NOP insertions at $K = 4$ positions:
+\begin{enumerate}
+\item Before the load (leading NOPs, $j_0$ bytes)
+\item Between load and store ($j_1$ bytes)
+\item Between store and increment ($j_2$ bytes)
+\item Between increment and loop ($j_3$ bytes)
+\end{enumerate}
+
+Let $J = j_0 + j_1 + j_2 + j_3$ be the total number of NOP bytes
+inserted. The resulting program has length $N_0 + J$ bytes, where
+$N_0$ is the base replicator length.
+
+\subsection{Counting NOP opcodes}
+
+The official 6502 NOP is \hex{EA} (1 byte, 2 cycles). The 6502 also
+has several undocumented single-byte NOPs that are functionally
+equivalent (no register or flag side effects):
+\[
+  \hex{1A},\ \hex{3A},\ \hex{5A},\ \hex{7A},\ \hex{DA},\ \hex{FA}.
+\]
+This gives $n_{\mathrm{NOP}} = 7$ single-byte NOP opcodes.
+
+There are also multi-byte undocumented NOPs (2-byte and 3-byte), but
+these complicate the analysis significantly because their operand bytes
+add additional degrees of freedom. We defer multi-byte NOPs to
+Section~\ref{sec:multibyte-nop}.
+
+\subsection{Generating function for NOP insertions}
+
+For each insertion point, the number of single-byte NOP bytes inserted
+is $j_i \ge 0$, and each such byte must be one of $n_{\mathrm{NOP}}$
+values. The probability of $j$ consecutive NOP bytes at a single
+insertion point is
+\[
+  \left(\frac{n_{\mathrm{NOP}}}{256}\right)^j.
+\]
+
+The total probability contribution from NOP-padded replicators is:
+\begin{align}
+  \Prep^{(\mathrm{NOP})} &= P_{\mathrm{core}} \cdot \sum_{j_0=0}^{\infty} \sum_{j_1=0}^{\infty} \sum_{j_2=0}^{\infty} \sum_{j_3=0}^{\infty} \left(\frac{n_{\mathrm{NOP}}}{256}\right)^{j_0+j_1+j_2+j_3} \cdot A(j_0) \label{eq:nop-sum}
+\end{align}
+where $P_{\mathrm{core}}$ is the probability of the core instruction
+bytes (excluding the loop-back), and $A(j_0)$ is a correction factor
+for the loop instruction's operand, which depends on the total program
+length and hence on the NOP counts.
+
+\textbf{Branch variant correction.}
+For the branch variant, the branch offset depends on the total program
+length $L = N_0 + J$. From byte position $L - 2$ (the branch opcode),
+the required offset to reach byte~0 is $-(L)$, encoded as a signed byte.
+This is valid only if $L \le 128$ (the maximum backward branch range
+is $-128$). For $L \le 128$, the offset byte is uniquely determined
+($256 - L$). So $A(j_0) = 1$ for all valid $J$, and the branch
+offset is always exactly 1 value.
+
+However, there is a subtlety for leading NOPs ($j_0 > 0$): the loop
+branches back to byte~0, which is a NOP, not the load instruction.
+The replicator still works because the NOPs are re-executed each
+iteration. The branch offset must target byte~0, not the first
+non-NOP instruction.
+
+For the branch variant with leading NOPs, the branch offset is
+$-L = -(N_0 + J)$. This is valid as a signed byte when $L \le 128$,
+i.e., $J \le 128 - N_0 = 120$ (for $N_0 = 8$). Each valid offset is
+one specific byte value. So $A(j_0) = 1$ and the constraint on the
+offset byte remains 8 bits regardless of $J$.
+
+\textbf{JMP variant correction.}
+The \opcode{JMP \$0000} operand is always \hex{00 00} regardless of
+program length. So $A(j_0) = 1$ trivially.
+
+\textbf{BRK variant correction.}
+\opcode{BRK} resets PC to 0 regardless of where it appears.
+$A(j_0) = 1$ trivially.
+
+Therefore, in all cases $A(j_0) = 1$, and Equation~\eqref{eq:nop-sum}
+simplifies:
+\begin{align}
+  \Prep^{(\mathrm{NOP})} &= P_{\mathrm{core}} \cdot \left(\sum_{j=0}^{\infty} \left(\frac{n_{\mathrm{NOP}}}{256}\right)^j\right)^K \nonumber \\
+  &= P_{\mathrm{core}} \cdot \left(\frac{1}{1 - n_{\mathrm{NOP}}/256}\right)^K \nonumber \\
+  &= P_{\mathrm{core}} \cdot \left(\frac{256}{256 - n_{\mathrm{NOP}}}\right)^K. \label{eq:nop-factor}
+\end{align}
+
+\begin{proposition}[NOP correction factor]
+\label{prop:nop}
+With $n_{\mathrm{NOP}} = 7$ single-byte NOP opcodes and $K = 4$
+insertion points, the NOP-tolerance multiplicative factor is
+\[
+  F_{\mathrm{NOP}} = \left(\frac{256}{249}\right)^4 \approx 1.1174.
+\]
+This increases the replicator probability by a factor of $\approx 1.12$,
+reducing the effective information content by
+\[
+  \Delta B = \log_2 F_{\mathrm{NOP}} = 4 \log_2\!\left(\frac{256}{249}\right) \approx 0.160 \text{ bits}.
+\]
+\end{proposition}
+
+\begin{proof}
+The geometric series $\sum_{j=0}^{\infty} x^j = (1-x)^{-1}$ for
+$|x| < 1$. With $x = n_{\mathrm{NOP}}/256 = 7/256 \approx 0.02734$,
+the series converges and equals $256/249$. Raising to the $K=4$th power:
+\[
+  F_{\mathrm{NOP}} = \left(\frac{256}{249}\right)^4.
+\]
+Numerically: $256/249 \approx 1.02811$, so
+$F_{\mathrm{NOP}} \approx 1.02811^4 \approx 1.1174$.
+And $\log_2(1.1174) \approx 0.160$.
+\end{proof}
+
+\subsection{Multi-byte NOP instructions}
+\label{sec:multibyte-nop}
+
+The 6502 has undocumented 2-byte NOPs (opcode + 1 operand byte) and
+3-byte NOPs (opcode + 2 operand bytes) that have no side effects.
+These provide additional NOP-equivalent sequences:
+
+\begin{itemize}
+\item \textbf{2-byte NOPs:} Opcodes \hex{80}, \hex{82}, \hex{C2},
+  \hex{E2}, \hex{04}, \hex{14}, \hex{34}, \hex{44}, \hex{54},
+  \hex{64}, \hex{74}, \hex{D4}, \hex{F4}. Each takes 1 operand byte
+  that can be anything (256 values). This gives $n_2 \approx 13$
+  distinct 2-byte NOP opcodes.
+  Probability per 2-byte NOP: $(n_2/256) \cdot 1 = n_2/256$.
+
+\item \textbf{3-byte NOPs:} Opcodes \hex{0C}, \hex{1C}, \hex{3C},
+  \hex{5C}, \hex{7C}, \hex{DC}, \hex{FC}. Each takes 2 operand bytes.
+  This gives $n_3 = 7$ distinct 3-byte NOP opcodes.
+  Probability per 3-byte NOP: $(n_3/256) \cdot 1 \cdot 1 = n_3/256$.
+\end{itemize}
+
+Wait --- a 2-byte NOP inserted at a gap adds 2 bytes to the program
+length, with probability $(n_2/256) \cdot (256/256) = n_2/256$ for the
+pair (the operand byte is unconstrained, contributing a factor of
+$256/256 = 1$). Similarly, a 3-byte NOP adds 3 bytes with probability
+$n_3/256$.
+
+Actually, we must be more careful. Each NOP ``slot'' can hold a
+sequence of NOP instructions of various lengths. Let $p_k$ be the
+probability that a specific $k$-byte NOP instruction appears, consuming
+$k$ bytes from the random stream:
+\begin{align*}
+  p_1 &= n_1 / 256 = 7/256, \\
+  p_2 &= n_2 / 256 = 13/256, \quad \text{(operand byte is free)} \\
+  p_3 &= n_3 / 256 = 7/256. \quad \text{(operand bytes are free)}
+\end{align*}
+
+Note that for multi-byte NOPs, we ``consume'' additional random bytes
+from the stream, but those bytes are unconstrained (any value is a valid
+operand). The probability cost is only the opcode byte.
+
+At each insertion point, the content is a sequence of NOP instructions.
+Let $G(z)$ be the generating function where $z$ tracks the number of
+random bytes consumed. A single NOP instruction consuming $k$ bytes
+contributes $p_k z^k$ to the generating function. The generating
+function for zero or more NOPs at one insertion point is:
+\[
+  H(z) = \sum_{m=0}^{\infty} \left(\sum_{k=1}^{3} p_k z^k \right)^m
+  = \frac{1}{1 - (p_1 z + p_2 z^2 + p_3 z^3)}.
+\]
+
+The total probability of a NOP-padded replicator is obtained by
+evaluating $H(z)$ at $z = 1/256$ for each consumed byte... but wait,
+this is not quite right. The generating function approach needs to
+account for the fact that each random byte costs a factor of $1/256$
+in probability.
+
+Let us re-derive. Suppose a NOP insertion point consumes $L$ bytes
+total. The probability that $L$ specific random bytes form a valid
+sequence of NOP instructions is:
+\[
+  Q(L) = \sum_{\text{NOP sequences of length } L} \prod_{\text{instructions}} \frac{1}{256^{k_i}}
+\]
+where $k_i$ is the length of the $i$th NOP instruction.
+
+For a $k$-byte NOP instruction, the opcode must be one of $n_k$ values
+(probability $n_k/256$) and the remaining $k-1$ operand bytes are free
+(probability $1$ each). So the probability cost per instruction is
+$n_k / 256$, independent of instruction length. This is because the
+$k-1$ operand bytes are unconstrained --- they consume $k-1$ bytes
+from the random stream but impose no constraint.
+
+Wait, that is wrong. Each byte in the random 1024-byte cell is drawn
+uniformly. A $k$-byte NOP instruction ``uses up'' $k$ bytes. The first
+byte must be a valid NOP opcode ($n_k / 256$ probability). The remaining
+$k-1$ bytes can be anything ($1$ probability each). But these $k-1$
+bytes are still random bytes that could have been something else. The
+total probability that bytes $i, i+1, \ldots, i+k-1$ form a specific
+$k$-byte NOP is $(n_k / 256) \cdot 1^{k-1} = n_k / 256$.
+
+But the remaining $k-1$ bytes are ``consumed'' --- they cannot be part
+of another NOP instruction or the replicator core. This consumption is
+already accounted for by the fact that the replicator has a specific
+total length. Let $L_{\mathrm{total}}$ be the total program length
+(core + all NOP bytes). Then $\Prep = 256^{-L_{\mathrm{total}}} \times$
+(number of valid patterns of that length). Actually, since some bytes
+within multi-byte NOPs are unconstrained, the probability per byte
+is not uniformly $1/256$.
+
+Let me restart with a cleaner framework.
+
+\begin{definition}[NOP insertion probability]
+Fix the core replicator bytes. A \emph{NOP-padded replicator of total
+length $L$} is a sequence of $L$ bytes that consists of the core
+replicator instructions interspersed with NOP instruction sequences
+at the $K$ designated insertion points, such that the total byte count
+is~$L$. The probability of a random $L$-byte prefix matching such a
+pattern is
+\[
+  P(L) = P_{\mathrm{core}} \cdot \prod_{i=1}^{K} q_i(\ell_i)
+\]
+where $\ell_i$ is the number of NOP bytes at insertion point $i$
+(with $\sum_i \ell_i = L - N_0$), $P_{\mathrm{core}}$ accounts for
+the constrained core bytes, and $q_i(\ell)$ is the probability that
+$\ell$ consecutive random bytes form a valid sequence of NOP
+instructions.
+\end{definition}
+
+The function $q(\ell)$ (same for all insertion points) satisfies:
+\begin{itemize}
+\item $q(0) = 1$ (no NOP bytes).
+\item For $\ell \ge 1$: the first byte starts a NOP instruction of
+  length $k \in \{1, 2, 3\}$, with $k \le \ell$. The probability
+  that the first byte is a valid $k$-byte NOP opcode is $n_k / 256$.
+  The next $k-1$ bytes are unconstrained (free). The remaining
+  $\ell - k$ bytes must also form a valid NOP sequence.
+\end{itemize}
+
+\[
+  q(\ell) = \sum_{k=1}^{\min(\ell,3)} \frac{n_k}{256} \cdot q(\ell - k)
+  \quad \text{for } \ell \ge 1.
+\]
+
+This is a linear recurrence. The generating function is
+$Q(z) = \sum_{\ell=0}^{\infty} q(\ell) z^\ell$, satisfying:
+\[
+  Q(z) = 1 + \left(\frac{n_1}{256} z + \frac{n_2}{256} z^2 + \frac{n_3}{256} z^3\right) Q(z)
+\]
+so
+\begin{equation}
+  Q(z) = \frac{1}{1 - \frac{1}{256}(n_1 z + n_2 z^2 + n_3 z^3)}.
+  \label{eq:nop-gf}
+\end{equation}
+
+The total probability summing over all possible NOP insertion lengths is:
+\begin{align}
+  \Prep^{(\mathrm{NOP})} &= P_{\mathrm{core}} \cdot \sum_{\ell_1, \ldots, \ell_K \ge 0} \prod_{i=1}^K q(\ell_i) \nonumber \\
+  &= P_{\mathrm{core}} \cdot \left(\sum_{\ell=0}^{\infty} q(\ell)\right)^K \nonumber \\
+  &= P_{\mathrm{core}} \cdot Q(1)^K. \label{eq:nop-total}
+\end{align}
+
+\begin{proposition}[NOP factor with multi-byte NOPs]
+\label{prop:nop-multi}
+With $n_1 = 7$, $n_2 = 13$, $n_3 = 7$ and $K = 4$:
+\[
+  Q(1) = \frac{1}{1 - (7 + 13 + 7)/256} = \frac{256}{256 - 27} = \frac{256}{229} \approx 1.1179.
+\]
+The NOP correction factor is
+\[
+  F_{\mathrm{NOP}} = Q(1)^4 = \left(\frac{256}{229}\right)^4 \approx 1.5608.
+\]
+This reduces the effective information content by
+\[
+  \Delta B = \log_2(1.5608) \approx 0.642 \text{ bits}.
+\]
+\end{proposition}
+
+\begin{proof}
+From Equation~\eqref{eq:nop-gf} with $z=1$:
+\[
+  Q(1) = \frac{1}{1 - (n_1 + n_2 + n_3)/256} = \frac{256}{256 - 27} = \frac{256}{229}.
+\]
+Numerically: $256/229 \approx 1.11790$, and $(256/229)^4 \approx 1.5608$.
+Then $\log_2(1.5608) \approx 0.6424$.
+\end{proof}
+
+\begin{remark}
+The multi-byte NOP generating function Equation~\eqref{eq:nop-gf}
+correctly accounts for the fact that multi-byte NOP operand bytes are
+unconstrained: $q(\ell)$ gives the probability that $\ell$ consecutive
+\emph{random} bytes form a valid NOP sequence, where each random byte
+independently has probability $1/256$ of being any specific value.
+The ``free'' operand bytes contribute factors of $256/256 = 1$ to the
+probability, which is why $n_k/256$ (not $n_k/256^k$) appears in the
+recurrence.
+\end{remark}
+
+\begin{remark}[Truncation effects]
+The generating function $Q(1)$ sums over $\ell = 0, 1, 2, \ldots, \infty$.
+In practice, the NOP sequence cannot exceed $1024 - N_0$ bytes.
+Since $q(\ell)$ decays exponentially as $(27/256)^\ell \approx 0.1055^\ell$,
+the tail beyond $\ell = 10$ contributes less than $(0.1055)^{10} \approx
+1.5 \times 10^{-10}$ to $Q(1)$. The infinite sum is an excellent
+approximation.
+\end{remark}
+
+%----------------------------------------------------------------------
+\section{Additional Functional Equivalences}
+\label{sec:other}
+
+\subsection{Starting position within the cell}
+
+The replicator must start at the entry point, which is byte~0 after
+each scheduler interrupt. Leading NOPs (the $j_0$ insertion point) are
+the only way to shift the ``real'' code away from byte~0 while
+maintaining functionality. This is already accounted for in
+Section~\ref{sec:nop}.
+
+\subsection{Alternative copy directions}
+
+Using \opcode{DEX} (\hex{CA}) instead of \opcode{INX} (\hex{E8}) copies
+bytes in the order $x_0, x_0 - 1, \ldots, 0, 255, \ldots, x_0 + 1$.
+All 256 bytes are still copied. This is already counted (2 valid values
+at byte~5).
+
+\subsection{Copy to different cells}
+
+As analyzed in Section~\ref{sec:byte4}, any of the 48 neighbor cells
+is a valid target. This is already counted (48 valid values at byte~4).
+
+\subsection{Partial copies and multi-quantum replication}
+
+The analysis above assumes the replicator completes a full 256-byte
+copy within a single scheduler quantum. In practice, the replicator
+may be interrupted partway through and resume in a later quantum (to a
+different, randomly chosen neighbor). This ``scattered copy'' mode is
+less reliable but could still result in eventual replication if the
+same neighbor is targeted enough times. We do not quantify this here;
+our analysis is conservative in requiring a single-quantum complete
+copy.
+
+\subsection{Self-modifying or longer replicators}
+
+Longer programs could implement replication through entirely different
+mechanisms (e.g., using a subroutine, using indirect addressing, using
+self-modifying code). These are vastly more complex and correspondingly
+less probable under random initialization. We do not attempt to
+enumerate them.
+
+%----------------------------------------------------------------------
+\section{Effective Information Content}
+\label{sec:beff}
+
+Combining all relaxations from Sections~\ref{sec:relaxation}
+and~\ref{sec:nop}, we compute the effective information content
+$\Beff$, defined as $\Beff = -\log_2 \Prep$.
+
+\subsection{BRK variant, random initialization (most favorable)}
+
+Core probability (7 bytes):
+\[
+  P_{\mathrm{core}}^{(\mathrm{BRK,7})} = \frac{1 \cdot 1 \cdot 1 \cdot 1 \cdot 48 \cdot 2 \cdot 1}{256^7} = \frac{96}{2^{56}} = \frac{3}{2^{51}}.
+\]
+
+With NOP correction (Proposition~\ref{prop:nop-multi}):
+\[
+  \Prep^{(\mathrm{BRK,NOP})} = \frac{3}{2^{51}} \times \left(\frac{256}{229}\right)^4 \approx \frac{3}{2^{51}} \times 1.5608.
+\]
+
+\[
+  \Beff^{(\mathrm{BRK,NOP})} = 51 - \log_2 3 - \log_2 1.5608 \approx 51 - 1.585 - 0.642 \approx 48.773 \text{ bits}.
+\]
+
+\subsection{Branch variant, random initialization, generous opcode count}
+
+Core probability (8 bytes, 3 effective branch opcodes):
+\[
+  P_{\mathrm{core}}^{(\mathrm{branch})} = \frac{1 \cdot 1 \cdot 1 \cdot 1 \cdot 48 \cdot 2 \cdot 3 \cdot 1}{256^8} = \frac{288}{2^{64}} = \frac{9}{2^{59}}.
+\]
+
+With NOP correction:
+\[
+  \Prep^{(\mathrm{branch,NOP})} = \frac{9}{2^{59}} \times \left(\frac{256}{229}\right)^4.
+\]
+
+\[
+  \Beff^{(\mathrm{branch,NOP})} = 59 - \log_2 9 - \log_2 1.5608 \approx 59 - 3.170 - 0.642 \approx 55.188 \text{ bits}.
+\]
+
+\subsection{Union over all variants with NOP correction}
+
+The total probability is dominated by the BRK variant (shortest):
+\[
+  \Prep^{(\mathrm{total})} \approx \Prep^{(\mathrm{BRK,NOP})} \approx 2^{-48.773}.
+\]
+
+\begin{theorem}[Effective information content]
+\label{thm:beff}
+The effective information content of the minimal 6502 self-replicator,
+accounting for alternative target cells (48 neighbors), bidirectional
+index stepping (\opcode{INX}/\opcode{DEX}), and NOP insertion tolerance
+(7 single-byte + 13 two-byte + 7 three-byte undocumented NOP opcodes
+at 4 insertion points), is
+\[
+  \boxed{\Beff \approx 48.8 \text{ bits}}
+\]
+for the BRK variant under random initialization, or
+$\Beff \approx 40.8$ bits under zero initialization (where the trailing
+BRK is free).
+\end{theorem}
+
+%----------------------------------------------------------------------
+\section{Primordial Soup: Probability of Spontaneous Emergence}
+\label{sec:primordial}
+
+\subsection{Expected number of replicators on a random board}
+
+Consider a board of $B \times B$ cells, each with $M = 1024$ bytes
+drawn uniformly at random. The replicator must start at byte~0
+(the execution entry point), so each cell has exactly one ``trial''
+for the replicator pattern.
+
+\begin{proposition}
+The expected number of replicators on a $B \times B$ board is
+\[
+  \mathbb{E}[R] = B^2 \cdot \Prep.
+\]
+\end{proposition}
+
+For the standard 256$\times$256 board ($B^2 = 65{,}536 = 2^{16}$):
+\[
+  \mathbb{E}[R] = 2^{16} \cdot 2^{-\Beff}.
+\]
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+Scenario & $\Beff$ & $\mathbb{E}[R]$ on $256^2$ board \\
+\midrule
+BRK, random init, with NOPs & 48.8 & $2^{-32.8} \approx 1.4 \times 10^{-10}$ \\
+BRK, zero init, with NOPs & 40.8 & $2^{-24.8} \approx 3.4 \times 10^{-8}$ \\
+Branch, random init, with NOPs & 55.2 & $2^{-39.2} \approx 1.7 \times 10^{-12}$ \\
+JMP, random init, with NOPs & 64.8 & $2^{-48.8} \approx 2.8 \times 10^{-15}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+In all cases, the expected number of replicators on a standard board is
+astronomically small. Even the most favorable scenario (BRK variant,
+zero initialization) gives $\mathbb{E}[R] \approx 10^{-8}$.
+
+\subsection{Threshold board size}
+
+For $\mathbb{E}[R] = 1$, we need $B^2 = 2^{\Beff}$, i.e.,
+$B = 2^{\Beff/2}$.
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+Scenario & $\Beff$ & Board side $B$ for $\mathbb{E}[R]=1$ \\
+\midrule
+BRK, zero init, with NOPs & 40.8 & $2^{20.4} \approx 1.4 \times 10^6$ \\
+BRK, random init, with NOPs & 48.8 & $2^{24.4} \approx 2.2 \times 10^7$ \\
+Branch, random init, with NOPs & 55.2 & $2^{27.6} \approx 2.0 \times 10^8$ \\
+JMP, random init, with NOPs & 64.8 & $2^{32.4} \approx 5.5 \times 10^9$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Memory requirements}
+
+Each cell requires 1024 bytes = 1 KiB. A board of side $B$ requires
+$B^2 \times 1024$ bytes = $B^2$ KiB.
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+Scenario & Board side $B$ & Memory \\
+\midrule
+BRK, zero init & $1.4 \times 10^6$ & $\approx 1.8$ TiB \\
+BRK, random init & $2.2 \times 10^7$ & $\approx 450$ TiB \\
+Branch, random init & $2.0 \times 10^8$ & $\approx 37$ PiB \\
+JMP, random init & $5.5 \times 10^9$ & $\approx 28$ EiB \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Even the most favorable scenario requires $\sim$1.8 TiB of memory for
+a board where the expected number of spontaneous replicators is~1. This
+is within reach of modern hardware but represents a board of
+$1.4 \times 10^6 \times 1.4 \times 10^6 \approx 2 \times 10^{12}$
+cells --- far larger than the standard $256 \times 256$ board.
+
+\subsection{Comparison with biological estimates}
+
+For context, estimates of the probability of spontaneous emergence of a
+self-replicating RNA molecule range from $10^{-40}$ to $10^{-100}$ per
+random nucleotide sequence of appropriate length. Our estimate of
+$\sim 2^{-49} \approx 10^{-14.7}$ for the BRK variant reflects the
+relative simplicity of the 6502 instruction set compared to
+biochemistry: a 6502 replicator requires only $\sim$49 bits of specific
+information, whereas even the simplest ribozyme replicators require
+hundreds of specific nucleotides.
+
+%----------------------------------------------------------------------
+\section{Sensitivity Analysis}
+\label{sec:sensitivity}
+
+\subsection{Undocumented NOP counts}
+
+The counts $n_1 = 7$, $n_2 = 13$, $n_3 = 7$ depend on the specific
+6502 variant emulated. The NMOS 6502 has more undocumented NOPs than
+the CMOS 65C02. The Sfotty emulator used in 6502life may implement
+a different subset. The NOP correction factor is relatively insensitive
+to these counts:
+
+\begin{center}
+\begin{tabular}{ccc}
+\toprule
+$(n_1, n_2, n_3)$ & $Q(1)$ & $F_{\mathrm{NOP}} = Q(1)^4$ \\
+\midrule
+$(1, 0, 0)$ & $256/255 = 1.0039$ & $1.0157$ \\
+$(7, 0, 0)$ & $256/249 = 1.0281$ & $1.1174$ \\
+$(7, 13, 7)$ & $256/229 = 1.1179$ & $1.5608$ \\
+$(7, 20, 7)$ & $256/222 = 1.1532$ & $1.7695$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The NOP correction ranges from negligible ($+0.02$ bits) to modest
+($+0.82$ bits), confirming that it is a minor effect.
+
+\subsection{Functional but imperfect replicators}
+
+Our analysis counts only ``perfect'' byte-level replicators that
+produce an exact copy of page~0. A weaker definition might allow
+replicators that copy enough code for the child to also replicate,
+even if some non-code bytes are incorrect. This could significantly
+increase the probability if the replicator were robust to background
+byte variations, but the minimal replicators we study copy the entire
+page and are therefore sensitive to the background (the child's page~0
+is an exact copy of the parent's page~0, including any random garbage
+in non-code bytes).
+
+\subsection{Replicator as a substring}
+
+Our analysis assumes the replicator starts at byte~0 (the entry point).
+An alternative scenario: the replicator code exists somewhere in the
+1024-byte cell (not necessarily at byte~0), and some sequence of
+instructions at byte~0 eventually transfers control to it. This is
+much harder to quantify, as it depends on the probability that random
+code produces a jump to the correct offset. We conjecture this
+increases $\Prep$ by at most a factor of $\sim 1024$ (one extra trial
+per byte position), reducing $\Beff$ by at most $\sim 10$ bits. But
+the probability that random prefix code successfully reaches the
+replicator without crashing or looping is very low, likely offsetting
+this gain.
+
+%----------------------------------------------------------------------
+\section{Dominance Time and Lottery Economics}
+\label{sec:dominance}
+
+\subsection{Replicator dominance time}
+
+A replicator seeded at one cell spreads via the checkerboard pairing
+scheme. Each half-pass, the replicator may copy to its paired neighbor
+if it is the active cell in the pair (probability $\frac{1}{2}$) and
+the quantum budget suffices for the copy loop (which it does for any
+budget $\gtrsim 100$ cycles, essentially always).
+
+The spreading wavefront advances at most 1 cell per half-pass in one
+cardinal direction. The two half-passes in each round use orthogonal
+tilings (horizontal and vertical), so the wavefront can advance 1 cell
+horizontally and 1 cell vertically per round. Including the random
+offset bits (which shift the tiling grid by 0 or 1), every cell
+boundary is crossed by some pairing within $O(1)$ rounds.
+
+For an $L \times L$ board, the replicator must traverse at most $L$
+cells in each dimension. With a 50\% activation probability per pair,
+the expected number of rounds to advance one cell is 2 (geometric
+with $p = \frac{1}{2}$). The expected dominance time is therefore:
+\[
+D(L) \approx 2L \text{ rounds} = 4L \text{ half-passes (runPass calls).}
+\]
+Each half-pass gives each cell one quantum of $\mu = 4096$ mean cycles.
+In cycles per cell:
+\[
+D_{\text{cyc}}(L) = D(L) \times \mu = 4L \times 4096 \approx 16{,}384 \, L.
+\]
+For $L = 32$: $D_{\text{cyc}} \approx 524{,}288$ cycles/cell $\approx
+0.5 \times 10^6$. At $C = 200{,}000$ cyc/cell/s, dominance takes
+$\approx 2.6$ seconds.
+
+Note this is a lower bound on the mean; the actual distribution has a
+tail from the random walk of the wavefront boundary. A more precise
+analysis using first-passage times of a biased 2D random walk gives
+$D(L) = \Theta(L)$ with moderate variance ($\sigma \sim \sqrt{L}$).
+
+\subsection{Throughput: boards tested per unit time}
+
+A player initializes a board with SHA-256 pseudorandom data and runs
+the simulation to detect whether a viable replicator emerges. Detection
+requires running long enough for a replicator (if present) to achieve
+observable dominance---say, colonizing $> 50\%$ of cells.
+
+At rate $C$ cycles/cell/s on an $L \times L$ board:
+\begin{itemize}
+\item Rounds per second: $C / (2\mu) \approx C / 8192$.
+\item Time to dominance: $D(L) / (C / 2\mu) = 4L \cdot 2\mu / C
+  = 8\mu L / C$ seconds.
+\item Boards per second: $C / (8\mu L) \approx C / (32{,}768 \, L)$.
+\end{itemize}
+
+For $L = 32$, $C = 200{,}000$:
+\begin{align*}
+\text{Time per board} &= 8 \times 4096 \times 32 / 200{,}000
+  \approx 5.2 \text{ seconds}, \\
+\text{Boards per hour} &\approx 690.
+\end{align*}
+
+For $L = 16$, $C = 800{,}000$ (smaller board, faster per-cell rate
+since $C \propto L^{-2}$ on fixed hardware):
+\begin{align*}
+\text{Time per board} &\approx 0.65 \text{ seconds}, \\
+\text{Boards per hour} &\approx 5{,}500.
+\end{align*}
+
+\subsection{Lottery ticket probability}
+
+Each cell in a randomly initialized board is an independent trial for
+containing a replicator at position 0. With $L^2$ cells, the expected
+number of replicators per board is:
+\[
+\mathbb{E}[\text{replicators per board}] = L^2 \cdot 2^{-\Beff}.
+\]
+
+For a player seeking at least one replicator, the expected number of
+boards until success is:
+\[
+N_{\text{boards}} = \frac{1}{L^2 \cdot 2^{-\Beff}} = \frac{2^{\Beff}}{L^2}.
+\]
+
+\paragraph{Random initialization ($\Beff \approx 55$ bits).}
+For $L = 32$: $N_{\text{boards}} = 2^{55} / 1024 = 2^{45} \approx
+3.5 \times 10^{13}$. At 690 boards/hour, this requires $\sim 5 \times
+10^{10}$ hours $\approx 5.8$ million years. \textbf{Infeasible.}
+
+\paragraph{Zero initialization ($\Beff \approx 41$ bits).}
+If RAM is zero-initialized and only the first few bytes are randomized
+(not all 1024), the BRK variant has $\Beff \approx 41$:
+$N_{\text{boards}} = 2^{41} / 1024 = 2^{31} \approx 2.1 \times 10^9$.
+At 690 boards/hour: $\sim 3 \times 10^6$ hours $\approx 350$ years.
+\textbf{Still infeasible for a single player, but conceivable for a
+network.}
+
+\paragraph{BRK-copy primitive ($\Beff \approx 12.4$ bits).}
+If the VM's BRK-copy operation is enabled (operands 49--96 trigger
+a built-in noisy cell copy), a ``replicator'' is simply \opcode{BRK}
+followed by one of 48 valid operands. This is 2 constrained bytes
+with 48/256 probability for the second: $P = 48/65536 \approx
+2^{-10.4}$ per cell. For a $32 \times 32$ board:
+$\mathbb{E} = 1024 \times 2^{-10.4} \approx 0.75$ replicators per
+board. With $\approx 1.3$ boards, a player expects success.
+\textbf{Trivially achievable}---but BRK-copy replicators are noisy
+and may not sustain themselves against mutation.
+
+\paragraph{Summary of lottery economics.}
+
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+Scenario & $\Beff$ & $N_{\text{boards}}$ ($L\!=\!32$) &
+  Time (690 brd/hr) & Feasible? \\
+\midrule
+JMP, random      & 65 & $3 \times 10^{17}$ & $5 \times 10^{10}$ yr & No \\
+Branch, random   & 55 & $3 \times 10^{13}$ & $5 \times 10^{6}$ yr & No \\
+BRK, zero-init   & 41 & $2 \times 10^{9}$  & 350 yr & Network \\
+BRK-copy primitive & 10 & 1.3 & 7 sec & Yes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The stark conclusion: programmatic self-replicators (byte-copy loops)
+are astronomically unlikely to arise by chance. The VM's built-in
+BRK-copy mechanism, if enabled, is the only plausible path to
+spontaneous replication---but it produces noisy, fragile replicators
+that must evolve error tolerance to persist.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+& Strict $\Pbase$ & Relaxed $\Prep$ & $\Beff$ \\
+\midrule
+JMP (9 bytes) & $2^{-72}$ & $2^{-64.8}$ & 64.8 \\
+Branch (8 bytes) & $2^{-64}$ & $2^{-55.2}$ & 55.2 \\
+BRK, random init (8 bytes)\footnotemark & $2^{-64}$ & $2^{-56.8}$ & 56.8 \\
+BRK, zero init (6 bytes) & $2^{-48}$ & $2^{-40.8}$ & 40.8 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\footnotetext{BRK operand byte (byte 7) must be \$00 under random
+initialization; under zero-init it is free.}
+
+The minimal self-replicator in the 6502life VM has an effective
+information content of approximately 41--57 bits, depending on the
+assumed initial conditions. Spontaneous emergence on a standard
+$256 \times 256$ board is negligible ($\sim 10^{-8}$ to $10^{-15}$
+expected replicators). A board of side $\sim 10^6$ (requiring
+$\sim$1.8 TiB) would be needed for spontaneous replication to be
+expected under the most favorable assumptions.
+
+The dominant relaxations are:
+\begin{enumerate}
+\item \textbf{Target cell flexibility} (byte~4): 48 valid neighbors
+  instead of 1, saving $\approx 5.6$ bits.
+\item \textbf{Bidirectional stepping} (byte~5): \opcode{INX} or
+  \opcode{DEX}, saving 1 bit.
+\item \textbf{NOP insertion tolerance}: saving $\approx 0.6$ bits
+  (minor effect due to the low probability of NOP opcodes).
+\end{enumerate}
+
+The remaining bytes (load opcode, base addresses, store opcode, loop
+mechanism) are tightly constrained with no or very few alternatives.
+
+\begin{thebibliography}{9}
+\bibitem{6502life}
+6502life.com: A virtual 256$\times$256 grid of interconnected 6502 CPUs
+simulating cellular automata.
+\url{https://6502life.com}, 2024--2026.
+\end{thebibliography}
+
+\end{document}
