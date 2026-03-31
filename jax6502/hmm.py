@@ -645,6 +645,54 @@ def log_matmul(A: jnp.ndarray, B: jnp.ndarray) -> jnp.ndarray:
         A[..., :, :, None] + B[..., None, :, :], axis=-2)
 
 
+def chunked_log_matmul_scan(matrices: jnp.ndarray, chunk_size: int = 16) -> jnp.ndarray:
+    """Compute the product of a sequence of log-semiring matrices using a
+    chunked scan: outer sequential ``lax.scan`` over chunks, inner parallel
+    ``associative_scan`` within each chunk.
+
+    Much faster to JIT-compile than a single ``associative_scan`` over the
+    full sequence, because XLA only needs to compile one chunk-sized scan
+    and loop it.  ``@jax.remat`` on the inner scan avoids storing
+    intermediates across chunks.
+
+    Args:
+        matrices: [L, S, S] log-space transition matrices.
+        chunk_size: number of matrices per chunk (must divide L).
+
+    Returns:
+        [S, S] log-space product of all L matrices.
+    """
+    L, S, _ = matrices.shape
+    # Pad L to a multiple of chunk_size if needed
+    remainder = L % chunk_size
+    if remainder != 0:
+        pad_len = chunk_size - remainder
+        identity = jnp.where(
+            jnp.eye(S, dtype=jnp.bool_), 0.0, _NEG_INF)
+        padding = jnp.broadcast_to(identity, (pad_len, S, S))
+        matrices = jnp.concatenate([matrices, padding], axis=0)
+        L = matrices.shape[0]
+
+    n_chunks = L // chunk_size
+    chunks = matrices.reshape(n_chunks, chunk_size, S, S)
+
+    @jax.remat
+    def scan_chunk(carry, chunk):
+        # carry: [S, S] accumulated product so far
+        # chunk: [chunk_size, S, S]
+        # Inner associative scan (parallel within chunk)
+        prefix = jax.lax.associative_scan(log_matmul, chunk, axis=0)
+        chunk_product = prefix[-1]  # [S, S]
+        # Combine with carry
+        new_carry = log_matmul(carry, chunk_product)
+        return new_carry, None
+
+    # Identity matrix in log-semiring
+    init = jnp.where(jnp.eye(S, dtype=jnp.bool_), 0.0, _NEG_INF)
+    final, _ = jax.lax.scan(scan_chunk, init, chunks)
+    return final
+
+
 # ---------------------------------------------------------------------------
 # Forward algorithm via associative scan
 # ---------------------------------------------------------------------------
@@ -670,8 +718,8 @@ def _hmm_log_prob_core(params: HMMParams,
         jnp.eye(S, dtype=jnp.bool_), 0.0, _NEG_INF)
     all_matrices = jnp.where(mask, all_matrices, identity[None, :, :])
 
-    prefix_products = jax.lax.associative_scan(log_matmul, all_matrices, axis=0)
-    final_product = prefix_products[length - 1]
+    # Chunked scan: much faster JIT compilation than full associative_scan
+    final_product = chunked_log_matmul_scan(all_matrices, chunk_size=16)
 
     pi = jnp.full(S, _NEG_INF)
     pi = pi.at[_ik(0)].set(0.0)
@@ -719,8 +767,8 @@ def _hmm_log_prob_full(params: HMMParams,
         jnp.eye(S, dtype=jnp.bool_), 0.0, _NEG_INF)
     all_matrices = jnp.where(mask, all_matrices, identity[None, :, :])
 
-    prefix_products = jax.lax.associative_scan(log_matmul, all_matrices, axis=0)
-    final_product = prefix_products[length - 1]
+    # Chunked scan: much faster JIT compilation than full associative_scan
+    final_product = chunked_log_matmul_scan(all_matrices, chunk_size=16)
 
     pi = jnp.full(S, _NEG_INF)
     pi = pi.at[_ik(0)].set(0.0)
