@@ -718,8 +718,15 @@ def _hmm_log_prob_core(params: HMMParams,
         jnp.eye(S, dtype=jnp.bool_), 0.0, _NEG_INF)
     all_matrices = jnp.where(mask, all_matrices, identity[None, :, :])
 
-    # Chunked scan: much faster JIT compilation than full associative_scan
-    final_product = chunked_log_matmul_scan(all_matrices, chunk_size=16)
+    # Sequential product via fori_loop (compiles as a loop, not unrolled).
+    # Much faster to JIT than associative_scan or chunked scan.
+    identity = jnp.where(jnp.eye(S, dtype=jnp.bool_), 0.0, _NEG_INF)
+    def body(t, acc):
+        # Only multiply non-padding matrices (t < length)
+        mat = all_matrices[t]
+        new_acc = log_matmul(acc, mat)
+        return jnp.where(t < length, new_acc, acc)
+    final_product = jax.lax.fori_loop(0, L, body, identity)
 
     pi = jnp.full(S, _NEG_INF)
     pi = pi.at[_ik(0)].set(0.0)
@@ -762,13 +769,13 @@ def _hmm_log_prob_full(params: HMMParams,
         _make_emission_matrix_full, in_axes=(None, 0, 0, 0, 0)
     )(params, bytes_t, bytes_t1, bytes_t2, positions)
 
-    mask = (positions < length)[:, None, None]
-    identity = jnp.where(
-        jnp.eye(S, dtype=jnp.bool_), 0.0, _NEG_INF)
-    all_matrices = jnp.where(mask, all_matrices, identity[None, :, :])
-
-    # Chunked scan: much faster JIT compilation than full associative_scan
-    final_product = chunked_log_matmul_scan(all_matrices, chunk_size=16)
+    # Sequential product via fori_loop
+    identity = jnp.where(jnp.eye(S, dtype=jnp.bool_), 0.0, _NEG_INF)
+    def body(t, acc):
+        mat = all_matrices[t]
+        new_acc = log_matmul(acc, mat)
+        return jnp.where(t < length, new_acc, acc)
+    final_product = jax.lax.fori_loop(0, L, body, identity)
 
     pi = jnp.full(S, _NEG_INF)
     pi = pi.at[_ik(0)].set(0.0)

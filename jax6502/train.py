@@ -472,7 +472,8 @@ def _nce_step_inner(optimizer, hmm_params, opt_state,
 @partial(jax.jit, static_argnames=('optimizer',))
 def _nce_step_inner_full(optimizer, hmm_params, opt_state,
                          batch_seqs, batch_masks, batch_labels, batch_weights):
-    """JIT-compiled NCE step with optimizer as static argument (full mode)."""
+    """JIT-compiled NCE step for full mode. Uses fori_loop-based Forward
+    which compiles fast (seconds, not minutes)."""
     def loss_fn(params):
         score_fn = jax.checkpoint(lambda args: _score_single_full(params, args[0], args[1]))
         scores = jax.lax.map(score_fn, (batch_seqs, batch_masks))
@@ -507,9 +508,10 @@ class ReplayBuffer:
     - Optionally evict samples with extreme weights (too stale)
     """
 
-    def __init__(self, max_size=10000, max_len=32):
+    def __init__(self, max_size=10000, max_len=32, mode='core'):
         self.max_size = max_size
         self.max_len = max_len
+        self.mode = mode
         self.sequences = np.zeros((max_size, max_len), dtype=np.int32)
         self.masks = np.zeros((max_size, max_len), dtype=bool)
         self.labels = np.zeros(max_size, dtype=np.float32)
@@ -575,8 +577,15 @@ class ReplayBuffer:
         lbls = jnp.array(self.labels[indices])
         old_lps = self.log_probs[indices]
 
-        # Compute current log probs
-        current_lps = np.asarray(_batch_log_prob(hmm_params, seqs, msks))
+        # Compute current log probs (use correct mode)
+        if self.mode == 'full':
+            # Score one at a time to avoid OOM on long sequences
+            current_lps = np.array([
+                float(_compute_hmm_log_prob_full(hmm_params, seqs[i], msks[i]))
+                for i in range(actual_batch)
+            ], dtype=np.float32)
+        else:
+            current_lps = np.asarray(_batch_log_prob(hmm_params, seqs, msks))
 
         # Importance weights: exp(current - old), clipped
         log_ratios = current_lps - old_lps
@@ -849,7 +858,7 @@ def train_hmm_nce(hmm_params, oracle_state=None,
     opt_state = optimizer.init(hmm_params)
 
     # Set up replay buffer
-    buffer = ReplayBuffer(max_size=replay_buffer_size, max_len=max_len)
+    buffer = ReplayBuffer(max_size=replay_buffer_size, max_len=max_len, mode=mode)
 
     # Seed with known viable replicators (bootstrap the NCE training)
     if seed_with_known:
@@ -953,7 +962,8 @@ def train_hmm_nce(hmm_params, oracle_state=None,
 
         # 6. Sample minibatch from replay buffer and do NCE step
         if buffer.size >= 8:
-            batch = buffer.sample_batch(hmm_params, batch_size=64,
+            nce_batch_size = 16 if mode == 'full' else 64
+            batch = buffer.sample_batch(hmm_params, batch_size=nce_batch_size,
                                         rng_key=buffer_key)
             if batch is not None:
                 hmm_params, opt_state, loss = nce_step_fn(
