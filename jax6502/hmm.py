@@ -13,8 +13,21 @@ expanding the state space with phantom continuation states:
   - I_k_3a     : consumed byte 1 of a 3-byte emission (awaiting bytes 2,3)
   - I_k_3b     : consumed byte 2 of a 3-byte emission (awaiting byte 3)
 
-Total states: 9*4 + 1 = 37.  This keeps every position-t matrix the same
-shape and enables associative-scan reduction.
+mode='core' (original):
+  Total states: 9*4 + 1 = 37.
+
+mode='full' (256-byte, three-region):
+  Region 1: Core (bytes 0-7) — same 9 insert + 8 match states
+  Region 2: Cargo (bytes ~8-248) — I4 insert state with long self-loop
+  Region 3: Register save area (bytes 249-255) — 7 register match states
+  Total states: 9*4 + 7 + 1 = 44.
+
+Insert emissions are per-position (P=5 active insert positions):
+  I0: before LDA — must not clobber X or set carry
+  I1: between LDA operand and STA — must not clobber A
+  I2: between STA and INX — must not clobber A or X
+  I3: between INX and branch — must not clobber flags
+  I4: tail/cargo — weakest constraint, big cargo region
 
 The forward probability is:
 
@@ -41,6 +54,12 @@ import optax
 
 NUM_INSERT = 9   # I0..I8
 NUM_MATCH = 8    # M1..M8
+NUM_INSERT_POSITIONS = 5  # P: distinct insert emission distributions
+
+# Insert position mapping: which insert position (0..P-1) each insert state uses
+# I0 -> pos 0, I1 -> pos 1, I2 -> pos 2, I3 -> pos 3,
+# I4..I8 -> pos 4 (tail/cargo)
+INSERT_POS_MAP = [0, 1, 2, 3, 4, 4, 4, 4, 4]
 
 # Match state emission constraints (M1..M8).
 # Each entry is a tuple of allowed byte values, or None for M8 (deterministic).
@@ -55,15 +74,21 @@ MATCH_EMISSIONS = (
     None,                                           # M8: branch offset
 )
 
-# Expanded state indices
+# Number of register match states in full mode
+NUM_REG_MATCH = 7  # M9..M15 for PCHI, PCLO, P, A, X, Y, S
+
+# Expanded state indices (core mode)
 # I_k        -> 4*k + 0   (k = 0..8)
 # I_k_2a     -> 4*k + 1
 # I_k_3a     -> 4*k + 2
 # I_k_3b     -> 4*k + 3
 # END        -> 36
 
-NUM_STATES = NUM_INSERT * 4 + 1  # 37
-END_STATE = NUM_STATES - 1       # 36
+NUM_STATES_CORE = NUM_INSERT * 4 + 1  # 37
+NUM_STATES_FULL = NUM_INSERT * 4 + NUM_REG_MATCH + 1  # 44
+
+# For backward compatibility, NUM_STATES defaults to core
+NUM_STATES = NUM_STATES_CORE
 
 _NEG_INF = -1e30  # practical -inf for log-space (avoids NaN in gradients)
 
@@ -88,27 +113,59 @@ def _ik_3b(k):
     return 4 * k + 3
 
 
+def _reg_state(r):
+    """Index of register match state r (0..6) in full mode.
+
+    Register states come after the 36 insert/phantom states:
+    M9=36, M10=37, ..., M15=42.  END=43.
+    """
+    return NUM_INSERT * 4 + r
+
+
+def _end_state(mode='core'):
+    """Index of the END state."""
+    if mode == 'full':
+        return NUM_STATES_FULL - 1  # 43
+    return NUM_STATES_CORE - 1  # 36
+
+
+def num_states(mode='core'):
+    """Total number of states for the given mode."""
+    if mode == 'full':
+        return NUM_STATES_FULL
+    return NUM_STATES_CORE
+
+
+# Backward compatibility
+END_STATE = _end_state('core')  # 36
+
+
 # ---------------------------------------------------------------------------
 # Parameter pytree
 # ---------------------------------------------------------------------------
 
 class HMMParams(NamedTuple):
-    """All trainable HMM parameters (unconstrained logits)."""
+    """All trainable HMM parameters (unconstrained logits).
+
+    Insert emission parameters are per-position (P = NUM_INSERT_POSITIONS = 5).
+    """
     # Insert state self-loop logits (9,) -- sigmoid -> delta_k
     log_delta: jnp.ndarray            # [9]
-    # 1-byte insert emission logits
-    insert_1byte_logits: jnp.ndarray  # [256]
-    # 2-byte insert: N=3 classes
-    insert_2byte_mix_logits: jnp.ndarray  # [3]
-    insert_2byte_logits: jnp.ndarray      # [3, 2, 256]
-    # 3-byte insert: N=3 classes
-    insert_3byte_mix_logits: jnp.ndarray  # [3]
-    insert_3byte_logits: jnp.ndarray      # [3, 3, 256]
-    # Path mixing logits [1-byte, 2-byte, 3-byte]
-    path_mix_logits: jnp.ndarray      # [3]
+    # Per-position 1-byte insert emission logits
+    insert_1byte_logits: jnp.ndarray  # [P, 256]
+    # Per-position 2-byte insert: N=3 classes
+    insert_2byte_mix_logits: jnp.ndarray  # [P, 3]
+    insert_2byte_logits: jnp.ndarray      # [P, 3, 2, 256]
+    # Per-position 3-byte insert: N=3 classes
+    insert_3byte_mix_logits: jnp.ndarray  # [P, 3]
+    insert_3byte_logits: jnp.ndarray      # [P, 3, 3, 256]
+    # Per-position path mixing logits [1-byte, 2-byte, 3-byte]
+    path_mix_logits: jnp.ndarray      # [P, 3]
     # Match state emission logits (only M6 and M7 have choices)
     match6_logits: jnp.ndarray        # [2]   -- INX vs DEX
     match7_logits: jnp.ndarray        # [7]   -- branch opcodes
+    # Register match state emission logits (full mode only, [7, 256])
+    reg_emission_logits: jnp.ndarray  # [7, 256]
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +208,9 @@ _M7_BYTES = np.array([0x90, 0xD0, 0x10, 0x30, 0x50, 0x70, 0xB0],
 _M6_BYTES_JAX = jnp.array(_M6_BYTES)
 _M7_BYTES_JAX = jnp.array(_M7_BYTES)
 
+# Insert position map as JAX array for indexing
+_INSERT_POS_MAP_JAX = jnp.array(INSERT_POS_MAP, dtype=jnp.int32)
+
 
 def _build_logits_from_weights(weight_fn) -> np.ndarray:
     """Build unnormalised logits (256,) from a weight function.
@@ -162,8 +222,101 @@ def _build_logits_from_weights(weight_fn) -> np.ndarray:
     return np.log(np.maximum(w, 1e-30)).astype(np.float32)
 
 
-def default_params() -> HMMParams:
-    """Create default HMM parameters matching the JS constructor."""
+def _build_shared_2byte_logits():
+    """Build the shared 2-byte insert logits [3, 2, 256]."""
+    imm_set = set(_IMM_LOAD_OPCODES.tolist())
+    zpg_set = set(_ZPG_OPCODES.tolist())
+    undoc2_set = set(_UNDOC_2_OPCODES.tolist())
+
+    c0_p0 = _build_logits_from_weights(lambda b: 5.0 if b in imm_set else 0.01)
+    c0_p1 = _build_logits_from_weights(lambda b: 1.0)
+    c1_p0 = _build_logits_from_weights(lambda b: 3.0 if b in zpg_set else 0.01)
+    c1_p1 = _build_logits_from_weights(
+        lambda b: 2.0 if b < 0x10 else (1.0 if b < 0x80 else 0.5))
+    c2_p0 = _build_logits_from_weights(lambda b: 5.0 if b in undoc2_set else 0.01)
+    c2_p1 = _build_logits_from_weights(lambda b: 1.0)
+
+    return np.stack([
+        np.stack([c0_p0, c0_p1]),
+        np.stack([c1_p0, c1_p1]),
+        np.stack([c2_p0, c2_p1]),
+    ])  # [3, 2, 256]
+
+
+def _build_shared_3byte_logits():
+    """Build the shared 3-byte insert logits [3, 3, 256]."""
+    abs_load_set = set(_ABS_LOAD_OPCODES.tolist())
+    abs_store_set = set(_ABS_STORE_OPCODES.tolist())
+    undoc3_set = set(_UNDOC_3_OPCODES.tolist())
+
+    c0_3p0 = _build_logits_from_weights(lambda b: 5.0 if b in abs_load_set else 0.01)
+    c0_3p1 = _build_logits_from_weights(lambda b: 1.0)
+    c0_3p2 = _build_logits_from_weights(lambda b: 1.0)
+    c1_3p0 = _build_logits_from_weights(lambda b: 5.0 if b in abs_store_set else 0.01)
+    c1_3p1 = _build_logits_from_weights(lambda b: 1.0)
+    c1_3p2 = _build_logits_from_weights(lambda b: 2.0 if b < 0x08 else 0.5)
+    c2_3p0 = _build_logits_from_weights(lambda b: 5.0 if b in undoc3_set else 0.01)
+    c2_3p1 = _build_logits_from_weights(lambda b: 1.0)
+    c2_3p2 = _build_logits_from_weights(lambda b: 1.0)
+
+    return np.stack([
+        np.stack([c0_3p0, c0_3p1, c0_3p2]),
+        np.stack([c1_3p0, c1_3p1, c1_3p2]),
+        np.stack([c2_3p0, c2_3p1, c2_3p2]),
+    ])  # [3, 3, 256]
+
+
+def _build_default_reg_emission_logits():
+    """Build default register emission logits [7, 256].
+
+    Register states M9-M15 correspond to:
+      M9  (r=0): PCHI at 0xF9 — peaked at 0x00
+      M10 (r=1): PCLO at 0xFA — peaked at 0x00
+      M11 (r=2): P at 0xFB — peaked at values with C=0 (bit 0 = 0)
+      M12 (r=3): A at 0xFC — uniform (overwritten by first LDA)
+      M13 (r=4): X at 0xFD — peaked at 0x00
+      M14 (r=5): Y at 0xFE — uniform (not used by copy loop)
+      M15 (r=6): S at 0xFF — peaked at 0x80-0xFF (valid stack pointers)
+    """
+    logits = np.zeros((7, 256), dtype=np.float32)
+
+    # M9: PCHI peaked at 0x00
+    logits[0] = _build_logits_from_weights(
+        lambda b: 10.0 if b == 0x00 else 0.01)
+
+    # M10: PCLO peaked at 0x00
+    logits[1] = _build_logits_from_weights(
+        lambda b: 10.0 if b == 0x00 else 0.01)
+
+    # M11: P register — peaked at values with C=0 (bit 0 clear)
+    # Typical reset P = 0x30 (I=0, B=1, unused=1, rest 0)
+    logits[2] = _build_logits_from_weights(
+        lambda b: (5.0 if b & 0x01 == 0 else 0.5))
+
+    # M12: A — uniform
+    logits[3] = _build_logits_from_weights(lambda b: 1.0)
+
+    # M13: X peaked at 0x00
+    logits[4] = _build_logits_from_weights(
+        lambda b: 10.0 if b == 0x00 else 0.1)
+
+    # M14: Y — uniform
+    logits[5] = _build_logits_from_weights(lambda b: 1.0)
+
+    # M15: S peaked at 0x80-0xFF (valid stack pointers)
+    logits[6] = _build_logits_from_weights(
+        lambda b: 5.0 if b >= 0x80 else 0.1)
+
+    return logits
+
+
+def default_params(mode='core') -> HMMParams:
+    """Create default HMM parameters matching the JS constructor.
+
+    Args:
+        mode: 'core' for 8-byte model, 'full' for 256-byte three-region model.
+    """
+    P = NUM_INSERT_POSITIONS
 
     # delta defaults
     delta_init = np.array(
@@ -171,7 +324,7 @@ def default_params() -> HMMParams:
     # sigmoid^{-1}(delta)
     log_delta = np.log(delta_init / (1.0 - delta_init)).astype(np.float32)
 
-    # 1-byte insert emission weights
+    # 1-byte insert emission weights — shared base, replicated per position
     safe_set = set(_SAFE_SINGLE.tolist())
     two_byte_set = set(_SAFE_TWO_BYTE_PREFIXES.tolist())
     risky_set = set(_RISKY_SINGLE.tolist())
@@ -185,75 +338,31 @@ def default_params() -> HMMParams:
             return 0.1
         return 0.01
 
-    insert_1byte_logits = _build_logits_from_weights(p1_weight)
+    base_1byte = _build_logits_from_weights(p1_weight)
+    insert_1byte_logits = np.tile(base_1byte, (P, 1))  # [P, 256]
 
-    # 2-byte path: 3 classes x 2 positions x 256 bytes
-    imm_set = set(_IMM_LOAD_OPCODES.tolist())
-    zpg_set = set(_ZPG_OPCODES.tolist())
-    undoc2_set = set(_UNDOC_2_OPCODES.tolist())
+    # 2-byte path: replicated per position
+    base_2byte = _build_shared_2byte_logits()  # [3, 2, 256]
+    insert_2byte_logits = np.tile(base_2byte, (P, 1, 1, 1))  # [P, 3, 2, 256]
+    insert_2byte_mix_logits = np.zeros((P, 3), dtype=np.float32)
 
-    # Class 0: immediate loads
-    c0_p0 = _build_logits_from_weights(
-        lambda b: 5.0 if b in imm_set else 0.01)
-    c0_p1 = _build_logits_from_weights(lambda b: 1.0)
+    # 3-byte path: replicated per position
+    base_3byte = _build_shared_3byte_logits()  # [3, 3, 256]
+    insert_3byte_logits = np.tile(base_3byte, (P, 1, 1, 1))  # [P, 3, 3, 256]
+    insert_3byte_mix_logits = np.zeros((P, 3), dtype=np.float32)
 
-    # Class 1: zero-page ops
-    c1_p0 = _build_logits_from_weights(
-        lambda b: 3.0 if b in zpg_set else 0.01)
-    c1_p1 = _build_logits_from_weights(
-        lambda b: 2.0 if b < 0x10 else (1.0 if b < 0x80 else 0.5))
-
-    # Class 2: undocumented 2-byte NOPs
-    c2_p0 = _build_logits_from_weights(
-        lambda b: 5.0 if b in undoc2_set else 0.01)
-    c2_p1 = _build_logits_from_weights(lambda b: 1.0)
-
-    insert_2byte_logits = np.stack([
-        np.stack([c0_p0, c0_p1]),
-        np.stack([c1_p0, c1_p1]),
-        np.stack([c2_p0, c2_p1]),
-    ])  # [3, 2, 256]
-    insert_2byte_mix_logits = np.zeros(3, dtype=np.float32)  # uniform
-
-    # 3-byte path: 3 classes x 3 positions x 256 bytes
-    abs_load_set = set(_ABS_LOAD_OPCODES.tolist())
-    abs_store_set = set(_ABS_STORE_OPCODES.tolist())
-    undoc3_set = set(_UNDOC_3_OPCODES.tolist())
-
-    # Class 0: absolute loads
-    c0_3p0 = _build_logits_from_weights(
-        lambda b: 5.0 if b in abs_load_set else 0.01)
-    c0_3p1 = _build_logits_from_weights(lambda b: 1.0)
-    c0_3p2 = _build_logits_from_weights(lambda b: 1.0)
-
-    # Class 1: absolute stores
-    c1_3p0 = _build_logits_from_weights(
-        lambda b: 5.0 if b in abs_store_set else 0.01)
-    c1_3p1 = _build_logits_from_weights(lambda b: 1.0)
-    c1_3p2 = _build_logits_from_weights(
-        lambda b: 2.0 if b < 0x08 else 0.5)
-
-    # Class 2: undocumented 3-byte NOPs
-    c2_3p0 = _build_logits_from_weights(
-        lambda b: 5.0 if b in undoc3_set else 0.01)
-    c2_3p1 = _build_logits_from_weights(lambda b: 1.0)
-    c2_3p2 = _build_logits_from_weights(lambda b: 1.0)
-
-    insert_3byte_logits = np.stack([
-        np.stack([c0_3p0, c0_3p1, c0_3p2]),
-        np.stack([c1_3p0, c1_3p1, c1_3p2]),
-        np.stack([c2_3p0, c2_3p1, c2_3p2]),
-    ])  # [3, 3, 256]
-    insert_3byte_mix_logits = np.zeros(3, dtype=np.float32)
-
-    # Path mixing: [0.6, 0.3, 0.1]
-    path_mix_logits = np.log(np.array([0.6, 0.3, 0.1], dtype=np.float32))
+    # Path mixing: [0.6, 0.3, 0.1] — replicated per position
+    base_path_mix = np.log(np.array([0.6, 0.3, 0.1], dtype=np.float32))
+    path_mix_logits = np.tile(base_path_mix, (P, 1))  # [P, 3]
 
     # Match6: uniform over 2 choices
     match6_logits = np.zeros(2, dtype=np.float32)
 
     # Match7: uniform over 7 choices
     match7_logits = np.zeros(7, dtype=np.float32)
+
+    # Register emission logits
+    reg_emission_logits = _build_default_reg_emission_logits()  # [7, 256]
 
     return HMMParams(
         log_delta=jnp.array(log_delta),
@@ -265,6 +374,7 @@ def default_params() -> HMMParams:
         path_mix_logits=jnp.array(path_mix_logits),
         match6_logits=jnp.array(match6_logits),
         match7_logits=jnp.array(match7_logits),
+        reg_emission_logits=jnp.array(reg_emission_logits),
     )
 
 
@@ -272,36 +382,37 @@ def default_params() -> HMMParams:
 # Emission helpers
 # ---------------------------------------------------------------------------
 
-def _insert_1byte_log_prob(params: HMMParams, byte_val: jnp.ndarray):
-    """Log P(byte | 1-byte insert path).
+def _insert_1byte_log_prob(params: HMMParams, byte_val: jnp.ndarray,
+                           insert_pos: int = 0):
+    """Log P(byte | 1-byte insert path) for a given insert position.
 
     Args:
         byte_val: scalar int, byte value 0-255.
+        insert_pos: insert position index (0..P-1).
 
     Returns:
         scalar log-probability.
     """
-    log_probs = jax.nn.log_softmax(params.insert_1byte_logits)
+    log_probs = jax.nn.log_softmax(params.insert_1byte_logits[insert_pos])
     return log_probs[byte_val]
 
 
 def _insert_2byte_log_prob(params: HMMParams,
-                           b1: jnp.ndarray, b2: jnp.ndarray):
-    """Log P((b1, b2) | 2-byte insert path) = logsumexp_k pi_k P(b1|k,0) P(b2|k,1)."""
-    log_pi = jax.nn.log_softmax(params.insert_2byte_mix_logits)  # [3]
-    # Per-class, per-position log-softmax
-    log_probs = jax.nn.log_softmax(params.insert_2byte_logits, axis=-1)  # [3,2,256]
-    # log P(b1|k,0) + log P(b2|k,1)
+                           b1: jnp.ndarray, b2: jnp.ndarray,
+                           insert_pos: int = 0):
+    """Log P((b1, b2) | 2-byte insert path) for a given insert position."""
+    log_pi = jax.nn.log_softmax(params.insert_2byte_mix_logits[insert_pos])  # [3]
+    log_probs = jax.nn.log_softmax(params.insert_2byte_logits[insert_pos], axis=-1)  # [3,2,256]
     per_class = log_pi + log_probs[:, 0, b1] + log_probs[:, 1, b2]  # [3]
     return jax.scipy.special.logsumexp(per_class)
 
 
 def _insert_3byte_log_prob(params: HMMParams,
                            b1: jnp.ndarray, b2: jnp.ndarray,
-                           b3: jnp.ndarray):
-    """Log P((b1, b2, b3) | 3-byte insert path)."""
-    log_rho = jax.nn.log_softmax(params.insert_3byte_mix_logits)  # [3]
-    log_probs = jax.nn.log_softmax(params.insert_3byte_logits, axis=-1)  # [3,3,256]
+                           b3: jnp.ndarray, insert_pos: int = 0):
+    """Log P((b1, b2, b3) | 3-byte insert path) for a given insert position."""
+    log_rho = jax.nn.log_softmax(params.insert_3byte_mix_logits[insert_pos])  # [3]
+    log_probs = jax.nn.log_softmax(params.insert_3byte_logits[insert_pos], axis=-1)  # [3,3,256]
     per_class = (log_rho
                  + log_probs[:, 0, b1]
                  + log_probs[:, 1, b2]
@@ -324,7 +435,6 @@ def _match_log_prob(params: HMMParams, match_idx: int, byte_val: jnp.ndarray):
     elif match_idx == 5:
         # M6: INX (0xE8) or DEX (0xCA)
         log_probs = jax.nn.log_softmax(params.match6_logits)  # [2]
-        # Map byte_val to index: 0xE8 -> 0, 0xCA -> 1
         is_e8 = (byte_val == 0xE8)
         is_ca = (byte_val == 0xCA)
         lp = jnp.where(is_e8, log_probs[0],
@@ -333,9 +443,7 @@ def _match_log_prob(params: HMMParams, match_idx: int, byte_val: jnp.ndarray):
     elif match_idx == 6:
         # M7: 7 branch opcodes
         log_probs = jax.nn.log_softmax(params.match7_logits)  # [7]
-        # Check each allowed byte
         is_match = (byte_val == _M7_BYTES_JAX)  # [7] bool
-        # logsumexp over matches (at most one is True)
         lp = jnp.where(is_match, log_probs, _NEG_INF)
         return jax.scipy.special.logsumexp(lp)
     else:
@@ -376,39 +484,41 @@ def _make_match_emission_table(params: HMMParams, byte_val: jnp.ndarray):
     return jnp.array([m1, m2, m3, m4, m5, m6, m7, m8])
 
 
+def _make_reg_emission_table(params: HMMParams, byte_val: jnp.ndarray):
+    """Compute log P(byte_val | reg_state_r) for r=0..6.
+
+    Returns: [7] array of log-probabilities.
+    """
+    log_probs = jax.nn.log_softmax(params.reg_emission_logits, axis=-1)  # [7, 256]
+    return log_probs[:, byte_val]  # [7]
+
+
 def make_emission_matrix(params: HMMParams,
                          byte_t: jnp.ndarray,
                          byte_t1: jnp.ndarray,
                          byte_t2: jnp.ndarray,
                          pos: jnp.ndarray,
-                         m1_pos: jnp.ndarray):
+                         m1_pos: jnp.ndarray,
+                         mode: str = 'core'):
     """Generate the [S, S] transition-emission matrix for position t.
 
     Each entry M[s, s'] is the log-probability of transitioning from state s
     to state s' while consuming byte_t at position t.
 
-    Multi-byte insert emissions use phantom continuation states:
-    - 1-byte: I_k -> I_k (self-loop)
-    - 2-byte: I_k -> I_k_2a (byte 1), then I_k_2a -> I_k (byte 2)
-    - 3-byte: I_k -> I_k_3a (byte 1), I_k_3a -> I_k_3b (byte 2),
-              I_k_3b -> I_k (byte 3)
-
-    Match transitions: I_k -> I_{k+1} (consuming the M_{k+1} byte).
-
     Args:
         params: HMMParams pytree.
         byte_t: current byte (scalar int).
-        byte_t1: byte at t+1 (for 2-byte emission initiation check; not
-                 consumed here but used for the emission weight at t).
-        byte_t2: byte at t+2 (for 3-byte emission initiation check).
+        byte_t1: byte at t+1 (for 2-byte emission lookahead).
+        byte_t2: byte at t+2 (for 3-byte emission lookahead).
         pos: position index t (scalar int).
-        m1_pos: position of M1 in the sequence (scalar int), needed for
-                M8 branch offset check.
+        m1_pos: position of M1 in the sequence (scalar int).
+        mode: 'core' or 'full'.
 
     Returns:
         [S, S] matrix in log-space.
     """
-    S = NUM_STATES
+    S = num_states(mode)
+    END = _end_state(mode)
     # Start with all -inf
     mat = jnp.full((S, S), _NEG_INF, dtype=jnp.float32)
 
@@ -417,25 +527,19 @@ def make_emission_matrix(params: HMMParams,
     log_delta = jnp.log(delta + 1e-30)               # [9]
     log_1m_delta = jnp.log(1.0 - delta + 1e-30)      # [9]
 
-    log_path_mix = jax.nn.log_softmax(params.path_mix_logits)  # [3]
-
-    # 1-byte emission log-probs
-    p1_log = jax.nn.log_softmax(params.insert_1byte_logits)    # [256]
-    log_emit_1 = p1_log[byte_t]  # scalar
-
-    # 2-byte emission: byte_t is position 0
-    p2_log = jax.nn.log_softmax(params.insert_2byte_logits, axis=-1)  # [3,2,256]
-    log_pi2 = jax.nn.log_softmax(params.insert_2byte_mix_logits)       # [3]
-
-    # 3-byte emission: byte_t is position 0
-    p3_log = jax.nn.log_softmax(params.insert_3byte_logits, axis=-1)  # [3,3,256]
-    log_rho3 = jax.nn.log_softmax(params.insert_3byte_mix_logits)      # [3]
+    # Per-position emission parameters
+    # Precompute all P position log-softmax values
+    log_path_mix_all = jax.nn.log_softmax(params.path_mix_logits, axis=-1)  # [P, 3]
+    p1_log_all = jax.nn.log_softmax(params.insert_1byte_logits, axis=-1)    # [P, 256]
+    p2_log_all = jax.nn.log_softmax(params.insert_2byte_logits, axis=-1)  # [P, 3, 2, 256]
+    log_pi2_all = jax.nn.log_softmax(params.insert_2byte_mix_logits, axis=-1)  # [P, 3]
+    p3_log_all = jax.nn.log_softmax(params.insert_3byte_logits, axis=-1)  # [P, 3, 3, 256]
+    log_rho3_all = jax.nn.log_softmax(params.insert_3byte_mix_logits, axis=-1)  # [P, 3]
 
     # Match emission log-probs for byte_t
     match_lp = _make_match_emission_table(params, byte_t)  # [8]
 
     # M8 offset check: expected offset for M8 at this position
-    # If M8 is at position pos, offset = -(pos - m1_pos + 1) & 0xFF
     expected_offset = (-(pos - m1_pos + 1)) & 0xFF
     m8_offset_ok = (byte_t == expected_offset).astype(jnp.float32)
 
@@ -446,46 +550,18 @@ def make_emission_matrix(params: HMMParams,
         ik_3a = _ik_3a(k)
         ik_3b = _ik_3b(k)
 
+        # Get the insert position index for this insert state
+        ip = INSERT_POS_MAP[k]
+
+        log_path_mix = log_path_mix_all[ip]  # [3]
+        log_emit_1 = p1_log_all[ip, byte_t]  # scalar
+
         # --- 1-byte insert self-loop: I_k -> I_k ---
-        # weight = delta_k * alpha_1 * P1(byte_t)
         w_1byte = log_delta[k] + log_path_mix[0] + log_emit_1
         mat = mat.at[ik, ik].set(w_1byte)
 
-        # --- 2-byte insert: I_k -> I_k_2a (start) ---
-        # At position t, we START a 2-byte emission.
-        # Weight at this step: delta_k * alpha_2 * P2_class_marginal(byte_t at pos 0)
-        # The class-marginal: logsumexp_k' pi_k' * P2(byte_t | k', 0)
-        log_p2_pos0 = jax.scipy.special.logsumexp(
-            log_pi2 + p2_log[:, 0, byte_t])  # scalar
-        w_2byte_start = log_delta[k] + log_path_mix[1] + log_p2_pos0
-        mat = mat.at[ik, ik_2a].set(w_2byte_start)
-
-        # --- 2-byte continuation: I_k_2a -> I_k ---
-        # At position t, byte_t is the SECOND byte of the 2-byte emission.
-        # Weight: P2(byte_t | class, pos 1) / P2_class_marginal(pos 0 byte)
-        # But we don't know the pos-0 byte here. The weight was already
-        # split: at start we put P2(b0|*,0), here we put P2(b_t|*,1).
-        # The class posterior weights from step t-1 are implicit in the
-        # matrix product. Actually, the proper factorisation:
-        #   I_k -> I_k_2a:  delta * alpha_2 * sum_k' pi_k' * P(b_t | k', 0)
-        #   I_k_2a -> I_k:  need conditional on class.
-        # But we marginalised over classes at the start, so we can't
-        # condition here. The correct approach:
-        #   expand I_k_2a into N sub-states (one per class).
-        # That would add 9*3 = 27 more states (total 64). Alternatively:
-        #   At the START of a 2-byte emission, put the FULL 2-byte weight
-        #   (including both bytes via lookahead), and make the continuation
-        #   deterministic (weight 1).
-        # This is valid because at position t when we START a 2-byte
-        # emission, we know byte_t AND byte_{t+1} via lookahead.
-        # So: I_k -> I_k_2a weight includes P2(byte_t, byte_{t+1}).
-        # I_k_2a -> I_k weight is 0 (log 1).
-        # We need to RECOMPUTE the start weight using lookahead.
-
-        # Actually, let's do it properly with lookahead:
-        # I_k -> I_k_2a: delta_k * alpha_2 * P2(byte_t, byte_{t+1})
-        # I_k_2a -> I_k: 0.0 (log 1, deterministic pass-through)
-        log_p2_full = _insert_2byte_log_prob(params, byte_t, byte_t1)
+        # --- 2-byte insert: I_k -> I_k_2a (start with full lookahead) ---
+        log_p2_full = _insert_2byte_log_prob(params, byte_t, byte_t1, ip)
         w_2byte_start_full = log_delta[k] + log_path_mix[1] + log_p2_full
         mat = mat.at[ik, ik_2a].set(w_2byte_start_full)
 
@@ -493,7 +569,7 @@ def make_emission_matrix(params: HMMParams,
         mat = mat.at[ik_2a, ik].set(0.0)
 
         # --- 3-byte insert: I_k -> I_k_3a (start with full lookahead) ---
-        log_p3_full = _insert_3byte_log_prob(params, byte_t, byte_t1, byte_t2)
+        log_p3_full = _insert_3byte_log_prob(params, byte_t, byte_t1, byte_t2, ip)
         w_3byte_start_full = log_delta[k] + log_path_mix[2] + log_p3_full
         mat = mat.at[ik, ik_3a].set(w_3byte_start_full)
 
@@ -504,32 +580,68 @@ def make_emission_matrix(params: HMMParams,
         mat = mat.at[ik_3b, ik].set(0.0)
 
         # --- Match transition: I_k -> I_{k+1} ---
-        # Consuming byte_t as the M_{k+1} emission.
         if k < 8:
             mk1 = k  # match_lp index (0-based: M1=0, ..., M8=7)
             next_ik = _ik(k + 1)
 
             if mk1 < 7:
-                # M1..M7: standard match emission
                 w_match = log_1m_delta[k] + match_lp[mk1]
                 mat = mat.at[ik, next_ik].set(w_match)
             else:
-                # M8 (mk1 == 7): branch offset must match
+                # M8: branch offset must match
                 w_match = log_1m_delta[k] + jnp.where(
                     m8_offset_ok > 0.5, 0.0, _NEG_INF)
                 mat = mat.at[ik, next_ik].set(w_match)
 
-        # --- I_8 -> END (non-emitting transition) ---
-        # This is tricky: I_8 -> END is non-emitting, meaning at position t
-        # in state I_8, we can transition to END without consuming a byte.
-        # But in the matrix formulation every position consumes a byte.
-        # Solution: we handle the final I_8 -> END transition outside the
-        # scan, in the "final vector" f.
+    if mode == 'full':
+        # --- Region 2->3 transition: I_8 -> first register state ---
+        # I_8 can transition to the register region (via (1-delta_8))
+        # The first register state is M9 (r=0, PCHI)
+        reg_lp = _make_reg_emission_table(params, byte_t)  # [7]
 
-    # END state self-loop (absorbing)
-    mat = mat.at[END_STATE, END_STATE].set(0.0)
+        # I_8 -> M9 (consuming byte as register emission)
+        reg0 = _reg_state(0)
+        w_reg_start = log_1m_delta[8] + reg_lp[0]
+        mat = mat.at[_ik(8), reg0].set(w_reg_start)
+
+        # Register chain: M9 -> M10 -> ... -> M15 -> END
+        # Each register state transitions deterministically to the next
+        for r in range(NUM_REG_MATCH - 1):
+            rs = _reg_state(r)
+            rs_next = _reg_state(r + 1)
+            # At this position, state rs emits byte_t with reg emission,
+            # transitions to rs_next. But emission was already accounted
+            # for when transitioning INTO rs. The outgoing transition
+            # from rs to rs+1 needs the NEXT byte's emission.
+            # Actually: in matrix formulation, mat[rs, rs_next] is the
+            # weight for consuming byte_t while in state rs and going to rs_next.
+            # But we only score byte_t under rs's emission (already done
+            # at entry). For the chain M9->M10->...->M15, at position t
+            # we're in state rs and consume byte_t under rs's emission,
+            # then move to rs_next.
+            # The weight is just the register emission probability.
+            mat = mat.at[rs, rs_next].set(reg_lp[r + 1])
+
+        # M15 -> END (deterministic, no more bytes to consume after this
+        # register. The emission for M15 was scored when entering M15.
+        # Actually M15 -> END should not consume a byte, similar to I8->END.
+        # But in matrix formulation we handle that via the final vector.)
+        # So M15 is just absorbing for now; final vector picks it up.
+
+        # END state self-loop (absorbing)
+        mat = mat.at[END, END].set(0.0)
+    else:
+        # Core mode: END state self-loop (absorbing)
+        mat = mat.at[END, END].set(0.0)
 
     return mat
+
+
+# Wrapped version for core mode (backward compatible)
+def _make_emission_matrix_core(params, byte_t, byte_t1, byte_t2, pos, m1_pos):
+    """Core-mode emission matrix (backward compatible)."""
+    return make_emission_matrix(params, byte_t, byte_t1, byte_t2, pos, m1_pos,
+                                mode='core')
 
 
 # ---------------------------------------------------------------------------
@@ -551,8 +663,6 @@ def log_matmul(A: jnp.ndarray, B: jnp.ndarray) -> jnp.ndarray:
     Returns:
         [..., S, S] log-space product.
     """
-    # A[..., :, :, None] + B[..., None, :, :] -> [..., S, S, S]
-    # logsumexp over axis -2
     return jax.scipy.special.logsumexp(
         A[..., :, :, None] + B[..., None, :, :], axis=-2)
 
@@ -561,11 +671,101 @@ def log_matmul(A: jnp.ndarray, B: jnp.ndarray) -> jnp.ndarray:
 # Forward algorithm via associative scan
 # ---------------------------------------------------------------------------
 
-@partial(jax.jit, static_argnames=())
+def _hmm_log_prob_core(params: HMMParams,
+                       byte_seq: jnp.ndarray,
+                       length: jnp.ndarray,
+                       m1_pos: jnp.ndarray) -> jnp.ndarray:
+    """Core mode: log P(seq | HMM) using associative scan."""
+    S = NUM_STATES_CORE
+    L = byte_seq.shape[0]
+    positions = jnp.arange(L, dtype=jnp.int32)
+
+    bytes_t = byte_seq
+    bytes_t1 = jnp.concatenate([byte_seq[1:], jnp.zeros(1, dtype=jnp.int32)])
+    bytes_t2 = jnp.concatenate([byte_seq[2:], jnp.zeros(2, dtype=jnp.int32)])
+
+    all_matrices = jax.vmap(
+        _make_emission_matrix_core, in_axes=(None, 0, 0, 0, 0, None)
+    )(params, bytes_t, bytes_t1, bytes_t2, positions, m1_pos)
+
+    mask = (positions < length)[:, None, None]
+    identity = jnp.where(
+        jnp.eye(S, dtype=jnp.bool_), 0.0, _NEG_INF)
+    all_matrices = jnp.where(mask, all_matrices, identity[None, :, :])
+
+    prefix_products = jax.lax.associative_scan(log_matmul, all_matrices, axis=0)
+    final_product = prefix_products[length - 1]
+
+    pi = jnp.full(S, _NEG_INF)
+    pi = pi.at[_ik(0)].set(0.0)
+
+    result = jax.scipy.special.logsumexp(
+        pi[:, None] + final_product, axis=0)
+
+    delta_8 = jax.nn.sigmoid(params.log_delta[8])
+    log_1m_delta_8 = jnp.log(1.0 - delta_8 + 1e-30)
+
+    return result[_ik(8)] + log_1m_delta_8
+
+
+def _make_emission_matrix_full(params, byte_t, byte_t1, byte_t2, pos, m1_pos):
+    """Full-mode emission matrix wrapper for vmap."""
+    return make_emission_matrix(params, byte_t, byte_t1, byte_t2, pos, m1_pos,
+                                mode='full')
+
+
+def _hmm_log_prob_full(params: HMMParams,
+                       byte_seq: jnp.ndarray,
+                       length: jnp.ndarray,
+                       m1_pos: jnp.ndarray) -> jnp.ndarray:
+    """Full mode: log P(seq | HMM) using associative scan.
+
+    Three regions:
+      Region 1: Core copy loop (bytes 0 to ~7+inserts)
+      Region 2: Cargo/tail (I4/I8 self-loops)
+      Region 3: Register save area (last 7 bytes, M9-M15)
+    """
+    S = NUM_STATES_FULL
+    END = _end_state('full')
+    L = byte_seq.shape[0]
+    positions = jnp.arange(L, dtype=jnp.int32)
+
+    bytes_t = byte_seq
+    bytes_t1 = jnp.concatenate([byte_seq[1:], jnp.zeros(1, dtype=jnp.int32)])
+    bytes_t2 = jnp.concatenate([byte_seq[2:], jnp.zeros(2, dtype=jnp.int32)])
+
+    all_matrices = jax.vmap(
+        _make_emission_matrix_full, in_axes=(None, 0, 0, 0, 0, None)
+    )(params, bytes_t, bytes_t1, bytes_t2, positions, m1_pos)
+
+    mask = (positions < length)[:, None, None]
+    identity = jnp.where(
+        jnp.eye(S, dtype=jnp.bool_), 0.0, _NEG_INF)
+    all_matrices = jnp.where(mask, all_matrices, identity[None, :, :])
+
+    prefix_products = jax.lax.associative_scan(log_matmul, all_matrices, axis=0)
+    final_product = prefix_products[length - 1]
+
+    pi = jnp.full(S, _NEG_INF)
+    pi = pi.at[_ik(0)].set(0.0)
+
+    result = jax.scipy.special.logsumexp(
+        pi[:, None] + final_product, axis=0)
+
+    # In full mode, the chain ends at M15 -> END (non-emitting)
+    # M15 is _reg_state(6)
+    last_reg = _reg_state(NUM_REG_MATCH - 1)
+    log_p = result[last_reg]
+
+    return log_p
+
+
+@partial(jax.jit, static_argnames=('mode',))
 def hmm_log_prob(params: HMMParams,
                  byte_seq: jnp.ndarray,
                  length: jnp.ndarray,
-                 m1_pos: jnp.ndarray) -> jnp.ndarray:
+                 m1_pos: jnp.ndarray,
+                 mode: str = 'core') -> jnp.ndarray:
     """Compute log P(seq | HMM) using associative scan.
 
     Args:
@@ -573,83 +773,48 @@ def hmm_log_prob(params: HMMParams,
         byte_seq: [L] int32 byte sequence (padded to max length).
         length: scalar int, actual sequence length.
         m1_pos: scalar int, position of M1 (LDA zpx = 0xB5) in the sequence.
+        mode: 'core' or 'full'.
 
     Returns:
         scalar log-probability.
     """
-    L = byte_seq.shape[0]
-    positions = jnp.arange(L, dtype=jnp.int32)
-
-    # Lookahead bytes (with zero-padding at boundaries)
-    bytes_t = byte_seq
-    bytes_t1 = jnp.concatenate([byte_seq[1:], jnp.zeros(1, dtype=jnp.int32)])
-    bytes_t2 = jnp.concatenate([byte_seq[2:], jnp.zeros(2, dtype=jnp.int32)])
-
-    # Generate all [L, S, S] matrices via vmap
-    all_matrices = jax.vmap(
-        make_emission_matrix, in_axes=(None, 0, 0, 0, 0, None)
-    )(params, bytes_t, bytes_t1, bytes_t2, positions, m1_pos)
-    # shape: [L, S, S]
-
-    # Mask: positions >= length get identity matrix (log-space: 0 on diagonal)
-    mask = (positions < length)[:, None, None]  # [L, 1, 1]
-    identity = jnp.where(
-        jnp.eye(NUM_STATES, dtype=jnp.bool_), 0.0, _NEG_INF)
-    all_matrices = jnp.where(mask, all_matrices, identity[None, :, :])
-
-    # Associative scan to compute prefix products
-    prefix_products = jax.lax.associative_scan(log_matmul, all_matrices, axis=0)
-    # prefix_products[t] = M(x_0) . M(x_1) . ... . M(x_t)
-
-    # Extract the final product (at position length-1)
-    final_product = prefix_products[length - 1]  # [S, S]
-
-    # Initial vector: start in I_0
-    pi = jnp.full(NUM_STATES, _NEG_INF)
-    pi = pi.at[_ik(0)].set(0.0)
-
-    # Result after full product: pi . product
-    # result[s'] = logsumexp_s(pi[s] + product[s, s'])
-    result = jax.scipy.special.logsumexp(
-        pi[:, None] + final_product, axis=0)  # [S]
-
-    # Final: transition from I_8 to END (non-emitting)
-    delta_8 = jax.nn.sigmoid(params.log_delta[8])
-    log_1m_delta_8 = jnp.log(1.0 - delta_8 + 1e-30)
-
-    # log P = result[I_8] + log(1 - delta_8)
-    log_p = result[_ik(8)] + log_1m_delta_8
-
-    return log_p
+    if mode == 'full':
+        return _hmm_log_prob_full(params, byte_seq, length, m1_pos)
+    return _hmm_log_prob_core(params, byte_seq, length, m1_pos)
 
 
+@partial(jax.jit, static_argnames=('mode',))
 def hmm_log_prob_marginal(params: HMMParams,
                           byte_seq: jnp.ndarray,
-                          length: jnp.ndarray) -> jnp.ndarray:
+                          length: jnp.ndarray,
+                          mode: str = 'core') -> jnp.ndarray:
     """Compute log P(seq | HMM) marginalised over all possible M1 positions.
-
-    This mirrors the JS ``hmmForwardExact`` which sums over all M1 positions.
 
     Args:
         params: HMMParams pytree.
         byte_seq: [L] int32 byte sequence (padded to max length).
         length: scalar int, actual sequence length.
+        mode: 'core' or 'full'.
 
     Returns:
         scalar log-probability.
     """
     L = byte_seq.shape[0]
-
-    # For each possible M1 position, compute log_prob and logsumexp
     m1_candidates = jnp.arange(L, dtype=jnp.int32)
 
-    def score_m1(m1_pos):
-        # Only valid if byte_seq[m1_pos] == 0xB5 and m1_pos <= length - 8
-        valid = (byte_seq[m1_pos] == 0xB5) & (m1_pos <= length - 8)
-        lp = hmm_log_prob(params, byte_seq, length, m1_pos)
-        return jnp.where(valid, lp, _NEG_INF)
+    if mode == 'full':
+        # In full mode, M1 must be early enough to fit core + 7 register bytes
+        def score_m1(m1_pos):
+            valid = (byte_seq[m1_pos] == 0xB5) & (m1_pos <= length - 15)
+            lp = hmm_log_prob(params, byte_seq, length, m1_pos, mode='full')
+            return jnp.where(valid, lp, _NEG_INF)
+    else:
+        def score_m1(m1_pos):
+            valid = (byte_seq[m1_pos] == 0xB5) & (m1_pos <= length - 8)
+            lp = hmm_log_prob(params, byte_seq, length, m1_pos, mode='core')
+            return jnp.where(valid, lp, _NEG_INF)
 
-    all_lps = jax.vmap(score_m1)(m1_candidates)  # [L]
+    all_lps = jax.vmap(score_m1)(m1_candidates)
     return jax.scipy.special.logsumexp(all_lps)
 
 
@@ -660,14 +825,25 @@ def hmm_log_prob_marginal(params: HMMParams,
 def _score_single(params: HMMParams,
                   seq: jnp.ndarray,
                   mask: jnp.ndarray) -> jnp.ndarray:
-    """Score a single (padded) sequence.
+    """Score a single (padded) sequence (core mode).
 
     Returns log-odds: log P(x|HMM) + L * ln(256).
     """
     length = mask.sum().astype(jnp.int32)
-    log_p = hmm_log_prob_marginal(params, seq, length)
-    # Null model: uniform IID, log P(x|null) = -L * ln(256)
-    # log-odds = log P(x|HMM) - log P(x|null) = log P(x|HMM) + L * ln(256)
+    log_p = hmm_log_prob_marginal(params, seq, length, mode='core')
+    null_log_p = -length.astype(jnp.float32) * jnp.log(256.0)
+    return log_p - null_log_p
+
+
+def _score_single_full(params: HMMParams,
+                       seq: jnp.ndarray,
+                       mask: jnp.ndarray) -> jnp.ndarray:
+    """Score a single (padded) sequence (full mode).
+
+    Returns log-odds: log P(x|HMM) + L * ln(256).
+    """
+    length = mask.sum().astype(jnp.int32)
+    log_p = hmm_log_prob_marginal(params, seq, length, mode='full')
     null_log_p = -length.astype(jnp.float32) * jnp.log(256.0)
     return log_p - null_log_p
 
@@ -682,27 +858,12 @@ def discriminative_loss(params: HMMParams,
     Loss = -mean_viable log sigma(score) - mean_nonviable log sigma(-score)
 
     where score = log P(x|HMM) + L * ln(256).
-
-    Args:
-        viable_seqs: [B_v, L] int32.
-        viable_masks: [B_v, L] bool.
-        nonviable_seqs: [B_n, L] int32.
-        nonviable_masks: [B_n, L] bool.
-
-    Returns:
-        scalar loss.
     """
-    # Score viable sequences
     viable_scores = jax.vmap(_score_single, in_axes=(None, 0, 0))(
-        params, viable_seqs, viable_masks)  # [B_v]
-
-    # Score non-viable sequences
+        params, viable_seqs, viable_masks)
     nonviable_scores = jax.vmap(_score_single, in_axes=(None, 0, 0))(
-        params, nonviable_seqs, nonviable_masks)  # [B_n]
+        params, nonviable_seqs, nonviable_masks)
 
-    # Binary cross-entropy
-    # -log sigma(s) = softplus(-s)
-    # -log sigma(-s) = softplus(s)
     viable_loss = jax.nn.softplus(-viable_scores).mean()
     nonviable_loss = jax.nn.softplus(nonviable_scores).mean()
 
@@ -717,7 +878,7 @@ def discriminative_loss(params: HMMParams,
 def hmm_score_batch(params: HMMParams,
                     byte_seqs: jnp.ndarray,
                     length_masks: jnp.ndarray) -> jnp.ndarray:
-    """Score a batch of sequences: log P(x|HMM) + L * ln(256).
+    """Score a batch of sequences (core mode): log P(x|HMM) + L * ln(256).
 
     Args:
         byte_seqs: [B, L] int32.
@@ -727,6 +888,15 @@ def hmm_score_batch(params: HMMParams,
         [B] log-odds scores.
     """
     return jax.vmap(_score_single, in_axes=(None, 0, 0))(
+        params, byte_seqs, length_masks)
+
+
+@jax.jit
+def hmm_score_batch_full(params: HMMParams,
+                         byte_seqs: jnp.ndarray,
+                         length_masks: jnp.ndarray) -> jnp.ndarray:
+    """Score a batch of sequences (full mode): log P(x|HMM) + L * ln(256)."""
+    return jax.vmap(_score_single_full, in_axes=(None, 0, 0))(
         params, byte_seqs, length_masks)
 
 
@@ -797,7 +967,8 @@ def train(params: HMMParams,
 
 def hmm_sample(params: HMMParams,
                length: int,
-               rng_key: jnp.ndarray) -> Optional[jnp.ndarray]:
+               rng_key: jnp.ndarray,
+               mode: str = 'core') -> Optional[jnp.ndarray]:
     """Sample a sequence of given length from the HMM.
 
     Uses ancestral sampling:
@@ -805,16 +976,26 @@ def hmm_sample(params: HMMParams,
     2. Fill match bytes deterministically (except M6, M7, M8).
     3. Fill insert bytes from the mixture model.
 
+    In full mode, the last 7 bytes are register save area.
+
     This is NOT JIT-compiled (uses Python control flow).
 
     Args:
         params: HMMParams.
         length: target sequence length.
         rng_key: JAX PRNG key.
+        mode: 'core' or 'full'.
 
     Returns:
         [length] int32 array, or None if impossible.
     """
+    if mode == 'full':
+        return _hmm_sample_full(params, length, rng_key)
+    return _hmm_sample_core(params, length, rng_key)
+
+
+def _hmm_sample_core(params, length, rng_key):
+    """Core mode sampler (original 8-byte model)."""
     if length < 8:
         return None
 
@@ -823,7 +1004,6 @@ def hmm_sample(params: HMMParams,
     delta = jax.nn.sigmoid(params.log_delta)  # [9]
     delta_np = np.array(delta)
 
-    # Sample insert counts for each slot
     rng_key, subkey = jax.random.split(rng_key)
     counts = _sample_insert_counts(delta_np, insert_slots, subkey)
     if counts is None:
@@ -835,7 +1015,8 @@ def hmm_sample(params: HMMParams,
 
     # I0 inserts
     rng_key_np, subkey = jax.random.split(rng_key_np)
-    pos = _fill_insert_bytes(params, result, pos, counts[0], subkey)
+    pos = _fill_insert_bytes(params, result, pos, counts[0], subkey,
+                             insert_pos=0)
 
     # M1: 0xB5
     m1_pos = pos
@@ -844,39 +1025,124 @@ def hmm_sample(params: HMMParams,
 
     # M2..M8 with I1..I7 inserts between them
     for k in range(1, 8):
-        # I_k inserts
         rng_key_np, subkey = jax.random.split(rng_key_np)
-        pos = _fill_insert_bytes(params, result, pos, counts[k], subkey)
+        ip = INSERT_POS_MAP[k]
+        pos = _fill_insert_bytes(params, result, pos, counts[k], subkey,
+                                 insert_pos=ip)
 
-        # M_{k+1}
-        mk = k + 1  # match index (1-based)
+        mk = k + 1
         if mk <= 5:
-            # Point mass
             result[pos] = MATCH_EMISSIONS[mk - 1][0]
             pos += 1
         elif mk == 6:
-            # M6: sample INX or DEX
             rng_key_np, subkey = jax.random.split(rng_key_np)
             probs = jax.nn.softmax(params.match6_logits)
             idx = int(jax.random.categorical(subkey, jnp.log(probs)))
             result[pos] = _M6_BYTES[idx]
             pos += 1
         elif mk == 7:
-            # M7: sample branch opcode
             rng_key_np, subkey = jax.random.split(rng_key_np)
             probs = jax.nn.softmax(params.match7_logits)
             idx = int(jax.random.categorical(subkey, jnp.log(probs)))
             result[pos] = _M7_BYTES[idx]
             pos += 1
         elif mk == 8:
-            # M8: deterministic branch offset
             offset = (-(pos - m1_pos + 1)) & 0xFF
             result[pos] = offset
             pos += 1
 
     # I8 inserts
     rng_key_np, subkey = jax.random.split(rng_key_np)
-    pos = _fill_insert_bytes(params, result, pos, counts[8], subkey)
+    pos = _fill_insert_bytes(params, result, pos, counts[8], subkey,
+                             insert_pos=INSERT_POS_MAP[8])
+
+    if pos != length:
+        return None
+
+    return jnp.array(result, dtype=jnp.int32)
+
+
+def _hmm_sample_full(params, length, rng_key):
+    """Full mode sampler (256-byte, three-region model).
+
+    Structure:
+      Region 1: Core copy loop (8 match bytes + insert bytes)
+      Region 2: Cargo (fill remaining with I4/tail inserts)
+      Region 3: Last 7 bytes are register save area
+    """
+    if length < 15:  # 8 core match + 7 register bytes minimum
+        return None
+
+    # The last 7 bytes are registers, so core + cargo = length - 7
+    core_cargo_len = length - NUM_REG_MATCH
+    insert_slots = core_cargo_len - 8  # 8 core match bytes
+
+    if insert_slots < 0:
+        return None
+
+    delta = jax.nn.sigmoid(params.log_delta)
+    delta_np = np.array(delta)
+
+    rng_key, subkey = jax.random.split(rng_key)
+    counts = _sample_insert_counts(delta_np, insert_slots, subkey)
+    if counts is None:
+        return None
+
+    result = np.zeros(length, dtype=np.int32)
+    pos = 0
+    rng_key_np = rng_key
+
+    # --- Region 1: Core copy loop ---
+    # I0 inserts
+    rng_key_np, subkey = jax.random.split(rng_key_np)
+    pos = _fill_insert_bytes(params, result, pos, counts[0], subkey,
+                             insert_pos=0)
+
+    # M1: 0xB5
+    m1_pos = pos
+    result[pos] = 0xB5
+    pos += 1
+
+    # M2..M8 with inserts
+    for k in range(1, 8):
+        rng_key_np, subkey = jax.random.split(rng_key_np)
+        ip = INSERT_POS_MAP[k]
+        pos = _fill_insert_bytes(params, result, pos, counts[k], subkey,
+                                 insert_pos=ip)
+
+        mk = k + 1
+        if mk <= 5:
+            result[pos] = MATCH_EMISSIONS[mk - 1][0]
+            pos += 1
+        elif mk == 6:
+            rng_key_np, subkey = jax.random.split(rng_key_np)
+            probs = jax.nn.softmax(params.match6_logits)
+            idx = int(jax.random.categorical(subkey, jnp.log(probs)))
+            result[pos] = _M6_BYTES[idx]
+            pos += 1
+        elif mk == 7:
+            rng_key_np, subkey = jax.random.split(rng_key_np)
+            probs = jax.nn.softmax(params.match7_logits)
+            idx = int(jax.random.categorical(subkey, jnp.log(probs)))
+            result[pos] = _M7_BYTES[idx]
+            pos += 1
+        elif mk == 8:
+            offset = (-(pos - m1_pos + 1)) & 0xFF
+            result[pos] = offset
+            pos += 1
+
+    # I8 inserts (cargo/tail)
+    rng_key_np, subkey = jax.random.split(rng_key_np)
+    pos = _fill_insert_bytes(params, result, pos, counts[8], subkey,
+                             insert_pos=INSERT_POS_MAP[8])
+
+    # --- Region 3: Register save area (7 bytes) ---
+    reg_log_probs = jax.nn.log_softmax(params.reg_emission_logits, axis=-1)  # [7, 256]
+    for r in range(NUM_REG_MATCH):
+        rng_key_np, subkey = jax.random.split(rng_key_np)
+        b = int(jax.random.categorical(subkey, reg_log_probs[r]))
+        result[pos] = b
+        pos += 1
 
     if pos != length:
         return None
@@ -897,7 +1163,6 @@ def _sample_insert_counts(delta_np, total, rng_key):
         if d == 0:
             counts[k] = 0
             continue
-        # Sample geometric
         n = 0
         while n < remaining:
             rng_key, subkey = jax.random.split(rng_key)
@@ -908,36 +1173,45 @@ def _sample_insert_counts(delta_np, total, rng_key):
         counts[k] = n
         remaining -= n
 
-    # Distribute remaining to last slot
     if remaining > 0:
         counts[8] += remaining
 
     return counts
 
 
-def _fill_insert_bytes(params, result, pos, count, rng_key):
-    """Fill insert bytes into result array. Returns new position."""
+def _fill_insert_bytes(params, result, pos, count, rng_key, insert_pos=0):
+    """Fill insert bytes into result array using per-position emissions.
+
+    Args:
+        params: HMMParams.
+        result: output array to fill.
+        pos: current position in result.
+        count: number of insert bytes to emit.
+        rng_key: JAX PRNG key.
+        insert_pos: insert position index (0..P-1).
+
+    Returns:
+        new position.
+    """
     emitted = 0
     while emitted < count:
         remaining = count - emitted
         rng_key, path_key, class_key, byte_key = jax.random.split(rng_key, 4)
 
-        # Sample path
-        path_probs = jax.nn.softmax(params.path_mix_logits)
+        path_probs = jax.nn.softmax(params.path_mix_logits[insert_pos])
         path = int(jax.random.categorical(path_key, jnp.log(path_probs)))
 
         if path == 0 or remaining < 2:
-            # 1-byte
-            probs = jax.nn.softmax(params.insert_1byte_logits)
+            probs = jax.nn.softmax(params.insert_1byte_logits[insert_pos])
             b = int(jax.random.categorical(byte_key, jnp.log(probs)))
             result[pos] = b
             pos += 1
             emitted += 1
         elif path == 1 and remaining >= 2:
-            # 2-byte
-            log_pi = jax.nn.log_softmax(params.insert_2byte_mix_logits)
+            log_pi = jax.nn.log_softmax(params.insert_2byte_mix_logits[insert_pos])
             cls = int(jax.random.categorical(class_key, log_pi))
-            log_p = jax.nn.log_softmax(params.insert_2byte_logits[cls], axis=-1)
+            log_p = jax.nn.log_softmax(params.insert_2byte_logits[insert_pos, cls],
+                                        axis=-1)
             rng_key, k1, k2 = jax.random.split(rng_key, 3)
             b1 = int(jax.random.categorical(k1, log_p[0]))
             b2 = int(jax.random.categorical(k2, log_p[1]))
@@ -946,10 +1220,10 @@ def _fill_insert_bytes(params, result, pos, count, rng_key):
             pos += 2
             emitted += 2
         elif path == 2 and remaining >= 3:
-            # 3-byte
-            log_rho = jax.nn.log_softmax(params.insert_3byte_mix_logits)
+            log_rho = jax.nn.log_softmax(params.insert_3byte_mix_logits[insert_pos])
             cls = int(jax.random.categorical(class_key, log_rho))
-            log_p = jax.nn.log_softmax(params.insert_3byte_logits[cls], axis=-1)
+            log_p = jax.nn.log_softmax(params.insert_3byte_logits[insert_pos, cls],
+                                        axis=-1)
             rng_key, k1, k2, k3 = jax.random.split(rng_key, 4)
             b1 = int(jax.random.categorical(k1, log_p[0]))
             b2 = int(jax.random.categorical(k2, log_p[1]))
@@ -960,8 +1234,7 @@ def _fill_insert_bytes(params, result, pos, count, rng_key):
             pos += 3
             emitted += 3
         else:
-            # Fallback: 1-byte
-            probs = jax.nn.softmax(params.insert_1byte_logits)
+            probs = jax.nn.softmax(params.insert_1byte_logits[insert_pos])
             b = int(jax.random.categorical(byte_key, jnp.log(probs)))
             result[pos] = b
             pos += 1
@@ -977,20 +1250,22 @@ def _fill_insert_bytes(params, result, pos, count, rng_key):
 def hmm_log_prob_sequential(params: HMMParams,
                             byte_seq: jnp.ndarray,
                             length: jnp.ndarray,
-                            m1_pos: jnp.ndarray) -> jnp.ndarray:
+                            m1_pos: jnp.ndarray,
+                            mode: str = 'core') -> jnp.ndarray:
     """Compute log P(seq | HMM) by sequential matrix multiplication.
 
     Same semantics as hmm_log_prob but uses a simple loop instead of
     associative scan.  Useful as a reference for testing.
     """
+    S = num_states(mode)
+    END = _end_state(mode)
     L = byte_seq.shape[0]
 
     bytes_t = byte_seq
     bytes_t1 = jnp.concatenate([byte_seq[1:], jnp.zeros(1, dtype=jnp.int32)])
     bytes_t2 = jnp.concatenate([byte_seq[2:], jnp.zeros(2, dtype=jnp.int32)])
 
-    # Initial state vector (log-space)
-    alpha = jnp.full(NUM_STATES, _NEG_INF)
+    alpha = jnp.full(S, _NEG_INF)
     alpha = alpha.at[_ik(0)].set(0.0)
 
     for t in range(L):
@@ -998,15 +1273,17 @@ def hmm_log_prob_sequential(params: HMMParams,
             break
         mat = make_emission_matrix(
             params, bytes_t[t], bytes_t1[t], bytes_t2[t],
-            jnp.int32(t), m1_pos)
-        # alpha' = alpha . M  (in log-space)
+            jnp.int32(t), m1_pos, mode=mode)
         alpha = jax.scipy.special.logsumexp(
             alpha[:, None] + mat, axis=0)
 
-    delta_8 = jax.nn.sigmoid(params.log_delta[8])
-    log_1m_delta_8 = jnp.log(1.0 - delta_8 + 1e-30)
-
-    return alpha[_ik(8)] + log_1m_delta_8
+    if mode == 'full':
+        last_reg = _reg_state(NUM_REG_MATCH - 1)
+        return alpha[last_reg]
+    else:
+        delta_8 = jax.nn.sigmoid(params.log_delta[8])
+        log_1m_delta_8 = jnp.log(1.0 - delta_8 + 1e-30)
+        return alpha[_ik(8)] + log_1m_delta_8
 
 
 # ---------------------------------------------------------------------------

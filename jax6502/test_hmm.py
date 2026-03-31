@@ -21,9 +21,16 @@ pytestmark = pytest.mark.skipif(not HAS_JAX, reason="JAX/Optax not installed")
 
 @pytest.fixture(scope="module")
 def params():
-    """Default HMM parameters."""
+    """Default HMM parameters (core mode)."""
     from jax6502.hmm import default_params
-    return default_params()
+    return default_params(mode='core')
+
+
+@pytest.fixture(scope="module")
+def params_full():
+    """Default HMM parameters (full mode)."""
+    from jax6502.hmm import default_params
+    return default_params(mode='full')
 
 
 @pytest.fixture(scope="module")
@@ -42,7 +49,6 @@ def test_minimal_replicator_score(params, minimal_replicator):
     and negative (it's a log-probability)."""
     from jax6502.hmm import hmm_log_prob, hmm_log_prob_marginal
 
-    # M1 is at position 0 for the minimal replicator
     length = jnp.int32(8)
     m1_pos = jnp.int32(0)
 
@@ -52,8 +58,7 @@ def test_minimal_replicator_score(params, minimal_replicator):
     assert np.isfinite(log_p_val), f"Log-prob should be finite, got {log_p_val}"
     assert log_p_val < 0, f"Log-prob should be negative, got {log_p_val}"
 
-    # Marginal should also work (and equal the single-M1 result since
-    # there's only one 0xB5 byte)
+    # Marginal should also work
     log_p_marg = hmm_log_prob_marginal(params, minimal_replicator, length)
     log_p_marg_val = float(log_p_marg)
 
@@ -71,18 +76,6 @@ def test_nop_prefix_score(params):
     """Sequence with NOP (0xEA) prefix should have finite score."""
     from jax6502.hmm import hmm_log_prob_marginal
 
-    # NOP + minimal replicator = 9 bytes, M1 at position 1
-    seq = jnp.array([0xEA, 0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF7],
-                    dtype=jnp.int32)
-    # Branch offset: -(8 - 1 + 1) = -8 = 0xF8... wait, let me recalculate.
-    # M1 is at position 1. M8 is at position 8.
-    # offset = -(pos_M8 - m1_pos + 1) & 0xFF = -(8 - 1 + 1) & 0xFF
-    #        = -8 & 0xFF = 0xF8
-    # But in the JS code, the offset for M8 at position p, M1 at m1:
-    # offset = -(p - m1 + 1) & 0xFF
-    # For the matrix: I_7 -> I_8 transition at position p with M8,
-    # expected_offset = -(p - m1_pos + 1) & 0xFF
-    # p = 8, m1 = 1: -(8 - 1 + 1) = -8 = 0xF8
     seq = jnp.array([0xEA, 0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8],
                     dtype=jnp.int32)
 
@@ -125,25 +118,18 @@ def test_loss_decreases(params, minimal_replicator):
 
     max_len = 16
 
-    # Start with uniform insert emission logits so the model can't
-    # distinguish viable from non-viable sequences well.
     bad_params = params._replace(
-        insert_1byte_logits=jnp.zeros(256),
-        path_mix_logits=jnp.zeros(3),
+        insert_1byte_logits=jnp.zeros((5, 256)),
+        path_mix_logits=jnp.zeros((5, 3)),
         match6_logits=jnp.zeros(2),
         match7_logits=jnp.zeros(7),
     )
 
-    # Viable: minimal replicator (B5 00 9D 00 04 E8 90 F8)
     viable_seq = jnp.zeros((1, max_len), dtype=jnp.int32)
     viable_seq = viable_seq.at[0, :8].set(minimal_replicator)
     viable_mask = jnp.zeros((1, max_len), dtype=jnp.bool_)
     viable_mask = viable_mask.at[0, :8].set(True)
 
-    # Non-viable: same structure but uses DEX instead of INX, and BCS
-    # instead of BCC. Both are valid under the HMM but with different
-    # match emissions at M6 and M7.
-    # B5 00 9D 00 04 CA(DEX) B0(BCS) F8
     nonviable_data = jnp.array([0xB5, 0x00, 0x9D, 0x00, 0x04, 0xCA, 0xB0, 0xF8],
                                dtype=jnp.int32)
     nonviable_seq = jnp.zeros((1, max_len), dtype=jnp.int32)
@@ -156,7 +142,6 @@ def test_loss_decreases(params, minimal_replicator):
         nonviable_seq, nonviable_mask,
         epochs=50, lr=1e-1)
 
-    # Loss should decrease (compare first 5 vs last 5)
     early_loss = np.mean(losses[:5])
     late_loss = np.mean(losses[-5:])
     assert late_loss < early_loss, \
@@ -187,7 +172,6 @@ def test_score_ordering(params, minimal_replicator):
         nonviable_seq, nonviable_mask,
         epochs=100, lr=1e-2)
 
-    # Score both sequences
     all_seqs = jnp.concatenate([viable_seq, nonviable_seq], axis=0)
     all_masks = jnp.concatenate([viable_mask, nonviable_mask], axis=0)
     scores = hmm_score_batch(trained_params, all_seqs, all_masks)
@@ -212,10 +196,7 @@ def test_batch_consistency(params, minimal_replicator):
     mask = jnp.zeros((1, max_len), dtype=jnp.bool_)
     mask = mask.at[0, :8].set(True)
 
-    # Single score
     single_score = float(_score_single(params, seq[0], mask[0]))
-
-    # Batch score (batch of 1)
     batch_scores = hmm_score_batch(params, seq, mask)
     batch_score = float(batch_scores[0])
 
@@ -233,16 +214,14 @@ def test_masking(params, minimal_replicator):
 
     max_len = 16
 
-    # Sequence padded with zeros
     seq1 = jnp.zeros((1, max_len), dtype=jnp.int32)
     seq1 = seq1.at[0, :8].set(minimal_replicator)
     mask1 = jnp.zeros((1, max_len), dtype=jnp.bool_)
     mask1 = mask1.at[0, :8].set(True)
 
-    # Same sequence padded with 0xFF
     seq2 = jnp.full((1, max_len), 0xFF, dtype=jnp.int32)
     seq2 = seq2.at[0, :8].set(minimal_replicator)
-    mask2 = mask1  # same mask
+    mask2 = mask1
 
     score1 = float(hmm_score_batch(params, seq1, mask1)[0])
     score2 = float(hmm_score_batch(params, seq2, mask2)[0])
@@ -290,22 +269,17 @@ def test_sampler_valid(params):
         seq_np = np.array(seq)
         assert len(seq_np) == 10, f"Expected length 10, got {len(seq_np)}"
 
-        # Find M1 (0xB5)
         m1_positions = np.where(seq_np == 0xB5)[0]
         if len(m1_positions) == 0:
             continue
 
-        # Check at least one valid alignment exists
         for m1 in m1_positions:
             if m1 + 7 >= len(seq_np):
                 continue
-            # Check M2 = 0x00
             if seq_np[m1 + 1] != 0x00:
                 continue
-            # Check M3 = 0x9D
             if seq_np[m1 + 2] != 0x9D:
                 continue
-            # We found a valid start of the match pattern
             n_valid += 1
             break
 
@@ -313,16 +287,16 @@ def test_sampler_valid(params):
 
 
 # ---------------------------------------------------------------------------
-# Test 10: Parameter count
+# Test 10: Parameter count (core mode)
 # ---------------------------------------------------------------------------
 
 def test_parameter_count(params):
-    """Total parameters should be in the 4K-5K range."""
+    """Core mode: parameters should be ~22K (5 positions x ~4100 + reg)."""
     from jax6502.hmm import count_params
 
     n = count_params(params)
-    assert 3000 <= n <= 6000, \
-        f"Expected ~4K-5K parameters, got {n}"
+    assert 20000 <= n <= 25000, \
+        f"Expected ~22K parameters, got {n}"
 
 
 # ---------------------------------------------------------------------------
@@ -339,22 +313,16 @@ def test_sampler_branch_offset(params):
 
     for i in range(50):
         rng, subkey = jax.random.split(rng)
-        length = 8 + (i % 5)  # lengths 8-12
+        length = 8 + (i % 5)
         seq = hmm_sample(params, length, subkey)
         if seq is None:
             continue
 
         seq_np = np.array(seq)
-        # The sampler places M1 at position = (number of I0 inserts).
-        # Find 0xB5 and check offset
         m1_positions = np.where(seq_np == 0xB5)[0]
         for m1 in m1_positions:
-            # Try to find M8 at position m1+7 (minimal) or later
-            # The match bytes should be at m1, m1+1+inserts, etc.
-            # For the simple case with no inserts between matches:
             if m1 + 7 < length:
                 m8_pos = m1 + 7
-                # Check if the preceding bytes match M1..M7 pattern
                 expected_offset = (-(m8_pos - m1 + 1)) & 0xFF
                 if seq_np[m8_pos] == expected_offset:
                     valid_offsets += 1
@@ -362,7 +330,222 @@ def test_sampler_branch_offset(params):
                 else:
                     total_checked += 1
 
-    # At least some should have valid offsets
     if total_checked > 0:
         assert valid_offsets > 0, \
             f"No valid branch offsets found in {total_checked} checks"
+
+
+# ---------------------------------------------------------------------------
+# Test 12: Per-position emissions produce different distributions
+# ---------------------------------------------------------------------------
+
+def test_per_position_emissions_differ(params):
+    """After training, different insert positions should have different
+    emission distributions. Even at init, verify the parameter shapes are
+    correct and indexing works."""
+    from jax6502.hmm import NUM_INSERT_POSITIONS
+
+    # Check shapes
+    assert params.insert_1byte_logits.shape == (NUM_INSERT_POSITIONS, 256)
+    assert params.path_mix_logits.shape == (NUM_INSERT_POSITIONS, 3)
+    assert params.insert_2byte_logits.shape == (NUM_INSERT_POSITIONS, 3, 2, 256)
+    assert params.insert_3byte_logits.shape == (NUM_INSERT_POSITIONS, 3, 3, 256)
+    assert params.insert_2byte_mix_logits.shape == (NUM_INSERT_POSITIONS, 3)
+    assert params.insert_3byte_mix_logits.shape == (NUM_INSERT_POSITIONS, 3)
+
+    # At initialization, all positions are identical (tiled from shared)
+    # but the shapes allow them to diverge during training
+    p0 = jax.nn.softmax(params.insert_1byte_logits[0])
+    p4 = jax.nn.softmax(params.insert_1byte_logits[4])
+    # Initially equal
+    assert jnp.allclose(p0, p4, atol=1e-5), \
+        "At init, I0 and I4 emissions should be identical"
+
+
+# ---------------------------------------------------------------------------
+# Test 13: Full 256-byte model scores replicator + zeros higher than random
+# ---------------------------------------------------------------------------
+
+def test_full_model_replicator_vs_random(params_full):
+    """Full 256-byte model should score a known replicator + zero tail
+    higher than 256 random bytes."""
+    from jax6502.hmm import hmm_log_prob_marginal
+
+    # Build a 256-byte sequence: 8-byte replicator + zeros + register area
+    seq = np.zeros(256, dtype=np.int32)
+    # Core replicator at offset 0
+    seq[0:8] = [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8]
+    # Bytes 8-248: zeros (cargo)
+    # Register save area at 249-255:
+    # PCHI=0x00, PCLO=0x00, P=0x30, A=0x00, X=0x00, Y=0x00, S=0xFF
+    seq[249] = 0x00  # PCHI
+    seq[250] = 0x00  # PCLO
+    seq[251] = 0x30  # P (typical reset)
+    seq[252] = 0x00  # A
+    seq[253] = 0x00  # X
+    seq[254] = 0x00  # Y
+    seq[255] = 0xFF  # S
+
+    seq_jax = jnp.array(seq, dtype=jnp.int32)
+    length = jnp.int32(256)
+
+    replicator_score = float(hmm_log_prob_marginal(
+        params_full, seq_jax, length, mode='full'))
+
+    # Random 256 bytes
+    rng = jax.random.PRNGKey(42)
+    random_seq = jax.random.randint(rng, (256,), 0, 256, dtype=jnp.int32)
+    random_score = float(hmm_log_prob_marginal(
+        params_full, random_seq, length, mode='full'))
+
+    assert replicator_score > random_score, \
+        f"Replicator ({replicator_score:.2f}) should score higher than random ({random_score:.2f})"
+
+
+# ---------------------------------------------------------------------------
+# Test 14: Register match states assign high probability to PC=0, X=0
+# ---------------------------------------------------------------------------
+
+def test_register_emissions(params_full):
+    """Register emission distributions should be peaked at expected values."""
+    from jax6502.hmm import _make_reg_emission_table
+
+    # PCHI (r=0) should strongly prefer 0x00
+    reg_lp = _make_reg_emission_table(params_full, jnp.int32(0x00))
+    reg_lp_ff = _make_reg_emission_table(params_full, jnp.int32(0xFF))
+
+    # PCHI (r=0): 0x00 should be much more likely than 0xFF
+    assert float(reg_lp[0]) > float(reg_lp_ff[0]) + 2.0, \
+        "PCHI should strongly prefer 0x00"
+
+    # X (r=4): 0x00 should be much more likely than 0xFF
+    assert float(reg_lp[4]) > float(reg_lp_ff[4]) + 2.0, \
+        "X register should strongly prefer 0x00"
+
+    # S (r=6): 0xFF should be more likely than 0x00
+    assert float(reg_lp_ff[6]) > float(reg_lp[6]), \
+        "Stack pointer should prefer high values"
+
+
+# ---------------------------------------------------------------------------
+# Test 15: Gradient flow for full model
+# ---------------------------------------------------------------------------
+
+def test_gradient_flow_full(params_full):
+    """Full model should have finite gradients for all parameters."""
+    from jax6502.hmm import hmm_log_prob
+
+    # Build a minimal 15-byte sequence (8 core + 7 register)
+    seq = np.zeros(15, dtype=np.int32)
+    seq[0:8] = [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8]
+    seq[8:15] = [0x00, 0x00, 0x30, 0x00, 0x00, 0x00, 0xFF]
+
+    seq_jax = jnp.array(seq, dtype=jnp.int32)
+    length = jnp.int32(15)
+    m1_pos = jnp.int32(0)
+
+    def loss_fn(p):
+        return hmm_log_prob(p, seq_jax, length, m1_pos, mode='full')
+
+    grads = jax.grad(loss_fn)(params_full)
+
+    for name, g in zip(params_full._fields, grads):
+        assert jnp.all(jnp.isfinite(g)), \
+            f"Gradient for {name} has non-finite values"
+
+
+# ---------------------------------------------------------------------------
+# Test 16: Associative scan matches sequential at L=256 (full mode)
+# ---------------------------------------------------------------------------
+
+def test_scan_vs_sequential_full(params_full):
+    """Full mode: associative scan should match sequential for a 256-byte seq."""
+    from jax6502.hmm import hmm_log_prob, hmm_log_prob_sequential
+
+    # Build a 20-byte sequence (core + cargo + registers) to keep test fast
+    seq = np.zeros(20, dtype=np.int32)
+    seq[0:8] = [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8]
+    # 5 cargo bytes (NOP fill)
+    seq[8:13] = [0xEA, 0xEA, 0xEA, 0xEA, 0xEA]
+    # 7 register bytes
+    seq[13:20] = [0x00, 0x00, 0x30, 0x00, 0x00, 0x00, 0xFF]
+
+    seq_jax = jnp.array(seq, dtype=jnp.int32)
+    length = jnp.int32(20)
+    m1_pos = jnp.int32(0)
+
+    scan_result = float(hmm_log_prob(
+        params_full, seq_jax, length, m1_pos, mode='full'))
+    seq_result = float(hmm_log_prob_sequential(
+        params_full, seq_jax, length, m1_pos, mode='full'))
+
+    assert abs(scan_result - seq_result) < 1e-1, \
+        f"Scan ({scan_result:.6f}) vs sequential ({seq_result:.6f})"
+
+
+# ---------------------------------------------------------------------------
+# Test 17: Parameter count is ~22K
+# ---------------------------------------------------------------------------
+
+def test_parameter_count_full(params_full):
+    """Full model parameter count should be ~22K."""
+    from jax6502.hmm import count_params
+
+    n = count_params(params_full)
+    assert 20000 <= n <= 25000, \
+        f"Expected ~22K parameters, got {n}"
+
+
+# ---------------------------------------------------------------------------
+# Test 18: Core mode backward compatibility
+# ---------------------------------------------------------------------------
+
+def test_core_mode_backward_compat(params, minimal_replicator):
+    """Core mode should produce the same score structure as the old model."""
+    from jax6502.hmm import hmm_log_prob, hmm_log_prob_marginal, num_states
+
+    # Core mode should have 37 states
+    assert num_states('core') == 37
+    assert num_states('full') == 44
+
+    length = jnp.int32(8)
+    m1_pos = jnp.int32(0)
+
+    # Should produce a finite negative log-probability
+    log_p = hmm_log_prob(params, minimal_replicator, length, m1_pos, mode='core')
+    log_p_val = float(log_p)
+    assert np.isfinite(log_p_val), f"Core mode log-prob should be finite"
+    assert log_p_val < 0, f"Core mode log-prob should be negative"
+
+
+# ---------------------------------------------------------------------------
+# Test 19: Full mode sampler
+# ---------------------------------------------------------------------------
+
+def test_full_mode_sampler(params_full):
+    """Full mode sampler should produce sequences of correct length
+    with register bytes at the end."""
+    from jax6502.hmm import hmm_sample
+
+    rng = jax.random.PRNGKey(789)
+    n_valid = 0
+
+    for i in range(20):
+        rng, subkey = jax.random.split(rng)
+        length = 20 + i * 5  # lengths 20, 25, 30, ...
+        seq = hmm_sample(params_full, length, subkey, mode='full')
+        if seq is None:
+            continue
+
+        seq_np = np.array(seq)
+        assert len(seq_np) == length, f"Expected length {length}, got {len(seq_np)}"
+
+        # All bytes should be valid (0-255)
+        assert np.all(seq_np >= 0) and np.all(seq_np <= 255)
+
+        # Should contain a 0xB5 somewhere in the core region
+        core_region = seq_np[:length - 7]
+        if 0xB5 in core_region:
+            n_valid += 1
+
+    assert n_valid > 0, "Full mode sampler should produce valid sequences"

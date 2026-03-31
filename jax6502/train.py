@@ -23,6 +23,7 @@ import optax
 from .hmm import (
     HMMParams,
     NUM_STATES,
+    NUM_INSERT_POSITIONS,
     _score_single,
     default_params,
     hmm_log_prob_marginal,
@@ -551,9 +552,9 @@ def ema_mixture_update(hmm_params, viable_seqs, viable_masks, alpha=0.01):
     byte_probs = byte_counts / total
     byte_log_probs = np.log(np.maximum(byte_probs, 1e-30))
 
-    # EMA update on 1-byte insert logits
-    old_logits = np.asarray(hmm_params.insert_1byte_logits)
-    new_logits = (1.0 - alpha) * old_logits + alpha * byte_log_probs.astype(np.float32)
+    # EMA update on 1-byte insert logits (all positions get the same update)
+    old_logits = np.asarray(hmm_params.insert_1byte_logits)  # [P, 256]
+    new_logits = (1.0 - alpha) * old_logits + alpha * byte_log_probs.astype(np.float32)[None, :]
 
     return hmm_params._replace(
         insert_1byte_logits=jnp.array(new_logits)
@@ -598,10 +599,10 @@ def compute_metrics(hmm_params, replay_buffer, epoch):
     else:
         metrics['beff'] = float('inf')
 
-    # Insert emission entropy
-    log_probs = jax.nn.log_softmax(hmm_params.insert_1byte_logits)
+    # Insert emission entropy (average across positions)
+    log_probs = jax.nn.log_softmax(hmm_params.insert_1byte_logits, axis=-1)  # [P, 256]
     probs = jnp.exp(log_probs)
-    entropy = -float(jnp.sum(probs * log_probs))
+    entropy = -float(jnp.sum(probs * log_probs) / probs.shape[0])
     metrics['insert_entropy'] = entropy
 
     # Score statistics on buffer contents
