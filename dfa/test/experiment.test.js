@@ -123,9 +123,10 @@ describe('Full parameter sweep + B_eff', () => {
         console.log(`  TOTAL: ${beff.total.toFixed(1)} bits`);
         console.log(`  → 1 in 2^${beff.total.toFixed(1)} ≈ 1 in ${(2 ** beff.total).toExponential(1)} random bytes`);
 
-        // Should have exactly 6 functional mutants (from empirical observation)
-        expect(weights.nSuccess).toBe(6);
-        expect(beff.workingPairs).toBe(6);
+        // Should have exactly 4 spreading mutants (infinite-loop variants only)
+        // BPL and BNE copy but don't spread (finite loop, spread≈5)
+        expect(weights.nSuccess).toBe(4);
+        expect(beff.workingPairs).toBe(4);
 
         // List all functional mutants with spread classification
         const mutants = results.filter(r => r.copied);
@@ -199,7 +200,7 @@ describe('Weighted sampling only picks working combos', () => {
     }, 30000);
 });
 
-describe('Prefix slide sweep (256 × 6 = 1536 simulations)', () => {
+describe('Prefix slide sweep (256 × 4 = 1024 simulations)', () => {
     it('finds safe, risky, and lethal prefixes', async () => {
         const { byPrefix, summary } = await sweepPrefix({ passes: 80, seed: 42 });
         const { safe, risky, lethal } = classifyPrefixes(byPrefix);
@@ -245,37 +246,29 @@ describe('Prefix slide sweep (256 × 6 = 1536 simulations)', () => {
 });
 
 describe('Insertion between INC and branch (pos 6)', () => {
-    it('finds richer probability distribution', async () => {
+    it('carry-setting opcodes kill BCC but not BVC', async () => {
         // Insert between INX/DEX and the branch opcode.
-        // The inserted byte executes AFTER the inc, BEFORE the branch.
-        // Flag-modifying opcodes directly affect the branch decision.
+        // With only BVC and BCC as viable branches:
+        // - opcodes that set C → kill BCC → P=0.5
+        // - opcodes that don't touch C or V → safe → P=1.0
+        // - multi-byte opcodes or register-corrupting → lethal → P=0
         const { byPrefix, summary } = await sweepInsert(6, { passes: 80, seed: 42 });
         const { safe, risky, lethal } = classifyPrefixes(byPrefix);
 
         console.log(`\n=== Insert at pos 6 (between INC and branch) ===`);
         console.log(`  Safe: ${safe.length}, Risky: ${risky.length}, Lethal: ${lethal.length}`);
 
-        // Risky opcodes — these modify flags that the branch reads
-        console.log('\n--- Risky (0 < P < 1) ---');
+        console.log('\n--- Risky (P=0.5: kills BCC, spares BVC) ---');
         for (const r of risky) {
-            const pairList = Object.entries(r.perPair)
-                .filter(([_, ok]) => ok)
-                .map(([k]) => k)
-                .join(', ');
-            console.log(`  $${r.hex}: P=${r.p.toFixed(3)} (${r.successes}/${r.total}) — ${pairList}`);
+            console.log(`  $${r.hex}: P=${r.p.toFixed(3)} (${r.successes}/${r.total})`);
         }
 
-        // Should have richer probability distribution than prefix position
-        const allPs = [...byPrefix.values()].map(d => d.p);
-        const uniquePs = [...new Set(allPs)].sort((a, b) => a - b);
-        console.log(`\n  Unique probability values: ${uniquePs.map(p => p.toFixed(3)).join(', ')}`);
-
-        // Safe opcodes at this position
-        console.log(`\n--- Safe ($${safe.length} opcodes) ---`);
-        for (const s of safe) {
-            console.log(`  $${s.hex}`);
+        // All risky opcodes should be carry-setters with P=0.5
+        for (const r of risky) {
+            expect(r.p).toBeCloseTo(0.5, 5);
         }
 
         expect(risky.length).toBeGreaterThan(0);
+        expect(safe.length).toBeGreaterThan(20);
     }, 120000);
 });

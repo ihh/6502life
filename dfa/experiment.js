@@ -222,23 +222,23 @@ export function estimateWeights(examples) {
 export function theoreticalBranchPredictions() {
     return {
         INX: {
-            0x10: true,   // BPL: finite loop (128 iter), copies bytes 0-127
+            0x10: false,  // BPL: finite loop (128 iter), copies but doesn't spread
             0x30: false,  // BMI: N=0 after first INX, never taken
-            0x50: true,   // BVC: infinite loop (V unchanged)
+            0x50: true,   // BVC: infinite loop (V unchanged) → spreads
             0x70: false,  // BVS: V=0, never taken
-            0x90: true,   // BCC: infinite loop (C unchanged)
+            0x90: true,   // BCC: infinite loop (C unchanged) → spreads
             0xB0: false,  // BCS: C=0, never taken
-            0xD0: true,   // BNE: finite loop (256 iter), copies all bytes
+            0xD0: false,  // BNE: finite loop (256 iter), copies but doesn't spread
             0x00: false,  // BRK: breaks immediately
         },
         DEX: {
             0x10: false,  // BPL: X=0xFF→N=1, not taken first iter
             0x30: false,  // BMI: copies X=0,FF..80 only — misses bytes 1-7
-            0x50: true,   // BVC: infinite loop (V unchanged)
+            0x50: true,   // BVC: infinite loop (V unchanged) → spreads
             0x70: false,  // BVS: V=0, never taken
-            0x90: true,   // BCC: infinite loop (C unchanged)
+            0x90: true,   // BCC: infinite loop (C unchanged) → spreads
             0xB0: false,  // BCS: C=0, never taken
-            0xD0: false,  // BNE: copies all bytes but post-loop corruption
+            0xD0: false,  // BNE: copies all bytes but doesn't spread
             0x00: false,  // BRK: breaks immediately
         },
     };
@@ -402,12 +402,12 @@ export async function runTrainingLoop(opts = {}) {
 
 // --- Prefix slide experiments ---
 
-/** The 6 working (inc, branch) pairs from the full sweep. */
+/** The 4 spreading (inc, branch) pairs from the full sweep.
+ *  Only infinite-loop variants (BVC, BCC) achieve exponential spread.
+ *  BPL/BNE copy but their finite loops don't sustain growth. */
 const WORKING_PAIRS = [
-    { inc: 0xE8, branch: 0x10 }, // INX+BPL
     { inc: 0xE8, branch: 0x50 }, // INX+BVC
     { inc: 0xE8, branch: 0x90 }, // INX+BCC
-    { inc: 0xE8, branch: 0xD0 }, // INX+BNE
     { inc: 0xCA, branch: 0x50 }, // DEX+BVC
     { inc: 0xCA, branch: 0x90 }, // DEX+BCC
 ];

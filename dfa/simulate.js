@@ -19,7 +19,7 @@ import { BareSimCPU } from '../webgpu/bare-sim-cpu.js';
  *
  * @typedef {Object} SimResult
  * @property {boolean} loops - T1: does the program loop (writes to neighbor)?
- * @property {boolean} copied - T2: did it copy its bytes to a neighbor?
+ * @property {boolean} copied - did it spread? (exponential growth, not just one copy)
  * @property {number} fidelity - fraction of bytes that match in best copy
  * @property {number} spread - number of cells containing a copy
  * @property {number} functional - census functional count
@@ -81,7 +81,7 @@ export async function simulateCandidate(cellBytes, opts = {}) {
 
     return {
         loops: hasWrites,
-        copied: spread > 0,
+        copied: spread > (boardSize * boardSize) / 2,
         fidelity: bestFidelity,
         spread,
         functional: census.functional,
@@ -98,7 +98,7 @@ export async function simulateCandidate(cellBytes, opts = {}) {
  */
 export async function quickReplicationCheck(cellBytes, opts = {}) {
     const result = await simulateCandidate(cellBytes, {
-        passes: 30,
+        passes: 80,
         seed: opts.seed || 42,
         ...opts,
     });

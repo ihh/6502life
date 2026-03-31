@@ -5,11 +5,11 @@ import { simulateCandidate, quickReplicationCheck } from '../simulate.js';
 const REP = new Uint8Array([0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8]);
 
 describe('simulateCandidate', () => {
-    it('canonical replicator copies to neighbors', async () => {
+    it('canonical replicator spreads across board', async () => {
         const result = await simulateCandidate(REP, { passes: 100, seed: 42 });
-        expect(result.copied).toBe(true);
+        expect(result.copied).toBe(true); // spread > half the board
         expect(result.fidelity).toBe(1.0);
-        expect(result.spread).toBeGreaterThan(0);
+        expect(result.spread).toBeGreaterThan(32); // >50% of 8×8-1 cells
     });
 
     it('canonical replicator has functional cells in census', async () => {
@@ -30,11 +30,13 @@ describe('simulateCandidate', () => {
         expect(result.copied).toBe(false);
     });
 
-    it('BNE variant replicates', async () => {
-        // Same as canonical but BNE instead of BCC
+    it('BNE variant copies but does not spread', async () => {
+        // BNE: finite loop (256 iterations then falls through).
+        // Copies bytes but doesn't sustain exponential growth.
         const bne = new Uint8Array([0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0xD0, 0xF8]);
         const result = await simulateCandidate(bne, { passes: 100, seed: 42 });
-        expect(result.copied).toBe(true);
+        expect(result.spread).toBeGreaterThan(0);   // does copy
+        expect(result.copied).toBe(false);            // but doesn't spread
     });
 });
 
