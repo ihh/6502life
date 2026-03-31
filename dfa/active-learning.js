@@ -18,6 +18,13 @@ import {
 } from './weighted-sampler.js';
 import { simulateCandidate } from './simulate.js';
 
+// 24 safe single-byte opcodes (from prefix sweep, P=1.0 with all 4 viable pairs)
+const SAFE_SLIDE_OPS = new Set([
+    0x08, 0x18, 0x1A, 0x28, 0x3A, 0x48, 0x58, 0x5A,
+    0x60, 0x68, 0x78, 0x7A, 0x88, 0x8A, 0x98, 0x9A,
+    0xA8, 0xB8, 0xC8, 0xD8, 0xDA, 0xEA, 0xF8, 0xFA,
+]);
+
 /**
  * Compute entropy of a Bernoulli(p) variable: -p log p - (1-p) log (1-p).
  * @param {number} p
@@ -173,6 +180,41 @@ export async function activeIteration(transducer, acceptStates, L, rng, opts = {
         nUncertain: uncertain.length,
         meanEntropy,
     };
+}
+
+/**
+ * Pre-seed slide weights from known safe opcodes.
+ * Sets weight=lowWeight for non-safe bytes at slide states,
+ * keeping safe bytes at 1.0. This concentrates sampling on
+ * plausible slide bytes, enabling training at longer lengths.
+ *
+ * @param {import('./transducer.js').CopyTransducer} transducer
+ * @param {string[]} slideStateNames - opcode state names that are slide states
+ * @param {import('./transducer.js').CopyTransducer} opcode - for state index lookup
+ * @param {import('./transducer.js').CopyTransducer} offset - for product state computation
+ * @param {Object} [opts]
+ * @param {number} [opts.lowWeight=0.01] - weight for non-safe slide bytes
+ */
+export function preseedSlideWeights(transducer, opcode, offset, opts = {}) {
+    const { lowWeight = 0.01 } = opts;
+    const slideNames = ['slide0', 'slide1', 'slide2', 'slide3'];
+    const nS = offset.numStates;
+
+    for (const name of slideNames) {
+        const opcIdx = opcode.stateIdx.get(name);
+        if (opcIdx === undefined) continue;
+
+        for (let posK = 0; posK < nS; posK++) {
+            const prodState = opcIdx * nS + posK;
+            for (let b = 0; b < 256; b++) {
+                const t = transducer.trans[prodState * 256 + b];
+                if (!t || t.verdict === FAIL) continue;
+                if (!SAFE_SLIDE_OPS.has(b)) {
+                    t.weight = lowWeight;
+                }
+            }
+        }
+    }
 }
 
 /**
