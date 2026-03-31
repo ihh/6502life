@@ -54,8 +54,8 @@ def run_test(tc):
     errors = []
     if int(new_pc) != expected['PC']:
         errors.append(f"PC: {int(new_pc)} != {expected['PC']}")
-    if int(new_a) != expected['A']:
-        errors.append(f"A: {int(new_a)} != {expected['A']}")
+    if int(new_a) != (expected['A'] & 0xFF):
+        errors.append(f"A: {int(new_a)} != {expected['A'] & 0xFF}")
     if int(new_x) != expected['X']:
         errors.append(f"X: {int(new_x)} != {expected['X']}")
     if int(new_y) != expected['Y']:

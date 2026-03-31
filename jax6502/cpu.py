@@ -50,22 +50,53 @@ def _nz_flags(val, p):
     return (p & ~(F_N | F_Z)) | n | z
 
 
-def _exec_adc(a, val, p):
-    """ADC: A + val + C. Returns (result, new_p).
-    Binary mode only — Sfotty ignores BCD (D flag has no effect)."""
+def _exec_adc_binary(a, val, p):
+    """ADC in binary mode: A + val + C."""
     c_in = p & F_C
     sum16 = a + val + c_in
     result = sum16 & 0xFF
     c_out = jnp.where(sum16 > 255, F_C, 0)
-    # Overflow: sign of result differs from both inputs
     v = jnp.where(((a ^ result) & (val ^ result) & 0x80) != 0, F_V, 0)
     new_p = _nz_flags(result, p & ~(F_C | F_V)) | c_out | v
     return result, new_p
 
 
-def _exec_sbc(a, val, p):
-    """SBC: A - val - !C. Returns (result, new_p).
-    Binary mode only — Sfotty ignores BCD (D flag has no effect)."""
+def _exec_adc_bcd(a, val, p):
+    """ADC in BCD mode, matching Sfotty's NMOS 6502 behavior.
+    al = (A & 0xF) + (val & 0xF) + C; if al > 9: al += 6
+    ah = (A >> 4) + (val >> 4) + (al > 15); V from (ah << 4)
+    if ah > 9: ah += 6; C = ah > 15
+    result = (ah << 4) | (al & 0xF)  [not masked to 8 bits in Sfotty]
+    N/Z from result (not masked)
+    """
+    c_in = p & F_C
+    al = (a & 0xF) + (val & 0xF) + c_in
+    al = jnp.where(al > 9, al + 6, al)
+    ah = (a >> 4) + (val >> 4) + jnp.where(al > 15, 1, 0)
+    # V: ~(A ^ val) & (A ^ (ah << 4)) & 0x80
+    v = jnp.where((~(a ^ val) & (a ^ (ah << 4)) & 0x80) != 0, F_V, 0)
+    ah = jnp.where(ah > 9, ah + 6, ah)
+    c_out = jnp.where(ah > 15, F_C, 0)
+    result = (ah << 4) | (al & 0xF)  # Can be > 255 (Sfotty quirk)
+    # N/Z from unmasked result
+    n = jnp.where(result >= 128, F_N, 0)
+    z = jnp.where(result == 0, F_Z, 0)
+    new_p = (p & ~(F_N | F_Z | F_C | F_V)) | n | z | c_out | v
+    return result & 0xFF, new_p
+
+
+def _exec_adc(a, val, p):
+    """ADC: A + val + C. Dispatches between binary and BCD mode."""
+    bin_result, bin_p = _exec_adc_binary(a, val, p)
+    bcd_result, bcd_p = _exec_adc_bcd(a, val, p)
+    is_bcd = (p & F_D) != 0
+    result = jnp.where(is_bcd, bcd_result, bin_result)
+    new_p = jnp.where(is_bcd, bcd_p, bin_p)
+    return result, new_p
+
+
+def _exec_sbc_binary(a, val, p):
+    """SBC in binary mode: A - val - !C."""
     c_in = p & F_C
     inv = val ^ 0xFF
     sum16 = a + inv + c_in
@@ -73,6 +104,39 @@ def _exec_sbc(a, val, p):
     c_out = jnp.where(sum16 > 255, F_C, 0)
     v = jnp.where(((a ^ result) & (inv ^ result) & 0x80) != 0, F_V, 0)
     new_p = _nz_flags(result, p & ~(F_C | F_V)) | c_out | v
+    return result, new_p
+
+
+def _exec_sbc_bcd(a, val, p):
+    """SBC in BCD mode, matching Sfotty's exact algorithm.
+    Note: Sfotty uses `- c` (not `- (1-c)`) in the BCD nibble math,
+    which inverts the usual 6502 borrow convention for BCD mode.
+    """
+    c_in = p & F_C
+    # Binary subtraction for V and C flags
+    diff = a + (val ^ 0xFF) + c_in
+    v = jnp.where(((a ^ val) & (a ^ diff) & 0x80) != 0, F_V, 0)
+    c_out = jnp.where(diff > 255, F_C, 0)
+    # BCD nibble subtraction (Sfotty convention: subtracts c, not 1-c)
+    al = (a & 0xF) - (val & 0xF) - c_in
+    al = jnp.where((al & 0xFF) > 127, al - 6, al)
+    ah = (a >> 4) - (val >> 4) - jnp.where((al & 0xFF) > 127, 1, 0)
+    ah = jnp.where(ah & 128, ah - 6, ah)
+    result = (ah << 4) | (al & 0xF)
+    # N/Z from result
+    n = jnp.where(result >= 128, F_N, 0)
+    z = jnp.where(result == 0, F_Z, 0)
+    new_p = (p & ~(F_N | F_Z | F_C | F_V)) | n | z | c_out | v
+    return result & 0xFF, new_p
+
+
+def _exec_sbc(a, val, p):
+    """SBC: A - val - !C. Dispatches between binary and BCD mode."""
+    bin_result, bin_p = _exec_sbc_binary(a, val, p)
+    bcd_result, bcd_p = _exec_sbc_bcd(a, val, p)
+    is_bcd = (p & F_D) != 0
+    result = jnp.where(is_bcd, bcd_result, bin_result)
+    new_p = jnp.where(is_bcd, bcd_p, bin_p)
     return result, new_p
 
 
