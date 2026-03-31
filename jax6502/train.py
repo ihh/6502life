@@ -25,13 +25,16 @@ from .hmm import (
     NUM_STATES,
     NUM_INSERT_POSITIONS,
     _score_single,
+    _score_single_full,
     default_params,
     hmm_log_prob_marginal,
     hmm_sample,
     hmm_score_batch,
+    hmm_score_batch_full,
     count_params,
 )
 from .fast_board import FastBoard, _run_one_quantum, _run_pass, run_rounds
+from .chacha20 import chacha20_stream, seed_to_key, derive_nonce
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +49,85 @@ REG_A = 0xFC
 REG_X = 0xFD
 REG_Y = 0xFE
 REG_S = 0xFF
+
+
+# ---------------------------------------------------------------------------
+# 0. ChaCha20 negatives generator
+# ---------------------------------------------------------------------------
+
+def generate_chacha20_negatives(num_cells, rng_key, cell_bytes=256,
+                                board_size=16):
+    """Generate random cell contents via ChaCha20.
+
+    Pick a random seed, generate a board, extract cell zero pages.
+    These are IID uniform bytes -- the null model for NCE.
+
+    Args:
+        num_cells: number of cell zero pages to generate.
+        rng_key: JAX PRNG key (used to pick the seed).
+        cell_bytes: number of bytes per cell to extract (default 256).
+        board_size: board dimension (board_size x board_size cells).
+
+    Returns:
+        (sequences, masks) ready for HMM scoring.
+        sequences: int32[num_cells, cell_bytes]
+        masks: bool[num_cells, cell_bytes]
+    """
+    # Pick a random seed integer
+    seed_int = int(jr.randint(rng_key, (), 0, 2**30))
+    seed_str = str(seed_int)
+
+    key = seed_to_key(seed_str)
+    nonce = derive_nonce(board_size)
+    total_cells = board_size * board_size
+
+    # Generate only the bytes we need: cell_bytes per cell.
+    # Each cell is 1024 bytes in the full board, but we only need the first
+    # cell_bytes. We generate the full board stream and extract zero pages.
+    # Optimization: generate only 4 ChaCha20 blocks per cell (256 bytes)
+    # instead of 16 (1024 bytes) when cell_bytes <= 256.
+    if cell_bytes <= 256:
+        # Generate full board (we need contiguous blocks per cell at stride 1024)
+        # ChaCha20 is a stream cipher -- bytes at offset i*1024 require
+        # generating the intervening blocks. So generate the full stream
+        # but only keep the first cell_bytes of each 1024-byte cell.
+        num_blocks = (total_cells * 1024 + 63) // 64
+        stream = chacha20_stream(key, nonce, num_blocks)
+        stream = stream[:total_cells * 1024]
+
+        # Extract zero pages (first cell_bytes of each 1024-byte cell)
+        storage = stream.reshape(total_cells, 1024)
+        zero_pages = storage[:, :cell_bytes]  # [total_cells, cell_bytes]
+    else:
+        num_blocks = (total_cells * 1024 + 63) // 64
+        stream = chacha20_stream(key, nonce, num_blocks)
+        stream = stream[:total_cells * 1024]
+        storage = stream.reshape(total_cells, 1024)
+        zero_pages = storage[:, :cell_bytes]
+
+    # Select num_cells from the total (cycling if needed)
+    if num_cells <= total_cells:
+        selected = zero_pages[:num_cells]
+    else:
+        # Generate additional boards if needed
+        all_pages = [zero_pages]
+        remaining = num_cells - total_cells
+        while remaining > 0:
+            rng_key, subkey = jr.split(rng_key)
+            seed_int = int(jr.randint(subkey, (), 0, 2**30))
+            key2 = seed_to_key(str(seed_int))
+            stream2 = chacha20_stream(key2, nonce, num_blocks)
+            stream2 = stream2[:total_cells * 1024]
+            storage2 = stream2.reshape(total_cells, 1024)
+            batch = storage2[:min(remaining, total_cells), :cell_bytes]
+            all_pages.append(batch)
+            remaining -= total_cells
+        selected = jnp.concatenate(all_pages, axis=0)[:num_cells]
+
+    sequences = selected.astype(jnp.int32)
+    masks = jnp.ones((num_cells, cell_bytes), dtype=jnp.bool_)
+
+    return sequences, masks
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +238,8 @@ class OracleCascade:
     def __init__(self, hmm_params, oracle_state=None, simulate_fn=None,
                  hmm_threshold=20.0,
                  oracle_budget=1000,
-                 sim_budget=100):
+                 sim_budget=100,
+                 mode='core'):
         """
         Args:
             hmm_params: HMMParams for level-0 scoring.
@@ -165,6 +248,7 @@ class OracleCascade:
             hmm_threshold: filter candidates where |s_theta(x)| < threshold.
             oracle_budget: max neural oracle evaluations per cascade call.
             sim_budget: max simulation evaluations per cascade call.
+            mode: 'core' or 'full'.
         """
         self.hmm_params = hmm_params
         self.oracle_state = oracle_state
@@ -172,6 +256,7 @@ class OracleCascade:
         self.hmm_threshold = hmm_threshold
         self.oracle_budget = oracle_budget
         self.sim_budget = sim_budget
+        self.mode = mode
 
     def evaluate(self, candidates_seqs, candidates_masks, rng_key,
                  board_size=8, num_quanta=200):
@@ -194,8 +279,16 @@ class OracleCascade:
         N = candidates_seqs.shape[0]
 
         # Level 0: HMM scoring (all candidates)
-        hmm_scores = np.asarray(hmm_score_batch(
-            self.hmm_params, candidates_seqs, candidates_masks))
+        if self.mode == 'full':
+            # Score one at a time to avoid OOM on long sequences
+            hmm_scores = np.array([
+                float(_score_single_full(
+                    self.hmm_params, candidates_seqs[i], candidates_masks[i]))
+                for i in range(N)
+            ], dtype=np.float32)
+        else:
+            hmm_scores = np.asarray(hmm_score_batch(
+                self.hmm_params, candidates_seqs, candidates_masks))
 
         # Initialize labels as NaN (unknown)
         labels = np.full(N, np.nan, dtype=np.float32)
@@ -263,12 +356,19 @@ class OracleCascade:
 # ---------------------------------------------------------------------------
 
 def _compute_hmm_log_prob(params, seq, mask):
-    """Compute log P(x | HMM) for a single sequence."""
+    """Compute log P(x | HMM) for a single sequence (core mode)."""
     length = mask.sum().astype(jnp.int32)
     return hmm_log_prob_marginal(params, seq, length)
 
 
+def _compute_hmm_log_prob_full(params, seq, mask):
+    """Compute log P(x | HMM) for a single sequence (full mode)."""
+    length = mask.sum().astype(jnp.int32)
+    return hmm_log_prob_marginal(params, seq, length, mode='full')
+
+
 _batch_log_prob = jax.vmap(_compute_hmm_log_prob, in_axes=(None, 0, 0))
+_batch_log_prob_full = jax.vmap(_compute_hmm_log_prob_full, in_axes=(None, 0, 0))
 
 
 @partial(jax.jit, static_argnames=())
@@ -327,9 +427,32 @@ def nce_train_step_wrapper(hmm_params, opt_state, batch_seqs, batch_masks,
 @partial(jax.jit, static_argnames=('optimizer',))
 def _nce_step_inner(optimizer, hmm_params, opt_state,
                     batch_seqs, batch_masks, batch_labels, batch_weights):
-    """JIT-compiled NCE step with optimizer as static argument."""
+    """JIT-compiled NCE step with optimizer as static argument (core mode)."""
     def loss_fn(params):
         scores = jax.vmap(_score_single, in_axes=(None, 0, 0))(
+            params, batch_seqs, batch_masks)
+        log_sigmoid_pos = jax.nn.log_sigmoid(scores)
+        log_sigmoid_neg = jax.nn.log_sigmoid(-scores)
+        per_sample_loss = -(
+            batch_labels * log_sigmoid_pos +
+            (1.0 - batch_labels) * log_sigmoid_neg
+        )
+        weighted_loss = (batch_weights * per_sample_loss).sum() / batch_weights.sum()
+        return weighted_loss
+
+    loss, grads = jax.value_and_grad(loss_fn)(hmm_params)
+    updates, new_opt_state = optimizer.update(grads, opt_state, hmm_params)
+    new_params = optax.apply_updates(hmm_params, updates)
+    new_params = HMMParams(*new_params)
+    return new_params, new_opt_state, loss
+
+
+@partial(jax.jit, static_argnames=('optimizer',))
+def _nce_step_inner_full(optimizer, hmm_params, opt_state,
+                         batch_seqs, batch_masks, batch_labels, batch_weights):
+    """JIT-compiled NCE step with optimizer as static argument (full mode)."""
+    def loss_fn(params):
+        scores = jax.vmap(_score_single_full, in_axes=(None, 0, 0))(
             params, batch_seqs, batch_masks)
         log_sigmoid_pos = jax.nn.log_sigmoid(scores)
         log_sigmoid_neg = jax.nn.log_sigmoid(-scores)
@@ -472,7 +595,8 @@ def _pad_sequences(byte_arrays, max_len=32):
     return seq_np, mask_np
 
 
-def sample_from_hmm(hmm_params, n_samples, lengths, rng_key, max_len=32):
+def sample_from_hmm(hmm_params, n_samples, lengths, rng_key, max_len=32,
+                    mode='core'):
     """Sample n_samples candidates from the HMM at various lengths.
 
     Args:
@@ -481,6 +605,7 @@ def sample_from_hmm(hmm_params, n_samples, lengths, rng_key, max_len=32):
         lengths: list of target lengths to sample.
         rng_key: JAX PRNG key.
         max_len: max padded length.
+        mode: 'core' or 'full'.
 
     Returns:
         (sequences, masks) as jnp arrays of shape (n_samples, max_len).
@@ -491,14 +616,14 @@ def sample_from_hmm(hmm_params, n_samples, lengths, rng_key, max_len=32):
     for target_len in lengths:
         for _ in range(samples_per_length):
             rng_key, subkey = jr.split(rng_key)
-            sample = hmm_sample(hmm_params, target_len, subkey)
+            sample = hmm_sample(hmm_params, target_len, subkey, mode=mode)
             all_samples.append(sample)
 
     # Pad to n_samples if needed
     while len(all_samples) < n_samples:
         rng_key, subkey = jr.split(rng_key)
         target_len = lengths[len(all_samples) % len(lengths)]
-        sample = hmm_sample(hmm_params, target_len, subkey)
+        sample = hmm_sample(hmm_params, target_len, subkey, mode=mode)
         all_samples.append(sample)
 
     all_samples = all_samples[:n_samples]
@@ -626,25 +751,26 @@ def train_hmm_nce(hmm_params, oracle_state=None,
                   oracle_budget_per_epoch=500,
                   learning_rate=1e-3, replay_buffer_size=10000,
                   rng_seed=42, lengths=None, max_len=32,
-                  num_quanta=200, verbose=True):
-    """Full NCE training loop.
+                  num_quanta=200, verbose=True,
+                  mode='core', chacha_ratio=0.3):
+    """Full NCE training loop with ChaCha20-sourced negatives.
 
     Each epoch:
-      1. Sample candidates from HMM at various lengths.
-      2. Run through oracle cascade (HMM filter -> neural oracle -> simulator).
-      3. Add labeled examples to replay buffer.
+      1. Sample N_hmm candidates from HMM -> simulate -> labeled.
+      2. Generate N_chacha cells from ChaCha20 -> all labeled negative
+         (unless one passes simulation, which is a jackpot).
+      3. Combine into one batch for NCE gradient step.
       4. Sample minibatch from replay buffer with importance weights.
       5. NCE gradient step on HMM params (through associative scan).
       6. Periodically apply EMA mixture update on viable examples.
-      7. Log metrics: B_eff estimate, viable rate, oracle accuracy,
-         insert emission entropy, top bytes by position.
+      7. Log metrics.
 
     Args:
         hmm_params: initial HMMParams.
         oracle_state: optional neural oracle TrainState.
         board_size: board size for simulation.
         num_epochs: number of training epochs.
-        samples_per_epoch: candidates sampled per epoch.
+        samples_per_epoch: total candidates per epoch (HMM + ChaCha20).
         sim_budget_per_epoch: max simulations per epoch.
         oracle_budget_per_epoch: max oracle evaluations per epoch.
         learning_rate: AdamW learning rate.
@@ -654,12 +780,30 @@ def train_hmm_nce(hmm_params, oracle_state=None,
         max_len: max padded length for sequences.
         num_quanta: quanta per simulation.
         verbose: print progress.
+        mode: 'core' (L=8) or 'full' (L=256).
+        chacha_ratio: fraction of samples from ChaCha20 (default 0.3).
 
     Returns:
         (trained_params, history, replay_buffer).
     """
+    if mode == 'full':
+        if lengths is None:
+            lengths = [256]
+        if max_len < 256:
+            max_len = 256
+
     if lengths is None:
         lengths = [8, 10, 12]
+
+    # Select mode-appropriate functions
+    score_fn = _score_single_full if mode == 'full' else _score_single
+    nce_step_fn = _nce_step_inner_full if mode == 'full' else _nce_step_inner
+    batch_lp_fn = _batch_log_prob_full if mode == 'full' else _batch_log_prob
+    cell_bytes = max_len if mode == 'full' else max_len
+
+    # Compute sample counts
+    n_chacha = max(1, int(samples_per_epoch * chacha_ratio))
+    n_hmm = samples_per_epoch - n_chacha
 
     rng_key = jr.PRNGKey(rng_seed)
 
@@ -680,6 +824,7 @@ def train_hmm_nce(hmm_params, oracle_state=None,
         hmm_threshold=20.0,
         oracle_budget=oracle_budget_per_epoch,
         sim_budget=sim_budget_per_epoch,
+        mode=mode,
     )
 
     history = []
@@ -687,39 +832,76 @@ def train_hmm_nce(hmm_params, oracle_state=None,
     for epoch in range(num_epochs):
         t0 = time.time()
 
-        # 1. Sample candidates from HMM
-        rng_key, sample_key, cascade_key, buffer_key = jr.split(rng_key, 4)
-        seqs, masks = sample_from_hmm(
-            hmm_params, samples_per_epoch, lengths, sample_key, max_len=max_len)
+        rng_key, sample_key, chacha_key, cascade_key, buffer_key = jr.split(rng_key, 5)
 
-        # 2. Run through oracle cascade
-        cascade.hmm_params = hmm_params  # update cascade with current params
-        result = cascade.evaluate(seqs, masks, cascade_key,
+        # 1. Sample candidates from HMM
+        hmm_seqs, hmm_masks = sample_from_hmm(
+            hmm_params, n_hmm, lengths, sample_key, max_len=max_len,
+            mode=mode)
+
+        # 2. Generate ChaCha20 negatives
+        chacha_seqs, chacha_masks = generate_chacha20_negatives(
+            n_chacha, chacha_key, cell_bytes=max_len,
+            board_size=board_size if board_size >= 4 else 4)
+        # Truncate/pad to max_len if needed
+        if chacha_seqs.shape[1] != max_len:
+            if chacha_seqs.shape[1] > max_len:
+                chacha_seqs = chacha_seqs[:, :max_len]
+                chacha_masks = chacha_masks[:, :max_len]
+            else:
+                pad_w = max_len - chacha_seqs.shape[1]
+                chacha_seqs = jnp.pad(chacha_seqs, ((0, 0), (0, pad_w)))
+                chacha_masks = jnp.pad(chacha_masks, ((0, 0), (0, pad_w)))
+
+        # 3. Run HMM candidates through oracle cascade
+        cascade.hmm_params = hmm_params
+        result = cascade.evaluate(hmm_seqs, hmm_masks, cascade_key,
                                   board_size=board_size,
                                   num_quanta=num_quanta)
 
-        # 3. Add labeled examples to replay buffer
+        # 4. Add labeled HMM examples to replay buffer
         labeled_mask = ~np.isnan(result['labels'])
         if labeled_mask.any():
             labeled_indices = np.where(labeled_mask)[0]
-            labeled_seqs = np.asarray(seqs[labeled_indices])
-            labeled_masks = np.asarray(masks[labeled_indices])
+            labeled_seqs = np.asarray(hmm_seqs[labeled_indices])
+            labeled_masks = np.asarray(hmm_masks[labeled_indices])
             labeled_labels = result['labels'][labeled_indices]
-
-            # Compute log probs at time of sampling
-            labeled_lps = np.asarray(_batch_log_prob(
-                hmm_params,
-                jnp.array(labeled_seqs),
-                jnp.array(labeled_masks)))
-
+            if mode == 'full' and len(labeled_indices) > 0:
+                labeled_lps = np.array([
+                    float(_compute_hmm_log_prob_full(
+                        hmm_params,
+                        jnp.array(labeled_seqs[i]),
+                        jnp.array(labeled_masks[i])))
+                    for i in range(len(labeled_indices))
+                ], dtype=np.float32)
+            else:
+                labeled_lps = np.asarray(batch_lp_fn(
+                    hmm_params,
+                    jnp.array(labeled_seqs),
+                    jnp.array(labeled_masks)))
             buffer.add(labeled_seqs, labeled_masks, labeled_labels, labeled_lps)
 
-        # 4. Sample minibatch from replay buffer and do NCE step
+        # 5. Add ChaCha20 negatives to replay buffer (all labeled 0)
+        chacha_labels = np.zeros(n_chacha, dtype=np.float32)
+        if mode == 'full' and n_chacha > 0:
+            # Score one at a time to avoid OOM on long sequences
+            chacha_lps = np.array([
+                float(_compute_hmm_log_prob_full(
+                    hmm_params, chacha_seqs[i], chacha_masks[i]))
+                for i in range(n_chacha)
+            ], dtype=np.float32)
+        else:
+            chacha_lps = np.asarray(batch_lp_fn(
+                hmm_params, chacha_seqs, chacha_masks))
+        buffer.add(np.asarray(chacha_seqs), np.asarray(chacha_masks),
+                   chacha_labels, chacha_lps)
+
+        # 6. Sample minibatch from replay buffer and do NCE step
         if buffer.size >= 8:
             batch = buffer.sample_batch(hmm_params, batch_size=64,
                                         rng_key=buffer_key)
             if batch is not None:
-                hmm_params, opt_state, loss = _nce_step_inner(
+                hmm_params, opt_state, loss = nce_step_fn(
                     optimizer, hmm_params, opt_state,
                     batch['sequences'], batch['masks'],
                     batch['labels'], batch['weights'])
@@ -729,7 +911,7 @@ def train_hmm_nce(hmm_params, oracle_state=None,
         else:
             loss_val = float('nan')
 
-        # 5. Periodically apply EMA mixture update
+        # 7. Periodically apply EMA mixture update
         if (epoch + 1) % 5 == 0 and buffer.viable_count() > 0:
             viable_idx = np.where(buffer.labels[:buffer.size] > 0.5)[0]
             if len(viable_idx) > 0:
@@ -737,16 +919,17 @@ def train_hmm_nce(hmm_params, oracle_state=None,
                 viable_masks_buf = jnp.array(buffer.masks[viable_idx])
                 hmm_params = ema_mixture_update(
                     hmm_params, viable_seqs_buf, viable_masks_buf, alpha=0.01)
-                # Re-init optimizer state for the updated parameters
                 opt_state = optimizer.init(hmm_params)
 
-        # 6. Compute and log metrics
+        # 8. Compute and log metrics
         metrics = compute_metrics(hmm_params, buffer, epoch)
         metrics['loss'] = loss_val
         metrics['time'] = time.time() - t0
         metrics['sim_count'] = len(result.get('sim_indices', []))
+        metrics['n_chacha'] = n_chacha
+        metrics['n_hmm'] = n_hmm
+        metrics['mode'] = mode
 
-        # Count newly viable this epoch
         if labeled_mask.any():
             new_viable = int((result['labels'][labeled_mask] > 0.5).sum())
             metrics['new_viable'] = new_viable
@@ -762,13 +945,145 @@ def train_hmm_nce(hmm_params, oracle_state=None,
                   f"new_viable={metrics['new_viable']}  "
                   f"buffer={buffer.size}  "
                   f"entropy={metrics['insert_entropy']:.2f}  "
+                  f"chacha={n_chacha}  "
                   f"time={metrics['time']:.1f}s")
 
     return hmm_params, history, buffer
 
 
 # ---------------------------------------------------------------------------
-# 9. Save/load
+# 9. IS-based B_eff estimation
+# ---------------------------------------------------------------------------
+
+def estimate_beff_is(hmm_params, num_samples=1000, mode='full', rng_seed=42,
+                     board_size=8, num_quanta=200, lengths=None, max_len=256,
+                     verbose=False):
+    """Importance sampling estimate of B_eff.
+
+    Sample from HMM, simulate each, compute:
+    P(viable) ~ (1/N) sum_{viable} 2^{-s_theta(x)}
+
+    where s_theta(x) = log P(x|HMM) + 8L is the log-odds vs uniform.
+
+    B_eff = -log2(P(viable))
+    H(X|viable) = 8L - B_eff
+
+    Also compute effective sample size (ESS) and confidence interval.
+
+    Args:
+        hmm_params: trained HMMParams.
+        num_samples: number of IS samples.
+        mode: 'core' or 'full'.
+        rng_seed: random seed.
+        board_size: board size for simulation.
+        num_quanta: quanta per simulation.
+        lengths: target lengths to sample.
+        max_len: max padded length.
+        verbose: print progress.
+
+    Returns:
+        dict with 'beff', 'p_viable', 'ess', 'n_viable', 'ci_lo', 'ci_hi',
+        'entropy_given_viable'.
+    """
+    if mode == 'full':
+        if lengths is None:
+            lengths = [256]
+        if max_len < 256:
+            max_len = 256
+    else:
+        if lengths is None:
+            lengths = [8, 10, 12]
+
+    rng_key = jr.PRNGKey(rng_seed)
+
+    # Sample from HMM
+    rng_key, sample_key = jr.split(rng_key)
+    seqs, masks = sample_from_hmm(hmm_params, num_samples, lengths,
+                                   sample_key, max_len=max_len, mode=mode)
+
+    # Compute log-odds scores s_theta(x)
+    score_fn = hmm_score_batch_full if mode == 'full' else hmm_score_batch
+    scores = np.asarray(score_fn(hmm_params, seqs, masks))
+
+    # Simulate all samples
+    rng_key, sim_key = jr.split(rng_key)
+    seqs_list = []
+    for i in range(num_samples):
+        length = int(masks[i].sum())
+        seq = np.asarray(seqs[i, :length], dtype=np.uint8)
+        seqs_list.append(seq)
+
+    spreads = simulate_batch_python(seqs_list, board_size=board_size,
+                                     num_quanta=num_quanta, rng_key=sim_key)
+    viable = spreads > board_size
+
+    # IS weights: w_i = 2^{-s_theta(x_i)} = exp(-s_theta(x_i) * ln(2))
+    # For viable samples only
+    log2_weights = -scores / np.log(2.0)
+
+    n_viable = int(viable.sum())
+    if n_viable == 0:
+        return {
+            'beff': float('inf'),
+            'p_viable': 0.0,
+            'ess': 0.0,
+            'n_viable': 0,
+            'ci_lo': float('inf'),
+            'ci_hi': float('inf'),
+            'entropy_given_viable': 0.0,
+            'num_samples': num_samples,
+        }
+
+    # P(viable) ~ (1/N) sum_{viable} 2^{-s(x)}
+    viable_log2_weights = log2_weights[viable]
+    # Use logsumexp for numerical stability
+    max_lw = viable_log2_weights.max()
+    log2_p = max_lw + np.log2(np.exp2(viable_log2_weights - max_lw).sum()) - np.log2(num_samples)
+    p_viable = 2.0 ** log2_p
+    beff = -log2_p
+
+    # Effective sample size
+    weights = np.exp2(viable_log2_weights)
+    ess = (weights.sum() ** 2) / (weights ** 2).sum()
+
+    # Confidence interval (bootstrap-style via weight variance)
+    w_mean = weights.mean()
+    w_std = weights.std()
+    if w_mean > 0:
+        cv = w_std / w_mean  # coefficient of variation
+        ci_half = 1.96 * cv / np.sqrt(n_viable)
+        ci_lo = beff - ci_half / np.log(2.0) if p_viable > 0 else float('inf')
+        ci_hi = beff + ci_half / np.log(2.0) if p_viable > 0 else float('inf')
+    else:
+        ci_lo = ci_hi = float('inf')
+
+    # Entropy: H(X|viable) = 8*L - B_eff
+    L = int(masks[0].sum())
+    entropy = 8.0 * L - beff
+
+    result = {
+        'beff': float(beff),
+        'p_viable': float(p_viable),
+        'ess': float(ess),
+        'n_viable': n_viable,
+        'ci_lo': float(ci_lo),
+        'ci_hi': float(ci_hi),
+        'entropy_given_viable': float(entropy),
+        'num_samples': num_samples,
+    }
+
+    if verbose:
+        print(f"IS B_eff estimate: {beff:.2f} bits")
+        print(f"  P(viable) = {p_viable:.2e}")
+        print(f"  ESS = {ess:.1f} / {n_viable} viable / {num_samples} total")
+        print(f"  95% CI: [{ci_lo:.2f}, {ci_hi:.2f}]")
+        print(f"  H(X|viable) = {entropy:.1f} bits")
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# 10. Save/load
 # ---------------------------------------------------------------------------
 
 def save_params(hmm_params, path):
@@ -785,7 +1100,7 @@ def load_params(path):
 
 
 # ---------------------------------------------------------------------------
-# 10. Entry point
+# 12. Entry point
 # ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
@@ -795,21 +1110,37 @@ if __name__ == '__main__':
     parser.add_argument('--board-size', type=int, default=8)
     parser.add_argument('--samples', type=int, default=1000)
     parser.add_argument('--sim-budget', type=int, default=100)
-    parser.add_argument('--lengths', type=int, nargs='+', default=[8, 10, 12])
+    parser.add_argument('--lengths', type=int, nargs='+', default=None)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--num-quanta', type=int, default=200)
     parser.add_argument('--save', type=str, default='hmm_trained.npz')
+    parser.add_argument('--mode', type=str, default='core',
+                        choices=['core', 'full'],
+                        help='HMM mode: core (L=8) or full (L=256)')
+    parser.add_argument('--chacha-ratio', type=float, default=0.3,
+                        help='Fraction of samples from ChaCha20 negatives')
     args = parser.parse_args()
 
+    # Set defaults based on mode
+    if args.lengths is None:
+        if args.mode == 'full':
+            args.lengths = [256]
+        else:
+            args.lengths = [8, 10, 12]
+
+    max_len = 256 if args.mode == 'full' else 32
+
     # Initialize
-    hmm_params = default_params()
+    hmm_params = default_params(mode=args.mode)
     n_params = count_params(hmm_params)
     print(f"HMM parameters: {n_params}")
+    print(f"Mode: {args.mode}")
     print(f"Training for {args.epochs} epochs, "
           f"{args.samples} samples/epoch, "
           f"{args.sim_budget} sims/epoch")
     print(f"Lengths: {args.lengths}")
+    print(f"ChaCha20 ratio: {args.chacha_ratio:.0%}")
     print()
 
     # Train
@@ -823,6 +1154,9 @@ if __name__ == '__main__':
         learning_rate=args.lr,
         rng_seed=args.seed,
         num_quanta=args.num_quanta,
+        mode=args.mode,
+        chacha_ratio=args.chacha_ratio,
+        max_len=max_len,
     )
 
     # Save

@@ -30,8 +30,19 @@ if HAS_JAX:
         save_params,
         load_params,
         _nce_step_inner,
+        _nce_step_inner_full,
         _batch_log_prob,
+        _batch_log_prob_full,
         _pad_sequences,
+        generate_chacha20_negatives,
+        estimate_beff_is,
+    )
+    from jax6502.mine import (
+        score_board_cells,
+        mine_single_seed,
+        mine_seeds,
+        estimate_beff_from_mining,
+        _generate_board_bytes,
     )
     import optax
 
@@ -378,9 +389,230 @@ class TestEMAUpdate:
         # A byte that had low probability (e.g. 0x42) should have its
         # logit changed -- the empirical distribution puts all mass on 0xEA,
         # so other bytes' logits should move toward -inf
-        old_logit_42 = float(params.insert_1byte_logits[0x42])
-        new_logit_42 = float(new_params.insert_1byte_logits[0x42])
+        old_logit_42 = float(params.insert_1byte_logits[0, 0x42])
+        new_logit_42 = float(new_params.insert_1byte_logits[0, 0x42])
         # With alpha=0.5 and no observations of 0x42, its logit should
         # decrease substantially
         assert new_logit_42 < old_logit_42 - 1.0, (
             f"EMA should decrease unseen byte logit: {old_logit_42:.2f} -> {new_logit_42:.2f}")
+
+
+# ---------------------------------------------------------------------------
+# ChaCha20 negatives
+# ---------------------------------------------------------------------------
+
+class TestChaCha20Negatives:
+    """Tests for generate_chacha20_negatives."""
+
+    def test_correct_shapes(self):
+        """generate_chacha20_negatives produces correct shapes."""
+        num_cells = 10
+        cell_bytes = 256
+        seqs, masks = generate_chacha20_negatives(
+            num_cells, jr.PRNGKey(42), cell_bytes=cell_bytes, board_size=4)
+        assert seqs.shape == (num_cells, cell_bytes), (
+            f"Expected ({num_cells}, {cell_bytes}), got {seqs.shape}")
+        assert masks.shape == (num_cells, cell_bytes), (
+            f"Expected ({num_cells}, {cell_bytes}), got {masks.shape}")
+        # All mask positions should be True
+        assert bool(masks.all()), "All mask positions should be True"
+
+    def test_correct_shapes_small(self):
+        """Works with smaller cell_bytes."""
+        seqs, masks = generate_chacha20_negatives(
+            5, jr.PRNGKey(0), cell_bytes=8, board_size=4)
+        assert seqs.shape == (5, 8)
+        assert masks.shape == (5, 8)
+
+    def test_distinct_from_hmm_samples(self):
+        """ChaCha20 negatives should have different score distribution from HMM samples."""
+        params = default_params()
+        rng_key = jr.PRNGKey(42)
+
+        # HMM samples
+        hmm_seqs, hmm_masks = sample_from_hmm(
+            params, 20, [8], rng_key, max_len=16)
+        hmm_scores = np.asarray(hmm_score_batch(params, hmm_seqs, hmm_masks))
+
+        # ChaCha20 negatives (truncated to 16 bytes to match)
+        chacha_seqs, chacha_masks = generate_chacha20_negatives(
+            20, jr.PRNGKey(99), cell_bytes=16, board_size=4)
+        chacha_scores = np.asarray(hmm_score_batch(params, chacha_seqs, chacha_masks))
+
+        # HMM samples should generally score higher than random ChaCha20
+        assert np.mean(hmm_scores) > np.mean(chacha_scores), (
+            f"HMM samples (mean={np.mean(hmm_scores):.2f}) should score "
+            f"higher than ChaCha20 (mean={np.mean(chacha_scores):.2f})")
+
+    def test_values_in_byte_range(self):
+        """All values should be in [0, 255]."""
+        seqs, _ = generate_chacha20_negatives(
+            10, jr.PRNGKey(42), cell_bytes=256, board_size=4)
+        assert int(seqs.min()) >= 0
+        assert int(seqs.max()) <= 255
+
+    def test_more_cells_than_board(self):
+        """Should handle requesting more cells than board has."""
+        # 4x4 board = 16 cells, request 30
+        seqs, masks = generate_chacha20_negatives(
+            30, jr.PRNGKey(42), cell_bytes=8, board_size=4)
+        assert seqs.shape == (30, 8)
+
+
+class TestMixedTraining:
+    """Tests for training with mixed HMM + ChaCha20 sources."""
+
+    def test_train_with_chacha_reduces_loss(self):
+        """Training with mixed sources (HMM + ChaCha20) should run and reduce loss."""
+        params = default_params()
+        params_out, history, buffer = train_hmm_nce(
+            params,
+            board_size=4,
+            num_epochs=3,
+            samples_per_epoch=16,
+            sim_budget_per_epoch=4,
+            learning_rate=1e-3,
+            rng_seed=42,
+            lengths=[8],
+            max_len=16,
+            num_quanta=50,
+            verbose=False,
+            mode='core',
+            chacha_ratio=0.3,
+        )
+
+        assert len(history) == 3
+        # Buffer should have both HMM and ChaCha20 samples
+        assert buffer.size > 0
+        # Check that chacha count is recorded
+        assert all('n_chacha' in h for h in history)
+        assert all(h['n_chacha'] > 0 for h in history)
+
+
+# ---------------------------------------------------------------------------
+# Mining pipeline
+# ---------------------------------------------------------------------------
+
+class TestScoreBoardCells:
+    """Tests for score_board_cells."""
+
+    def test_correct_number_of_scores(self):
+        """score_board_cells should return one score per cell."""
+        params = default_params()
+        board_size = 4
+        board_bytes = _generate_board_bytes(42, board_size)
+        scores = np.asarray(score_board_cells(
+            params, board_bytes, board_size, mode='core', cell_bytes=8))
+        expected = board_size * board_size
+        assert scores.shape == (expected,), (
+            f"Expected ({expected},), got {scores.shape}")
+
+    def test_scores_are_finite(self):
+        """All scores should be finite."""
+        params = default_params()
+        board_bytes = _generate_board_bytes(42, 4)
+        scores = np.asarray(score_board_cells(
+            params, board_bytes, 4, mode='core', cell_bytes=8))
+        assert np.all(np.isfinite(scores)), "All scores should be finite"
+
+
+class TestMineSingleSeed:
+    """Tests for mine_single_seed."""
+
+    def test_returns_correct_structure(self):
+        """mine_single_seed should return expected dict keys."""
+        params = default_params()
+        result = mine_single_seed(
+            params, seed_int=42, board_size=4,
+            K1=5, K2=2, mode='core',
+            board_size_sim=4, num_quanta=50,
+            rng_key=jr.PRNGKey(42))
+
+        assert 'seed' in result
+        assert 'top_scores' in result
+        assert 'top_cells' in result
+        assert 'viable_cells' in result
+        assert 'spreads' in result
+        assert 'max_score' in result
+        assert 'mean_score' in result
+        assert result['seed'] == 42
+        assert len(result['spreads']) == 2  # K2=2
+
+    def test_top_scores_sorted(self):
+        """Top scores should be in descending order."""
+        params = default_params()
+        result = mine_single_seed(
+            params, seed_int=123, board_size=4,
+            K1=10, K2=3, mode='core',
+            board_size_sim=4, num_quanta=50)
+        top = result['top_scores']
+        for i in range(len(top) - 1):
+            assert top[i] >= top[i + 1], (
+                f"Top scores not sorted: {top[i]:.2f} < {top[i+1]:.2f}")
+
+
+class TestEstimateBeffIS:
+    """Tests for estimate_beff_is."""
+
+    def test_returns_finite_beff(self):
+        """estimate_beff_is should return finite B_eff and ESS."""
+        params = default_params()
+        result = estimate_beff_is(
+            params, num_samples=10, mode='core', rng_seed=42,
+            board_size=4, num_quanta=50, lengths=[8], max_len=16)
+
+        assert 'beff' in result
+        assert 'ess' in result
+        assert 'n_viable' in result
+        assert 'num_samples' in result
+        assert result['num_samples'] == 10
+        # B_eff should be non-negative (could be inf if nothing viable)
+        assert result['beff'] >= 0
+
+
+class TestEstimateBeffFromMining:
+    """Tests for estimate_beff_from_mining."""
+
+    def test_returns_expected_keys(self):
+        """Should return expected dict keys."""
+        params = default_params()
+        result = estimate_beff_from_mining(
+            params, num_seeds=3, board_size=4, mode='core',
+            cell_bytes=8, rng_seed=42)
+
+        assert 'max_scores' in result
+        assert 'mean_max' in result
+        assert 'estimated_beff' in result
+        assert 'num_seeds' in result
+        assert len(result['max_scores']) == 3
+
+
+# ---------------------------------------------------------------------------
+# Full mode smoke test
+# ---------------------------------------------------------------------------
+
+class TestFullModeTraining:
+    """Smoke tests for full mode (L=256) training."""
+
+    def test_train_full_mode_3_epochs(self):
+        """Full-mode training should run for 3 epochs without error."""
+        params = default_params(mode='full')
+        params_out, history, buffer = train_hmm_nce(
+            params,
+            board_size=4,
+            num_epochs=3,
+            samples_per_epoch=4,
+            sim_budget_per_epoch=2,
+            learning_rate=1e-3,
+            rng_seed=42,
+            lengths=[256],
+            max_len=256,
+            num_quanta=50,
+            verbose=False,
+            mode='full',
+            chacha_ratio=0.25,
+        )
+
+        assert len(history) == 3
+        assert all(h['mode'] == 'full' for h in history)
+        assert buffer.size > 0
