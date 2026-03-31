@@ -33,7 +33,8 @@ def run_test(tc):
     expected = tc['expected']
 
     # Build 64KB memory (test cases use full address space)
-    memory = np.zeros(65536, dtype=np.uint8)
+    # Fill with 0xEA (NOP) to match test generator's ram.fill(0xEA)
+    memory = np.full(65536, 0xEA, dtype=np.uint8)
     for addr_str, val in setup['memory'].items():
         memory[int(addr_str)] = val
 

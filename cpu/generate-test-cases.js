@@ -43,7 +43,7 @@ const TESTS_PER_OPCODE = 15;
 /**
  * Run exactly one instruction through Sfotty, returning cycle-accurate results.
  */
-function runOneInstruction(ram, initPC, initA, initX, initY, initS, initP) {
+function runOneInstruction(ram, initPC, initA, initX, initY, initS, initP, instrSize) {
   const busLog = [];
 
   const sfotty = new Sfotty({
@@ -85,11 +85,25 @@ function runOneInstruction(ram, initPC, initA, initX, initY, initS, initP) {
   }
 
   // Detect instruction cycle count N.
-  // busLog[N] is the opcode fetch of the NEXT instruction: a read from snapshots[N-1].PC
+  // busLog[N] is the opcode fetch of the NEXT instruction (a NOP = 0xEA).
+  // Since operand bytes are guaranteed non-0xEA, reading 0xEA confirms a NOP fetch.
+  // For branches (instrSize=2, rel mode), taken branches have a dummy read at cycle 2
+  // from the fallthrough address which also contains 0xEA. We handle this by requiring
+  // that for a match at n=2, the next bus op (busLog[n+1]) must read from PC+1
+  // (confirming we're actually executing the NOP, not doing a dummy read).
   let N = null;
-  for (let n = 2; n <= 7; n++) {
+  for (let n = 2; n <= 8; n++) {
     if (n >= busLog.length) break;
-    if (busLog[n][2] === 'read' && busLog[n][0] === snapshots[n - 1].PC) {
+    if (busLog[n][2] === 'read' &&
+        busLog[n][1] === 0xEA &&
+        busLog[n][0] === snapshots[n - 1].PC) {
+      // For n=2 with 2-byte instructions: verify this is a real opcode fetch
+      // by checking that busLog[n+1] reads from PC+1 (NOP's 2nd cycle)
+      if (n === 2 && instrSize === 2 && n + 1 < busLog.length) {
+        const nextReadAddr = busLog[n + 1][0];
+        const expectedNext = (snapshots[n - 1].PC + 1) & 0xFFFF;
+        if (nextReadAddr !== expectedNext) continue; // false match (branch dummy read)
+      }
       N = n;
       break;
     }
@@ -130,33 +144,45 @@ function generateTestCase(opcode, index) {
 
   // Place opcode
   ram[initPC] = opcode;
-  if (size >= 2) ram[(initPC + 1) & 0xFFFF] = rand();
-  if (size >= 3) ram[(initPC + 2) & 0xFFFF] = rand();
+  // Ensure operand bytes are never 0xEA (NOP) so cycle detection can distinguish
+  // mid-instruction operand reads from next-instruction opcode fetches
+  if (size >= 2) { let b = rand(); ram[(initPC + 1) & 0xFFFF] = b === 0xEA ? 0xEB : b; }
+  if (size >= 3) { let b = rand(); ram[(initPC + 2) & 0xFFFF] = b === 0xEA ? 0xEB : b; }
 
   // NOPs after instruction
   for (let i = 0; i < 4; i++) ram[(initPC + size + i) & 0xFFFF] = 0xEA;
+  // For branches: ensure offset != 1 (ambiguous with not-taken) and put NOPs at target
+  if (info.mode === 'rel') {
+    let offset = ram[(initPC + 1) & 0xFFFF];
+    if (offset === 1) { offset = 2; ram[(initPC + 1) & 0xFFFF] = 2; }
+    const signedOff = offset >= 128 ? offset - 256 : offset;
+    const target = (initPC + 2 + signedOff) & 0xFFFF;
+    for (let i = 0; i < 4; i++) ram[(target + i) & 0xFFFF] = 0xEA;
+  }
 
-  // BRK vector
+  // BRK vector -> 0x0400 (NOP-filled)
   if (opcode === 0x00) {
     ram[0xFFFE] = 0x00; ram[0xFFFF] = 0x04;
     for (let i = 0x0400; i < 0x0410; i++) ram[i] = 0xEA;
   }
-  // RTI: push P, PCL, PCH
+  // RTI: push P, PCL, PCH -> target 0x0500 (NOP-filled)
   if (info.mnemonic === 'RTI') {
     ram[0x100 + ((initS + 1) & 0xFF)] = 0x20;
     ram[0x100 + ((initS + 2) & 0xFF)] = 0x00;
-    ram[0x100 + ((initS + 3) & 0xFF)] = 0x03;
+    ram[0x100 + ((initS + 3) & 0xFF)] = 0x05;
+    for (let i = 0x0500; i < 0x0510; i++) ram[i] = 0xEA;
   }
-  // RTS: push PCH, PCL-1
+  // RTS: push PCH, PCL-1 -> target 0x0500 (NOP-filled, 0x04FF+1=0x0500)
   if (info.mnemonic === 'RTS') {
     ram[0x100 + ((initS + 1) & 0xFF)] = 0xFF;
-    ram[0x100 + ((initS + 2) & 0xFF)] = 0x02;
+    ram[0x100 + ((initS + 2) & 0xFF)] = 0x04;
+    for (let i = 0x0500; i < 0x0510; i++) ram[i] = 0xEA;
   }
 
   // Snapshot ram before execution
   const ramBefore = new Uint8Array(ram);
 
-  const result = runOneInstruction(ram, initPC, initA, initX, initY, initS, initP);
+  const result = runOneInstruction(ram, initPC, initA, initX, initY, initS, initP, size);
   if (!result) return null;
 
   // Build minimal memory map: only addresses accessed during the instruction
