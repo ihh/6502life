@@ -61,20 +61,22 @@ describe('trainWeights', () => {
 
 describe('trainIteration', () => {
     it('runs one iteration with real simulation', async () => {
-        const { dfa } = buildPipeline();
-        const rng = new PRNG(42);
+        // Use direct candidate generation (DFA sampling too slow with addr=0 rejection)
+        const { buildCandidate } = await import('../experiment.js');
 
         const { weights, examples } = await trainIteration(
-            () => {
-                const { samples } = sampleCandidates(dfa, 8, 5, rng);
-                return samples;
-            },
-            async (bytes) => simulateCandidate(bytes, { passes: 30, seed: 99 }),
+            () => [
+                buildCandidate({ inc: 0xE8, branch: 0x90 }),
+                buildCandidate({ inc: 0xE8, branch: 0x50 }),
+                buildCandidate({ inc: 0xCA, branch: 0x90 }),
+                buildCandidate({ inc: 0xCA, branch: 0x50 }),
+                buildCandidate({ inc: 0xE8, branch: 0xB0 }),
+            ],
+            async (bytes) => simulateCandidate(bytes, { passes: 80, seed: 99 }),
         );
 
         expect(examples.length).toBe(5);
         expect(weights.n).toBe(5);
-        // Each example should have features
         for (const ex of examples) {
             expect(ex.features).toBeDefined();
             expect(typeof ex.replicated).toBe('boolean');
@@ -84,7 +86,7 @@ describe('trainIteration', () => {
 
 describe('End-to-end loop: sample → simulate → train', () => {
     it('runs 3 iterations of the training loop', async () => {
-        const { dfa } = buildPipeline();
+        const { buildCandidate, WORKING_PAIRS } = await import('../experiment.js');
         const rng = new PRNG(2026);
         const batchSize = 5;
         const iterations = 3;
@@ -92,11 +94,16 @@ describe('End-to-end loop: sample → simulate → train', () => {
         const history = [];
 
         for (let iter = 0; iter < iterations; iter++) {
-            const { samples } = sampleCandidates(dfa, 8, batchSize, rng);
+            const samples = Array.from({ length: batchSize }, () =>
+                buildCandidate({
+                    inc: [0xE8, 0xCA][rng.below(2)],
+                    branch: [0x50, 0x90, 0xB0, 0xD0][rng.below(4)],
+                })
+            );
             const examples = [];
 
             for (const bytes of samples) {
-                const result = await simulateCandidate(bytes, { passes: 30, seed: iter });
+                const result = await simulateCandidate(bytes, { passes: 80, seed: iter });
                 examples.push({
                     bytes,
                     replicated: result.copied,
@@ -114,10 +121,9 @@ describe('End-to-end loop: sample → simulate → train', () => {
         }
 
         expect(history.length).toBe(3);
-        // All iterations should have run
         for (const h of history) {
             expect(h.total).toBe(batchSize);
             expect(h.weights.n).toBe(batchSize);
         }
-    }, 30000); // generous timeout for simulation
+    }, 30000);
 });

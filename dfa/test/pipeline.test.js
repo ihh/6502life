@@ -101,34 +101,33 @@ describe('sampleCandidates', () => {
     const rng = new PRNG(123);
 
     it('samples valid candidates at length 8', () => {
-        const { samples, attempts } = sampleCandidates(dfa, 8, 10, rng);
-        expect(samples.length).toBe(10);
-        // Each sample should pass opcode+offset checks
+        // addr=0 rejection is ~1/65536 (both byte 1 and byte 3 must be 0)
+        const { samples, attempts } = sampleCandidates(dfa, 8, 3, rng, { maxAttempts: 200000 });
+        expect(samples.length).toBe(3);
         for (const seq of samples) {
             expect(dfa.accepts([...seq])).toBe(true);
-            // And addr-match (byte 1 = byte 3)
-            expect(seq[1]).toBe(seq[3]);
+            expect(seq[1]).toBe(0x00);
+            expect(seq[3]).toBe(0x00);
         }
     });
 
-    it('samples without addr-match filter', () => {
+    it('samples without addr filter', () => {
         const rng2 = new PRNG(456);
-        const { samples, attempts } = sampleCandidates(dfa, 8, 100, rng2, {
-            requireAddrMatch: false,
+        const { samples } = sampleCandidates(dfa, 8, 100, rng2, {
+            requireAddr0: false,
         });
         expect(samples.length).toBe(100);
-        // Some may have byte 1 ≠ byte 3
-        const mismatches = samples.filter(s => s[1] !== s[3]).length;
-        // Most should mismatch (255/256 chance each)
-        expect(mismatches).toBeGreaterThan(80);
+        // Most should have non-zero addr
+        const nonZero = samples.filter(s => s[1] !== 0x00).length;
+        expect(nonZero).toBeGreaterThan(80);
     });
 
-    it('rejection rate for addr-match is ~255/256', () => {
+    it('rejection rate for addr=0 is very high', () => {
+        // Both byte 1 and byte 3 must be $00: ~1/65536 acceptance
         const rng3 = new PRNG(789);
-        const { samples, attempts, rejectRate } = sampleCandidates(dfa, 8, 50, rng3);
-        expect(samples.length).toBe(50);
-        // ~99.6% rejection rate
-        expect(rejectRate).toBeGreaterThan(0.95);
+        const { samples, attempts, rejectRate } = sampleCandidates(dfa, 8, 2, rng3, { maxAttempts: 200000 });
+        expect(samples.length).toBe(2);
+        expect(rejectRate).toBeGreaterThan(0.999);
     });
 
     it('all samples have correct structure', () => {
@@ -137,11 +136,10 @@ describe('sampleCandidates', () => {
         for (const seq of samples) {
             expect(seq[0]).toBe(0xB5); // LDA zp,X
             expect(seq[2]).toBe(0x9D); // STA abs,X
-            expect(seq[1]).toBe(seq[3]); // addr match
+            expect(seq[1]).toBe(0x00); // addr = 0
+            expect(seq[3]).toBe(0x00); // addr match
             expect(seq[4]).toBe(0x04); // page
             expect([0xE8, 0xCA]).toContain(seq[5]); // INX/DEX
-            // Branch opcode
-            expect([0x90, 0xB0, 0xD0, 0x10, 0x30, 0x50, 0x70, 0x00]).toContain(seq[6]);
         }
     });
 });

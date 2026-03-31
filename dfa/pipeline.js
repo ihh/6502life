@@ -98,20 +98,46 @@ export function buildPipeline(opts = {}) {
 }
 
 /**
+ * Find structural positions in a candidate sequence.
+ * Locates LDA ($B5), STA ($9D), and their operands.
+ *
+ * @param {Uint8Array} seq
+ * @returns {{ ldaPos: number, addrPos: number, staPos: number, addr2Pos: number, pagePos: number } | null}
+ */
+export function findStructure(seq) {
+    const ldaPos = seq.indexOf(0xB5);
+    if (ldaPos < 0 || ldaPos + 1 >= seq.length) return null;
+    const addrPos = ldaPos + 1;
+    // STA should be after addr
+    let staPos = -1;
+    for (let i = addrPos + 1; i < seq.length; i++) {
+        if (seq[i] === 0x9D) { staPos = i; break; }
+    }
+    if (staPos < 0 || staPos + 2 >= seq.length) return null;
+    return {
+        ldaPos,
+        addrPos,
+        staPos,
+        addr2Pos: staPos + 1,
+        pagePos: staPos + 2,
+    };
+}
+
+/**
  * Sample candidate byte sequences that pass opcode+offset checks.
- * Rejection-filters for addr-match (byte 1 = byte 3).
+ * Rejection-filters for addr=0 and addr-match (structurally located).
  *
  * @param {DFA} dfa - from buildPipeline()
  * @param {number} L - sequence length
  * @param {number} N - number of accepted samples desired
  * @param {Object} rng - PRNG with .real() method
  * @param {Object} [opts]
- * @param {boolean} [opts.requireAddrMatch=true] - enforce byte 1 = byte 3
+ * @param {boolean} [opts.requireAddr0=true] - enforce addr = $00
  * @param {number} [opts.maxAttempts=100000] - max sampling attempts
  * @returns {{ samples: Uint8Array[], attempts: number, rejectRate: number }}
  */
 export function sampleCandidates(dfa, L, N, rng, opts = {}) {
-    const { requireAddrMatch = true, maxAttempts = 100000 } = opts;
+    const { requireAddr0 = true, maxAttempts = 100000 } = opts;
     const sampler = prepareSampler(dfa, L);
     const samples = [];
     let attempts = 0;
@@ -119,9 +145,15 @@ export function sampleCandidates(dfa, L, N, rng, opts = {}) {
     while (samples.length < N && attempts < maxAttempts) {
         const seq = sampleSequence(sampler, rng);
         attempts++;
-        if (!seq) break; // no accepted sequences at this length
+        if (!seq) break;
 
-        if (requireAddrMatch && seq[1] !== seq[3]) continue;
+        if (requireAddr0) {
+            const s = findStructure(seq);
+            if (!s) continue;
+            // addr must be 0 and must match
+            if (seq[s.addrPos] !== 0x00) continue;
+            if (seq[s.addr2Pos] !== 0x00) continue;
+        }
         samples.push(seq);
     }
 
