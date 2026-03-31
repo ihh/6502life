@@ -12,6 +12,7 @@ import jax.random as jr
 import numpy as np
 from functools import partial
 from .cpu import step_one_instruction, ADDR_MASK
+from .chacha20 import generate_board_init
 
 
 # Register save area offsets
@@ -206,10 +207,26 @@ def run_rounds(storage, B, M, n_rounds, key):
 class FastBoard:
     """All-JAX board — storage on device, simulation fully JIT-compiled."""
 
-    def __init__(self, size=16, seed=42):
+    def __init__(self, size=16, seed=42, chacha_seed=None):
+        """Create a new FastBoard.
+
+        Parameters
+        ----------
+        size : int
+            Board dimension (size x size cells).
+        seed : int
+            PRNG seed for the scheduler (JAX PRNGKey).
+        chacha_seed : str | int | None
+            If provided, initialise cell memory deterministically using
+            ChaCha20 (matching the JS ``generateBoardInit``).  If *None*,
+            memory starts zeroed (legacy behaviour).
+        """
         self.B = size
         self.M = 1024
-        self.storage = jnp.zeros(size * size * 1024, dtype=jnp.uint8)
+        if chacha_seed is not None:
+            self.storage = generate_board_init(chacha_seed, size)
+        else:
+            self.storage = jnp.zeros(size * size * 1024, dtype=jnp.uint8)
         self.key = jr.PRNGKey(seed)
         self.total_quanta = 0
 
