@@ -28,6 +28,21 @@ cd app && npm install && npm run dev
 npm test
 ```
 
+## Slash Commands
+
+Project-specific slash commands (in `.claude/commands/`):
+- `/beff [lengths]` — Compute B_eff at specified lengths with IS validation
+- `/viable <hex>` — Check if a byte sequence is a viable replicator
+- `/generate <N> <L>` — Sample N viable candidates of length L from WFST
+- `/sweep <type>` — Run parameter sweep (branch, addr, prefix, insert, multibyte, full)
+- `/calibrate` — Full WFST calibration diagnostic (train + IS-validate + report gaps)
+
+## Custom Agents
+
+Custom agents (in `.claude/agents/`):
+- `replicator-scientist` — Research agent for 6502 replicator science (experiments, B_eff, opcode analysis)
+- `wfst-trainer` — Training agent for the WFST pipeline (curriculum, IS validation, neural oracle)
+
 ## CLI Tools
 
 All CLI tools are zero-dependency Node.js ESM scripts sharing the `engine/` layer with the web app.

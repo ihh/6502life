@@ -82,6 +82,19 @@ npx vitest run dfa/test/   # just the WFST pipeline tests (148 tests)
 npx vitest run coin/test/  # coin system tests (31 tests)
 ```
 
+## Slash commands and agents
+
+Check `.claude/commands/` for project-specific slash commands:
+- `/beff` — compute B_eff with IS validation
+- `/viable` — test a specific byte sequence
+- `/generate` — sample viable replicators from the WFST
+- `/sweep` — run parameter sweeps
+- `/calibrate` — full model calibration diagnostic
+
+Check `.claude/agents/` for custom agents:
+- `replicator-scientist` — research and experimentation
+- `wfst-trainer` — training loop management
+
 ## The key insight
 
 The WFST is a hand-designed state-space model with exact inference.
