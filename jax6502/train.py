@@ -164,38 +164,62 @@ def simulate_candidate(byte_seq, board_size=8, num_quanta=None, rng_key=None):
     B = board_size
     M = CELL_SIZE
 
-    board = FastBoard(size=B, seed=int(jr.randint(rng_key, (), 0, 2**30)))
-
-    # Randomize the board
+    # Use same seed for both boards so they start identically
+    board_seed = int(jr.randint(rng_key, (), 0, 2**30))
     k1, k2 = jr.split(rng_key)
-    board.storage = jr.randint(k1, (B * B * M,), 0, 256).astype(jnp.uint8)
+    random_storage = jr.randint(k1, (B * B * M,), 0, 256).astype(jnp.uint8)
 
-    # Inject candidate into cell (0,0)
-    board.write_cell(0, 0, 0, byte_seq)
-    # Set registers: PC=0, P=$30, S=$FF
-    board.write_cell(0, 0, REG_PCHI, [0x00])
-    board.write_cell(0, 0, REG_PCLO, [0x00])
-    board.write_cell(0, 0, REG_P, [0x30])
-    board.write_cell(0, 0, REG_S, [0xFF])
+    # Experimental board: inject the candidate
+    board_exp = FastBoard(size=B, seed=board_seed)
+    board_exp.storage = random_storage.copy()
+    board_exp.write_cell(0, 0, 0, byte_seq)
+    board_exp.write_cell(0, 0, REG_PCHI, [0x00])
+    board_exp.write_cell(0, 0, REG_PCLO, [0x00])
+    board_exp.write_cell(0, 0, REG_P, [0x30])
+    board_exp.write_cell(0, 0, REG_S, [0xFF])
 
-    # Run simulation (each round = 2 checkerboard passes = B*B quanta)
+    # Control board: identical initial state, no injection
+    board_ctrl = FastBoard(size=B, seed=board_seed)
+    board_ctrl.storage = random_storage.copy()
+
+    # Run both with the same PRNG sequence
     n_rounds = max(1, num_quanta // (B * B))
-    board.key = k2
-    board.run_rounds(n_rounds)
+    board_exp.key = k2
+    board_ctrl.key = k2
+    board_exp.run_rounds(n_rounds)
+    board_ctrl.run_rounds(n_rounds)
 
-    # Count spread: how many cells have an exact copy of byte_seq
-    storage_np = np.asarray(board.storage, dtype=np.uint8)
+    # Count cells containing a copy of the replicator.
+    # We check for the conserved opcode subsequence: B5 ... 9D ... 04 ... {E8|CA}
+    # appearing in order (with gaps) in the cell's zero page. This detects
+    # copies even with inserts, cargo drift, and register area changes.
+    exp_np = np.asarray(board_exp.storage, dtype=np.uint8)
+
+    def has_replicator_signature(cell_page):
+        """Check if cell contains the LDA/STA/inc-dec subsequence in order."""
+        # Look for: B5 (LDA zpx), then 9D (STA abs,X), then 04 (page 4),
+        # then E8 or CA (INX or DEX)
+        sig = [0xB5, 0x9D, 0x04]
+        pos = 0
+        for target in sig:
+            while pos < len(cell_page) and cell_page[pos] != target:
+                pos += 1
+            if pos >= len(cell_page):
+                return False
+            pos += 1
+        # After finding 04, look for E8 or CA
+        while pos < len(cell_page):
+            if cell_page[pos] in (0xE8, 0xCA):
+                return True
+            pos += 1
+        return False
+
     spread = 0
-    # Compare only the core program bytes (first 8). The cargo (bytes 8-248)
-    # drifts on multi-cell boards as cells overwrite each other, and the
-    # register area (0xF9-0xFF) changes during execution. The replicator's
-    # identity is its first 8 bytes.
-    compare_len = min(L, 8)
     for ci in range(B):
         for cj in range(B):
             base = (ci * B + cj) * M
-            cell_bytes = storage_np[base:base + compare_len]
-            if np.array_equal(cell_bytes, byte_seq[:compare_len]):
+            cell_page = exp_np[base:base + 256]
+            if has_replicator_signature(cell_page):
                 spread += 1
 
     viable = spread > board_size
@@ -474,29 +498,40 @@ def _nce_step_inner(optimizer, hmm_params, opt_state,
     return new_params, new_opt_state, loss
 
 
-@partial(jax.jit, static_argnames=('optimizer',))
+@jax.jit
+def _single_nce_loss_and_grad_full(params, seq, mask, label):
+    """Loss and grad for ONE full-mode sequence. Compiles in ~8s."""
+    def loss_fn(p):
+        score = _score_single_full(p, seq, mask)
+        tempered = score / NCE_TEMPERATURE
+        return -(label * jax.nn.log_sigmoid(tempered) +
+                 (1.0 - label) * jax.nn.log_sigmoid(-tempered))
+    return jax.value_and_grad(loss_fn)(params)
+
+
 def _nce_step_inner_full(optimizer, hmm_params, opt_state,
                          batch_seqs, batch_masks, batch_labels, batch_weights):
-    """JIT-compiled NCE step for full mode. Uses fori_loop-based Forward
-    which compiles fast (seconds, not minutes)."""
-    def loss_fn(params):
-        score_fn = jax.checkpoint(lambda args: _score_single_full(params, args[0], args[1]))
-        scores = jax.lax.map(score_fn, (batch_seqs, batch_masks))
-        tempered = scores / NCE_TEMPERATURE
-        log_sigmoid_pos = jax.nn.log_sigmoid(tempered)
-        log_sigmoid_neg = jax.nn.log_sigmoid(-tempered)
-        per_sample_loss = -(
-            batch_labels * log_sigmoid_pos +
-            (1.0 - batch_labels) * log_sigmoid_neg
-        )
-        weighted_loss = (batch_weights * per_sample_loss).sum() / batch_weights.sum()
-        return weighted_loss
+    """Full-mode NCE step: Python loop over sequences, JIT per sequence.
+    Compiles ONE sequence grad (~8s), then loops in Python."""
+    total_loss = 0.0
+    total_grads = jax.tree.map(jnp.zeros_like, hmm_params)
+    n = batch_seqs.shape[0]
+    w_sum = float(jnp.sum(batch_weights))
 
-    loss, grads = jax.value_and_grad(loss_fn)(hmm_params)
-    updates, new_opt_state = optimizer.update(grads, opt_state, hmm_params)
+    for i in range(n):
+        loss_i, grad_i = _single_nce_loss_and_grad_full(
+            hmm_params, batch_seqs[i], batch_masks[i], batch_labels[i])
+        w = float(batch_weights[i])
+        total_loss += float(loss_i) * w
+        total_grads = jax.tree.map(lambda a, b: a + b * w, total_grads, grad_i)
+
+    total_grads = jax.tree.map(lambda g: g / w_sum, total_grads)
+    total_loss /= w_sum
+
+    updates, new_opt_state = optimizer.update(total_grads, opt_state, hmm_params)
     new_params = optax.apply_updates(hmm_params, updates)
     new_params = HMMParams(*new_params)
-    return new_params, new_opt_state, loss
+    return new_params, new_opt_state, total_loss
 
 
 # ---------------------------------------------------------------------------
