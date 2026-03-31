@@ -17,3 +17,14 @@ from .oracle import (  # noqa: F401
     pad_sequences,
     prepare_dataset,
 )
+from .hmm import (  # noqa: F401
+    HMMParams,
+    default_params as hmm_default_params,
+    hmm_log_prob,
+    hmm_log_prob_marginal,
+    hmm_log_prob_sequential,
+    hmm_score_batch,
+    hmm_sample,
+    discriminative_loss,
+    count_params as hmm_count_params,
+)
