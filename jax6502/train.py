@@ -134,7 +134,7 @@ def generate_chacha20_negatives(num_cells, rng_key, cell_bytes=256,
 # 1. Simulation oracle (ground truth)
 # ---------------------------------------------------------------------------
 
-def simulate_candidate(byte_seq, board_size=8, num_quanta=200, rng_key=None):
+def simulate_candidate(byte_seq, board_size=8, num_quanta=None, rng_key=None):
     """Test if a byte sequence is a viable replicator.
 
     1. Initialize board_size x board_size board with random bytes.
@@ -154,6 +154,10 @@ def simulate_candidate(byte_seq, board_size=8, num_quanta=200, rng_key=None):
     """
     if rng_key is None:
         rng_key = jr.PRNGKey(42)
+    if num_quanta is None:
+        # Need enough rounds for a replicator to spread across the board.
+        # ~20 rounds per board dimension works empirically.
+        num_quanta = board_size * board_size * 20
 
     byte_seq = np.asarray(byte_seq, dtype=np.uint8)
     L = len(byte_seq)
@@ -748,14 +752,15 @@ def compute_metrics(hmm_params, replay_buffer, epoch):
 # ---------------------------------------------------------------------------
 
 
-# Known viable 8-byte replicator core variants
+# Known viable 8-byte replicator core variants.
+# Only BCC works in mode B (register save) because carry flag behavior
+# is correct across quantum boundaries: carry is clear during the copy
+# loop and only gets set on the final INX/DEX wrap (X: 0xFF->0x00 or 0x00->0xFF).
+# Other branches (BNE, BPL, BMI, BVS, BCS, BVC) fail because their flag
+# conditions don't survive register save/restore correctly.
 KNOWN_VIABLE_CORES = [
     [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8],  # BCC, INX
-    [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0xD0, 0xF8],  # BNE, INX
-    [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x10, 0xF8],  # BPL, INX
     [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xCA, 0x90, 0xF8],  # BCC, DEX
-    [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xCA, 0xD0, 0xF8],  # BNE, DEX
-    [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xCA, 0x10, 0xF8],  # BPL, DEX
 ]
 
 
