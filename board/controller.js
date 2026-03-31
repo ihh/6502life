@@ -1588,13 +1588,15 @@ class BoardController {
                 }
 
                 // ── Cosmic rays: flip random bits in board storage ──
-                // decayRate = per-bit flip probability per quantum.
+                // decayRate = per-bit flip probability per cycle per cell.
+                // Convert to per-quantum: multiply by mean quantum length.
                 // Poisson-sampled using the board PRNG for deterministic replay.
                 if (this.boardParams.decayRate > 0) {
                     const mt = this.memory.mt;
                     const storage = this.memory.storage;
                     const totalBits = this.memory.storageSize * 8;
-                    const lambda = this.boardParams.decayRate * totalBits;
+                    const meanCycles = 4096;
+                    const lambda = this.boardParams.decayRate * meanCycles * totalBits;
                     let nFlips;
                     if (lambda < 30) {
                         let L = Math.exp(-lambda), k = 0, p = 1;

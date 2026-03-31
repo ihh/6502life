@@ -124,12 +124,12 @@
             <div class="ctrl-col">
                 <select id="noise">
                     <option value="0" selected>noise:0</option>
-                    <option value="1e-9">1/1G</option>
-                    <option value="1e-8">1/100M</option>
-                    <option value="1e-7">1/10M</option>
-                    <option value="1e-6">1/1M</option>
-                    <option value="1e-5">1/100K</option>
-                    <option value="0.0001">1/10K</option>
+                    <option value="1e-12">1e-12</option>
+                    <option value="1e-11">1e-11</option>
+                    <option value="1e-10">1e-10</option>
+                    <option value="1e-9">1e-9</option>
+                    <option value="1e-8">1e-8</option>
+                    <option value="1e-7">1e-7</option>
                 </select>
                 <select id="brush"></select>
                 <button id="capture">Capture</button>
@@ -296,14 +296,15 @@
             updateCaptureButton();
         }
 
-        // --- Cosmic ray noise: random bit flips per pass ---
+        // --- Cosmic ray noise: rate is bit flips per cycle per cell ---
         function getNoiseRate() { return parseFloat($('noise').value) || 0; }
         const TOTAL_BITS = B * B * 1024 * 8;
         const TOTAL_BYTES = B * B * 1024;
 
-        function sampleFlipCount(rng, p) {
-            if (p <= 0) return 0;
-            const lambda = p * TOTAL_BITS;
+        function sampleFlipCount(rng, ratePerCyclePerCell) {
+            if (ratePerCyclePerCell <= 0) return 0;
+            // Convert per-cycle-per-cell to per-pass: each pass ≈ MEAN_CYC cycles per cell
+            const lambda = ratePerCyclePerCell * MEAN_CYC * TOTAL_BITS;
             if (lambda < 30) {
                 let L = Math.exp(-lambda), k = 0, pr = 1;
                 do { k++; pr *= rng.real(); } while (pr > L);

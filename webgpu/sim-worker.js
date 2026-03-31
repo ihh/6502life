@@ -10,12 +10,14 @@ let passesPerTick = 1;
 let passQueue = 0;
 let noiseRate = 0;
 
+const MEAN_CYC = 4096;
 function applyCosmicRays() {
     if (noiseRate <= 0 || !sim) return;
     const rng = sim.rng;
     const totalBytes = sim.B * sim.B * sim.M;
     const totalBits = totalBytes * 8;
-    const lambda = noiseRate * totalBits;
+    // noiseRate is per-bit per-cycle per-cell; convert to per-pass
+    const lambda = noiseRate * MEAN_CYC * totalBits;
     let nFlips;
     if (lambda < 30) {
         let L = Math.exp(-lambda), k = 0, p = 1;
