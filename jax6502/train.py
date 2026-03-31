@@ -301,15 +301,16 @@ class OracleCascade:
         obvious_neg = hmm_scores < -self.hmm_threshold
         labels[obvious_neg] = 0.0
 
-        # Candidates that pass HMM filter
+        # Candidates that pass HMM filter (uncertain or positive)
         uncertain_mask = np.abs(hmm_scores) < self.hmm_threshold
+        positive_mask = hmm_scores >= self.hmm_threshold
         uncertain_indices = np.where(uncertain_mask)[0]
+        positive_indices = np.where(positive_mask)[0]
 
         # Level 1: Neural oracle (if available)
         oracle_scores = np.full(N, 0.5, dtype=np.float32)
         if self.oracle_state is not None and len(uncertain_indices) > 0:
             from .oracle import predict_batch as oracle_predict
-            # Limit to oracle_budget
             eval_indices = uncertain_indices[:self.oracle_budget]
             eval_seqs = candidates_seqs[eval_indices]
             eval_masks = candidates_masks[eval_indices]
@@ -317,15 +318,25 @@ class OracleCascade:
             oracle_scores[eval_indices] = np.asarray(probs)
             uncertain_indices = eval_indices
 
-        # Level 2: Simulation (most uncertain candidates)
-        if len(uncertain_indices) > 0:
-            # Select candidates for simulation: most uncertain by oracle
+        # Level 2: Simulation
+        # Always simulate a random subset of HMM-positive samples (on-policy
+        # ground truth) PLUS the most uncertain samples. This ensures the model
+        # gets simulator feedback on its own outputs, not just on borderline cases.
+        sim_candidates = []
+        # Half the sim budget goes to random on-policy samples
+        n_onpolicy = min(len(positive_indices), self.sim_budget // 2)
+        if n_onpolicy > 0:
+            rng = np.random.RandomState(int(rng_key[0]) % 2**31 if rng_key is not None else 42)
+            onpolicy = rng.choice(positive_indices, n_onpolicy, replace=False)
+            sim_candidates.append(onpolicy)
+        # Other half goes to most uncertain
+        remaining_budget = self.sim_budget - n_onpolicy
+        if len(uncertain_indices) > 0 and remaining_budget > 0:
             uncertainties = np.abs(oracle_scores[uncertain_indices] - 0.5)
-            # Sort by uncertainty (ascending = most uncertain first)
             sort_order = np.argsort(uncertainties)
-            sim_indices = uncertain_indices[sort_order[:self.sim_budget]]
-        else:
-            sim_indices = np.array([], dtype=np.int32)
+            sim_candidates.append(uncertain_indices[sort_order[:remaining_budget]])
+
+        sim_indices = np.concatenate(sim_candidates) if sim_candidates else np.array([], dtype=np.int32)
 
         # Run simulations
         spreads = np.zeros(N, dtype=np.int32)
@@ -428,6 +439,9 @@ def nce_train_step_wrapper(hmm_params, opt_state, batch_seqs, batch_masks,
                            batch_seqs, batch_masks, batch_labels, batch_weights)
 
 
+NCE_TEMPERATURE = 10.0  # Prevents gradient saturation when scores are extreme
+
+
 @partial(jax.jit, static_argnames=('optimizer',))
 def _nce_step_inner(optimizer, hmm_params, opt_state,
                     batch_seqs, batch_masks, batch_labels, batch_weights):
@@ -437,8 +451,10 @@ def _nce_step_inner(optimizer, hmm_params, opt_state,
         # all intermediate scan matrices simultaneously
         score_fn = jax.checkpoint(lambda args: _score_single(params, args[0], args[1]))
         scores = jax.lax.map(score_fn, (batch_seqs, batch_masks))
-        log_sigmoid_pos = jax.nn.log_sigmoid(scores)
-        log_sigmoid_neg = jax.nn.log_sigmoid(-scores)
+        # Temperature scaling: divide by τ to prevent sigmoid saturation
+        tempered = scores / NCE_TEMPERATURE
+        log_sigmoid_pos = jax.nn.log_sigmoid(tempered)
+        log_sigmoid_neg = jax.nn.log_sigmoid(-tempered)
         per_sample_loss = -(
             batch_labels * log_sigmoid_pos +
             (1.0 - batch_labels) * log_sigmoid_neg
@@ -460,8 +476,9 @@ def _nce_step_inner_full(optimizer, hmm_params, opt_state,
     def loss_fn(params):
         score_fn = jax.checkpoint(lambda args: _score_single_full(params, args[0], args[1]))
         scores = jax.lax.map(score_fn, (batch_seqs, batch_masks))
-        log_sigmoid_pos = jax.nn.log_sigmoid(scores)
-        log_sigmoid_neg = jax.nn.log_sigmoid(-scores)
+        tempered = scores / NCE_TEMPERATURE
+        log_sigmoid_pos = jax.nn.log_sigmoid(tempered)
+        log_sigmoid_neg = jax.nn.log_sigmoid(-tempered)
         per_sample_loss = -(
             batch_labels * log_sigmoid_pos +
             (1.0 - batch_labels) * log_sigmoid_neg
