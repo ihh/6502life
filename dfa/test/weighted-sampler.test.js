@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
     weightedForward, weightedSample, updateWeights,
-    weightedBeff, trainLoop,
+    weightedBeff, trainLoop, logPathProbability,
+    importanceSamplingEstimate,
 } from '../weighted-sampler.js';
 import { buildOpcodeReviewer } from '../reviewers/opcode.js';
 import { buildOffsetReviewer } from '../reviewers/offset.js';
@@ -230,5 +231,80 @@ describe('trainLoop: end-to-end on composed machine', () => {
         console.log(`  BVC+BCC: ${bvcBcc}/${samples.length}`);
 
         expect(samples.length).toBe(20);
+    }, 120000);
+});
+
+describe('Importance sampling validation', () => {
+    it('recovers known B_eff=62 for constrained length-8 machine', async () => {
+        const opcode = buildOpcodeReviewer();
+        const offset = buildOffsetReviewer();
+        const { composeFullPipeline } = await import('../compose.js');
+        const composed = composeFullPipeline(opcode, offset);
+
+        const acceptStates = new Set();
+        const opcSO = opcode.stateIdx.get('seen-offset');
+        const opcAcc = opcode.stateIdx.get('accept');
+        for (let os = 0; os < offset.numStates; os++) {
+            acceptStates.add(opcSO * offset.numStates + os);
+            acceptStates.add(opcAcc * offset.numStates + os);
+        }
+
+        const rng = new PRNG(42);
+        const result = await importanceSamplingEstimate(
+            composed, acceptStates, 8, 50,
+            async (bytes) => simulateCandidate(bytes, { passes: 80, seed: 42 }),
+            rng,
+        );
+
+        console.log('\n=== Importance Sampling: Constrained L=8 ===');
+        console.log(`  WFST B_eff:  ${result.beffWFST.toFixed(1)} bits`);
+        console.log(`  IS B_eff:    ${result.beffIS.toFixed(1)} bits`);
+        console.log(`  Viable rate: ${(result.viableRate * 100).toFixed(0)}% (${result.nViable}/${result.nSampled})`);
+
+        // Both should be ~62 bits
+        expect(result.beffWFST).toBeCloseTo(62, 0);
+        expect(result.beffIS).toBeCloseTo(62, 0);
+    }, 60000);
+
+    it('estimates B_eff for trained length-9 machine', async () => {
+        const opcode = buildOpcodeReviewer();
+        const offset = buildOffsetReviewer();
+        const { composeFullPipeline } = await import('../compose.js');
+        const composed = composeFullPipeline(opcode, offset);
+
+        const acceptStates = new Set();
+        const opcSO = opcode.stateIdx.get('seen-offset');
+        const opcAcc = opcode.stateIdx.get('accept');
+        for (let os = 0; os < offset.numStates; os++) {
+            acceptStates.add(opcSO * offset.numStates + os);
+            acceptStates.add(opcAcc * offset.numStates + os);
+        }
+
+        const rng = new PRNG(42);
+
+        // Train first
+        const history = await trainLoop(
+            composed, acceptStates,
+            async (bytes) => simulateCandidate(bytes, { passes: 80, seed: 42 }),
+            { L: 9, iterations: 3, samplesPerIter: 30, rng },
+        );
+
+        // Now estimate with importance sampling
+        const result = await importanceSamplingEstimate(
+            composed, acceptStates, 9, 50,
+            async (bytes) => simulateCandidate(bytes, { passes: 80, seed: 42 }),
+            rng,
+        );
+
+        console.log('\n=== Importance Sampling: Trained L=9 ===');
+        console.log(`  WFST B_eff:  ${result.beffWFST.toFixed(1)} bits (model estimate)`);
+        console.log(`  IS B_eff:    ${result.beffIS.toFixed(1)} bits (ground truth)`);
+        console.log(`  Viable rate: ${(result.viableRate * 100).toFixed(0)}% (${result.nViable}/${result.nSampled})`);
+        console.log(`  Gap:         ${(result.beffIS - result.beffWFST).toFixed(1)} bits`);
+
+        // IS estimate should be finite (found some viable)
+        expect(result.beffIS).toBeLessThan(Infinity);
+        // WFST estimate might differ from IS — the gap is the model error
+        expect(result.beffWFST).toBeLessThan(Infinity);
     }, 120000);
 });

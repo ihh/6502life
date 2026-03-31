@@ -157,6 +157,107 @@ export function weightedBeff(forwardCounts, initial, L) {
     return -Math.log2(z) + L * 8;
 }
 
+// --- Importance sampling ---
+
+/**
+ * Compute the log-probability of a sequence under the current WFST.
+ * log q(x) = sum_i log( w(s_i, x_i) * fwd[s_{i+1}][L-i-1] / fwd[s_i][L-i] )
+ *
+ * @param {CopyTransducer} transducer
+ * @param {Float64Array[]} forwardCounts - from weightedForward
+ * @param {Uint8Array} bytes
+ * @returns {number} log2 q(x)
+ */
+export function logPathProbability(transducer, forwardCounts, bytes) {
+    const { trans, initial } = transducer;
+    const L = bytes.length;
+    let state = initial;
+    let logQ = 0;
+
+    for (let i = 0; i < L; i++) {
+        const remaining = L - i;
+        const z = forwardCounts[state][remaining];
+        if (z === 0) return -Infinity;
+
+        const b = bytes[i];
+        const t = trans[state * 256 + b];
+        if (!t || t.verdict === FAIL) return -Infinity;
+
+        const nextRemaining = remaining - 1;
+        const pByte = (t.weight * forwardCounts[t.next][nextRemaining]) / z;
+        if (pByte <= 0) return -Infinity;
+
+        logQ += Math.log2(pByte);
+        state = t.next;
+    }
+
+    return logQ;
+}
+
+/**
+ * Importance sampling estimate of P(viable | length L).
+ *
+ * Samples from the WFST (proposal q), simulates each, and computes:
+ *   P(viable) ≈ (1/N) * sum_i [ viable_i * P_uniform(x_i) / q(x_i) ]
+ *
+ * Also returns the WFST's own estimate for comparison.
+ *
+ * @param {CopyTransducer} transducer
+ * @param {Set<number>} acceptStates
+ * @param {number} L
+ * @param {number} N - number of samples
+ * @param {Function} simulateFn - async (bytes) => { spread, copied }
+ * @param {Object} rng
+ * @returns {Promise<Object>}
+ */
+export async function importanceSamplingEstimate(transducer, acceptStates, L, N, simulateFn, rng) {
+    const fwd = weightedForward(transducer, L, acceptStates);
+    const logUniform = -L * 8; // log2(1/256^L)
+
+    const samples = [];
+    let sumIW = 0;
+    let sumIW2 = 0;
+    let nViable = 0;
+
+    for (let i = 0; i < N; i++) {
+        const bytes = weightedSample(transducer, L, fwd, rng);
+        if (!bytes) continue;
+
+        const sim = await simulateFn(bytes);
+        const viable = sim.copied ? 1 : 0;
+        nViable += viable;
+
+        const logQ = logPathProbability(transducer, fwd, bytes);
+        // importance weight = P_uniform / q = 2^(logUniform - logQ)
+        const logIW = logUniform - logQ;
+        const iw = 2 ** logIW;
+
+        sumIW += viable * iw;
+        sumIW2 += iw * iw;
+
+        samples.push({ bytes, viable, logQ, logIW, spread: sim.spread });
+    }
+
+    const pViableIS = sumIW / N;
+    const beffIS = pViableIS > 0 ? -Math.log2(pViableIS) : Infinity;
+
+    // WFST's own estimate
+    const beffWFST = weightedBeff(fwd, transducer.initial, L);
+
+    // Effective sample size
+    const ess = N > 0 ? (N * N) / (sumIW2 * N * N / (sumIW * sumIW || 1)) : 0;
+
+    return {
+        pViableIS,
+        beffIS,
+        beffWFST,
+        nSampled: samples.length,
+        nViable,
+        viableRate: samples.length > 0 ? nViable / samples.length : 0,
+        ess: Math.min(N, ess),
+    };
+}
+
 /**
  * Run the complete training loop on the composed transducer.
  *
