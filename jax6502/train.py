@@ -1,0 +1,836 @@
+"""
+NCE training pipeline for the profile HMM replicator generator.
+
+Generates candidates from the HMM, evaluates them through a cascade of
+oracles (HMM score -> neural oracle -> JAX 6502 simulator), and updates
+the HMM discriminatively via noise-contrastive estimation.
+
+The simulation oracle uses the JAX 6502 emulator (cpu.py + batch.py)
+with checkerboard scheduling (fast_board.py) for GPU-parallel evaluation.
+"""
+
+import argparse
+import time
+from functools import partial
+from typing import Any, Dict, List, Optional, Tuple
+
+import jax
+import jax.numpy as jnp
+import jax.random as jr
+import numpy as np
+import optax
+
+from .hmm import (
+    HMMParams,
+    NUM_STATES,
+    _score_single,
+    default_params,
+    hmm_log_prob_marginal,
+    hmm_sample,
+    hmm_score_batch,
+    count_params,
+)
+from .fast_board import FastBoard, _run_one_quantum, _run_pass, run_rounds
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+CELL_SIZE = 1024
+REG_PCHI = 0xF9
+REG_PCLO = 0xFA
+REG_P = 0xFB
+REG_A = 0xFC
+REG_X = 0xFD
+REG_Y = 0xFE
+REG_S = 0xFF
+
+
+# ---------------------------------------------------------------------------
+# 1. Simulation oracle (ground truth)
+# ---------------------------------------------------------------------------
+
+def simulate_candidate(byte_seq, board_size=8, num_quanta=200, rng_key=None):
+    """Test if a byte sequence is a viable replicator.
+
+    1. Initialize board_size x board_size board with random bytes.
+    2. Inject byte_seq into cell (0,0) at offset 0.
+    3. Set PC=0 in cell (0,0)'s register save area.
+    4. Run num_quanta scheduling quanta (checkerboard passes).
+    5. Count how many cells contain a copy of the program.
+
+    Args:
+        byte_seq: 1-D int array of byte values (length L).
+        board_size: side length of the square board.
+        num_quanta: number of checkerboard rounds to run.
+        rng_key: JAX PRNG key (default: PRNGKey(42)).
+
+    Returns:
+        dict with 'spread' (int) and 'viable' (bool).
+    """
+    if rng_key is None:
+        rng_key = jr.PRNGKey(42)
+
+    byte_seq = np.asarray(byte_seq, dtype=np.uint8)
+    L = len(byte_seq)
+    B = board_size
+    M = CELL_SIZE
+
+    board = FastBoard(size=B, seed=int(jr.randint(rng_key, (), 0, 2**30)))
+
+    # Randomize the board
+    k1, k2 = jr.split(rng_key)
+    board.storage = jr.randint(k1, (B * B * M,), 0, 256).astype(jnp.uint8)
+
+    # Inject candidate into cell (0,0)
+    board.write_cell(0, 0, 0, byte_seq)
+    # Set registers: PC=0, P=$30, S=$FF
+    board.write_cell(0, 0, REG_PCHI, [0x00])
+    board.write_cell(0, 0, REG_PCLO, [0x00])
+    board.write_cell(0, 0, REG_P, [0x30])
+    board.write_cell(0, 0, REG_S, [0xFF])
+
+    # Run simulation (each round = 2 checkerboard passes = B*B quanta)
+    n_rounds = max(1, num_quanta // (B * B))
+    board.key = k2
+    board.run_rounds(n_rounds)
+
+    # Count spread: how many cells have an exact copy of byte_seq
+    storage_np = np.asarray(board.storage, dtype=np.uint8)
+    spread = 0
+    for ci in range(B):
+        for cj in range(B):
+            base = (ci * B + cj) * M
+            cell_bytes = storage_np[base:base + L]
+            if np.array_equal(cell_bytes, byte_seq):
+                spread += 1
+
+    viable = spread > board_size
+    return {'spread': spread, 'viable': viable}
+
+
+def simulate_batch_python(byte_seqs_list, board_size=8, num_quanta=200, rng_key=None):
+    """Simulate a batch of candidates sequentially.
+
+    Each candidate gets its own board and simulation run.
+
+    Args:
+        byte_seqs_list: list of 1-D arrays/lists of byte values.
+        board_size: side length of the square board.
+        num_quanta: number of checkerboard rounds.
+        rng_key: JAX PRNG key.
+
+    Returns:
+        np.ndarray of spread counts, shape (B,).
+    """
+    if rng_key is None:
+        rng_key = jr.PRNGKey(42)
+
+    spreads = []
+    for i, seq in enumerate(byte_seqs_list):
+        rng_key, subkey = jr.split(rng_key)
+        result = simulate_candidate(seq, board_size=board_size,
+                                    num_quanta=num_quanta, rng_key=subkey)
+        spreads.append(result['spread'])
+
+    return np.array(spreads, dtype=np.int32)
+
+
+# ---------------------------------------------------------------------------
+# 2. Oracle cascade
+# ---------------------------------------------------------------------------
+
+class OracleCascade:
+    """Multi-level oracle with active learning.
+
+    Level 0: HMM score (analytical, free)
+    Level 1: Neural oracle (GPU batch, ~0.2us/seq)
+    Level 2: JAX simulator (GPU batch, ~50us/seq)
+
+    Each level filters candidates for the next.
+    Active learning selects the most uncertain examples at each level.
+    """
+
+    def __init__(self, hmm_params, oracle_state=None, simulate_fn=None,
+                 hmm_threshold=20.0,
+                 oracle_budget=1000,
+                 sim_budget=100):
+        """
+        Args:
+            hmm_params: HMMParams for level-0 scoring.
+            oracle_state: Flax TrainState for neural oracle (optional).
+            simulate_fn: callable(byte_seqs_list, rng_key) -> spread counts.
+            hmm_threshold: filter candidates where |s_theta(x)| < threshold.
+            oracle_budget: max neural oracle evaluations per cascade call.
+            sim_budget: max simulation evaluations per cascade call.
+        """
+        self.hmm_params = hmm_params
+        self.oracle_state = oracle_state
+        self.simulate_fn = simulate_fn or simulate_batch_python
+        self.hmm_threshold = hmm_threshold
+        self.oracle_budget = oracle_budget
+        self.sim_budget = sim_budget
+
+    def evaluate(self, candidates_seqs, candidates_masks, rng_key,
+                 board_size=8, num_quanta=200):
+        """Run candidates through the cascade.
+
+        Args:
+            candidates_seqs: (N, L) int32 padded byte sequences.
+            candidates_masks: (N, L) bool masks.
+            rng_key: JAX PRNG key.
+            board_size: board size for simulation.
+            num_quanta: quanta for simulation.
+
+        Returns:
+            dict with:
+                'hmm_scores': (N,) float32 log-odds scores.
+                'labels': (N,) float32 labels (0 or 1, NaN if not simulated).
+                'sim_indices': indices of candidates that were simulated.
+                'spreads': spread counts for simulated candidates.
+        """
+        N = candidates_seqs.shape[0]
+
+        # Level 0: HMM scoring (all candidates)
+        hmm_scores = np.asarray(hmm_score_batch(
+            self.hmm_params, candidates_seqs, candidates_masks))
+
+        # Initialize labels as NaN (unknown)
+        labels = np.full(N, np.nan, dtype=np.float32)
+
+        # Obvious negatives: very low HMM score
+        obvious_neg = hmm_scores < -self.hmm_threshold
+        labels[obvious_neg] = 0.0
+
+        # Candidates that pass HMM filter
+        uncertain_mask = np.abs(hmm_scores) < self.hmm_threshold
+        uncertain_indices = np.where(uncertain_mask)[0]
+
+        # Level 1: Neural oracle (if available)
+        oracle_scores = np.full(N, 0.5, dtype=np.float32)
+        if self.oracle_state is not None and len(uncertain_indices) > 0:
+            from .oracle import predict_batch as oracle_predict
+            # Limit to oracle_budget
+            eval_indices = uncertain_indices[:self.oracle_budget]
+            eval_seqs = candidates_seqs[eval_indices]
+            eval_masks = candidates_masks[eval_indices]
+            probs, _ = oracle_predict(self.oracle_state, eval_seqs, eval_masks)
+            oracle_scores[eval_indices] = np.asarray(probs)
+            uncertain_indices = eval_indices
+
+        # Level 2: Simulation (most uncertain candidates)
+        if len(uncertain_indices) > 0:
+            # Select candidates for simulation: most uncertain by oracle
+            uncertainties = np.abs(oracle_scores[uncertain_indices] - 0.5)
+            # Sort by uncertainty (ascending = most uncertain first)
+            sort_order = np.argsort(uncertainties)
+            sim_indices = uncertain_indices[sort_order[:self.sim_budget]]
+        else:
+            sim_indices = np.array([], dtype=np.int32)
+
+        # Run simulations
+        spreads = np.zeros(N, dtype=np.int32)
+        if len(sim_indices) > 0:
+            # Extract raw byte sequences for simulation
+            sim_seqs_list = []
+            for idx in sim_indices:
+                length = int(candidates_masks[idx].sum())
+                seq = np.asarray(candidates_seqs[idx, :length], dtype=np.uint8)
+                sim_seqs_list.append(seq)
+
+            rng_key, subkey = jr.split(rng_key)
+            sim_spreads = self.simulate_fn(
+                sim_seqs_list, board_size=board_size,
+                num_quanta=num_quanta, rng_key=subkey)
+
+            for i, idx in enumerate(sim_indices):
+                spreads[idx] = sim_spreads[i]
+                labels[idx] = 1.0 if sim_spreads[i] > board_size else 0.0
+
+        return {
+            'hmm_scores': hmm_scores,
+            'oracle_scores': oracle_scores,
+            'labels': labels,
+            'sim_indices': sim_indices,
+            'spreads': spreads,
+        }
+
+
+# ---------------------------------------------------------------------------
+# 3. NCE training step
+# ---------------------------------------------------------------------------
+
+def _compute_hmm_log_prob(params, seq, mask):
+    """Compute log P(x | HMM) for a single sequence."""
+    length = mask.sum().astype(jnp.int32)
+    return hmm_log_prob_marginal(params, seq, length)
+
+
+_batch_log_prob = jax.vmap(_compute_hmm_log_prob, in_axes=(None, 0, 0))
+
+
+@partial(jax.jit, static_argnames=())
+def nce_train_step(hmm_params, opt_state, batch_seqs, batch_masks,
+                   batch_labels, batch_weights, optimizer):
+    """One NCE training step with importance-weighted replay.
+
+    Loss = -sum_i w_i * [y_i * log sigma(s(x_i)) + (1-y_i) * log(1-sigma(s(x_i)))]
+
+    where s(x) = log P(x|HMM) + L * ln(256) (log-odds vs null).
+
+    Args:
+        hmm_params: HMMParams pytree.
+        opt_state: optimizer state.
+        batch_seqs: (B, L) int32.
+        batch_masks: (B, L) bool.
+        batch_labels: (B,) float32 (0 or 1).
+        batch_weights: (B,) float32 importance weights.
+        optimizer: optax optimizer (static).
+
+    Returns:
+        (new_params, new_opt_state, loss).
+    """
+    def loss_fn(params):
+        scores = jax.vmap(_score_single, in_axes=(None, 0, 0))(
+            params, batch_seqs, batch_masks)
+
+        # Weighted binary cross-entropy
+        log_sigmoid_pos = jax.nn.log_sigmoid(scores)
+        log_sigmoid_neg = jax.nn.log_sigmoid(-scores)
+
+        per_sample_loss = -(
+            batch_labels * log_sigmoid_pos +
+            (1.0 - batch_labels) * log_sigmoid_neg
+        )
+
+        # Apply importance weights
+        weighted_loss = (batch_weights * per_sample_loss).sum() / batch_weights.sum()
+        return weighted_loss
+
+    loss, grads = jax.value_and_grad(loss_fn)(hmm_params)
+    updates, new_opt_state = optimizer.update(grads, opt_state, hmm_params)
+    new_params = optax.apply_updates(hmm_params, updates)
+    new_params = HMMParams(*new_params)
+    return new_params, new_opt_state, loss
+
+
+# Non-JIT wrapper that handles the static optimizer argument
+def nce_train_step_wrapper(hmm_params, opt_state, batch_seqs, batch_masks,
+                           batch_labels, batch_weights, optimizer):
+    """Wrapper that calls the JIT-compiled step with optimizer as a static arg."""
+    return _nce_step_inner(optimizer, hmm_params, opt_state,
+                           batch_seqs, batch_masks, batch_labels, batch_weights)
+
+
+@partial(jax.jit, static_argnames=('optimizer',))
+def _nce_step_inner(optimizer, hmm_params, opt_state,
+                    batch_seqs, batch_masks, batch_labels, batch_weights):
+    """JIT-compiled NCE step with optimizer as static argument."""
+    def loss_fn(params):
+        scores = jax.vmap(_score_single, in_axes=(None, 0, 0))(
+            params, batch_seqs, batch_masks)
+        log_sigmoid_pos = jax.nn.log_sigmoid(scores)
+        log_sigmoid_neg = jax.nn.log_sigmoid(-scores)
+        per_sample_loss = -(
+            batch_labels * log_sigmoid_pos +
+            (1.0 - batch_labels) * log_sigmoid_neg
+        )
+        weighted_loss = (batch_weights * per_sample_loss).sum() / batch_weights.sum()
+        return weighted_loss
+
+    loss, grads = jax.value_and_grad(loss_fn)(hmm_params)
+    updates, new_opt_state = optimizer.update(grads, opt_state, hmm_params)
+    new_params = optax.apply_updates(hmm_params, updates)
+    new_params = HMMParams(*new_params)
+    return new_params, new_opt_state, loss
+
+
+# ---------------------------------------------------------------------------
+# 4. Replay buffer with importance weighting
+# ---------------------------------------------------------------------------
+
+class ReplayBuffer:
+    """Stores (sequence, mask, label, log_prob_when_sampled) tuples.
+
+    Supports importance-weighted sampling:
+    - When sampling a minibatch, compute current log_prob for each
+    - Importance weight = exp(current_log_prob - stored_log_prob)
+    - Clip weights PPO-style to prevent stale samples from dominating
+    - Optionally evict samples with extreme weights (too stale)
+    """
+
+    def __init__(self, max_size=10000, max_len=32):
+        self.max_size = max_size
+        self.max_len = max_len
+        self.sequences = np.zeros((max_size, max_len), dtype=np.int32)
+        self.masks = np.zeros((max_size, max_len), dtype=bool)
+        self.labels = np.zeros(max_size, dtype=np.float32)
+        self.log_probs = np.zeros(max_size, dtype=np.float32)
+        self.size = 0
+        self.write_pos = 0
+
+    def add(self, sequences, masks, labels, log_probs):
+        """Add examples to the buffer.
+
+        Args:
+            sequences: (N, L) int32.
+            masks: (N, L) bool.
+            labels: (N,) float32.
+            log_probs: (N,) float32 log P(x|HMM) at time of sampling.
+        """
+        sequences = np.asarray(sequences)
+        masks = np.asarray(masks)
+        labels = np.asarray(labels)
+        log_probs = np.asarray(log_probs)
+
+        N = len(labels)
+        L = sequences.shape[1]
+
+        for i in range(N):
+            pos = self.write_pos % self.max_size
+            self.sequences[pos, :L] = sequences[i, :L]
+            self.sequences[pos, L:] = 0
+            self.masks[pos, :L] = masks[i, :L]
+            self.masks[pos, L:] = False
+            self.labels[pos] = labels[i]
+            self.log_probs[pos] = log_probs[i]
+            self.write_pos += 1
+            self.size = min(self.size + 1, self.max_size)
+
+    def sample_batch(self, hmm_params, batch_size=64, rng_key=None,
+                     clip_lo=0.2, clip_hi=5.0):
+        """Sample a minibatch with importance weights.
+
+        Args:
+            hmm_params: current HMM params (for computing importance weights).
+            batch_size: minibatch size.
+            rng_key: JAX PRNG key.
+            clip_lo: lower clip for importance weights.
+            clip_hi: upper clip for importance weights.
+
+        Returns:
+            dict with 'sequences', 'masks', 'labels', 'weights' as arrays.
+        """
+        if rng_key is None:
+            rng_key = jr.PRNGKey(0)
+
+        if self.size == 0:
+            return None
+
+        actual_batch = min(batch_size, self.size)
+
+        # Random sample indices
+        indices = np.asarray(jr.randint(rng_key, (actual_batch,), 0, self.size))
+
+        seqs = jnp.array(self.sequences[indices])
+        msks = jnp.array(self.masks[indices])
+        lbls = jnp.array(self.labels[indices])
+        old_lps = self.log_probs[indices]
+
+        # Compute current log probs
+        current_lps = np.asarray(_batch_log_prob(hmm_params, seqs, msks))
+
+        # Importance weights: exp(current - old), clipped
+        log_ratios = current_lps - old_lps
+        weights = np.clip(np.exp(log_ratios), clip_lo, clip_hi)
+
+        return {
+            'sequences': seqs,
+            'masks': msks,
+            'labels': lbls,
+            'weights': jnp.array(weights, dtype=jnp.float32),
+        }
+
+    def viable_count(self):
+        """Count viable examples in the buffer."""
+        return int(self.labels[:self.size].sum())
+
+
+# ---------------------------------------------------------------------------
+# 5. Sampling helpers
+# ---------------------------------------------------------------------------
+
+def _pad_sequences(byte_arrays, max_len=32):
+    """Pad variable-length byte arrays to fixed length.
+
+    Returns:
+        (sequences, masks) as numpy arrays.
+    """
+    N = len(byte_arrays)
+    seq_np = np.zeros((N, max_len), dtype=np.int32)
+    mask_np = np.zeros((N, max_len), dtype=bool)
+
+    for i, arr in enumerate(byte_arrays):
+        if arr is None:
+            continue
+        length = min(len(arr), max_len)
+        seq_np[i, :length] = np.asarray(arr[:length], dtype=np.int32)
+        mask_np[i, :length] = True
+
+    return seq_np, mask_np
+
+
+def sample_from_hmm(hmm_params, n_samples, lengths, rng_key, max_len=32):
+    """Sample n_samples candidates from the HMM at various lengths.
+
+    Args:
+        hmm_params: HMMParams.
+        n_samples: total number of samples.
+        lengths: list of target lengths to sample.
+        rng_key: JAX PRNG key.
+        max_len: max padded length.
+
+    Returns:
+        (sequences, masks) as jnp arrays of shape (n_samples, max_len).
+    """
+    samples_per_length = max(1, n_samples // len(lengths))
+    all_samples = []
+
+    for target_len in lengths:
+        for _ in range(samples_per_length):
+            rng_key, subkey = jr.split(rng_key)
+            sample = hmm_sample(hmm_params, target_len, subkey)
+            all_samples.append(sample)
+
+    # Pad to n_samples if needed
+    while len(all_samples) < n_samples:
+        rng_key, subkey = jr.split(rng_key)
+        target_len = lengths[len(all_samples) % len(lengths)]
+        sample = hmm_sample(hmm_params, target_len, subkey)
+        all_samples.append(sample)
+
+    all_samples = all_samples[:n_samples]
+    seq_np, mask_np = _pad_sequences(all_samples, max_len=max_len)
+    return jnp.array(seq_np), jnp.array(mask_np)
+
+
+# ---------------------------------------------------------------------------
+# 6. Mixture EMA update (hybrid with gradient)
+# ---------------------------------------------------------------------------
+
+def ema_mixture_update(hmm_params, viable_seqs, viable_masks, alpha=0.01):
+    """Exponential moving average update on insert emission statistics.
+
+    For each viable sequence, increment counts for the bytes that appear
+    in insert positions. This provides a smoother update path than pure
+    gradient descent on the mixture logits.
+
+    Args:
+        hmm_params: current HMMParams.
+        viable_seqs: (N, L) int32 viable sequences.
+        viable_masks: (N, L) bool masks.
+        alpha: EMA decay rate.
+
+    Returns:
+        Updated HMMParams with new emission distributions.
+    """
+    N = viable_seqs.shape[0]
+    if N == 0:
+        return hmm_params
+
+    # Accumulate byte frequency from viable sequences
+    # This is a simplified version that treats all positions as potential inserts
+    viable_seqs_np = np.asarray(viable_seqs)
+    viable_masks_np = np.asarray(viable_masks)
+
+    # Count byte frequencies across all viable sequences
+    byte_counts = np.zeros(256, dtype=np.float64)
+    total = 0
+    for i in range(N):
+        length = int(viable_masks_np[i].sum())
+        for pos in range(length):
+            b = viable_seqs_np[i, pos]
+            byte_counts[b] += 1.0
+            total += 1
+
+    if total == 0:
+        return hmm_params
+
+    # Normalize to log-probabilities
+    byte_probs = byte_counts / total
+    byte_log_probs = np.log(np.maximum(byte_probs, 1e-30))
+
+    # EMA update on 1-byte insert logits
+    old_logits = np.asarray(hmm_params.insert_1byte_logits)
+    new_logits = (1.0 - alpha) * old_logits + alpha * byte_log_probs.astype(np.float32)
+
+    return hmm_params._replace(
+        insert_1byte_logits=jnp.array(new_logits)
+    )
+
+
+# ---------------------------------------------------------------------------
+# 7. Metrics and logging
+# ---------------------------------------------------------------------------
+
+def compute_metrics(hmm_params, replay_buffer, epoch):
+    """Compute training metrics.
+
+    Args:
+        hmm_params: current HMMParams.
+        replay_buffer: ReplayBuffer with training data.
+        epoch: current epoch number.
+
+    Returns:
+        dict of metrics.
+    """
+    metrics = {'epoch': epoch}
+
+    if replay_buffer.size == 0:
+        metrics['beff'] = float('inf')
+        metrics['viable_rate'] = 0.0
+        metrics['insert_entropy'] = 0.0
+        metrics['buffer_size'] = 0
+        return metrics
+
+    # Viable rate: fraction of buffered examples that are viable
+    viable_count = replay_buffer.viable_count()
+    metrics['viable_rate'] = viable_count / max(1, replay_buffer.size)
+    metrics['buffer_size'] = replay_buffer.size
+
+    # B_eff estimate: effective bits to find a viable sequence
+    # B_eff = -log2(P(viable | HMM))
+    # Estimated via the empirical viable rate from simulation
+    viable_rate = metrics['viable_rate']
+    if viable_rate > 0:
+        metrics['beff'] = -np.log2(viable_rate)
+    else:
+        metrics['beff'] = float('inf')
+
+    # Insert emission entropy
+    log_probs = jax.nn.log_softmax(hmm_params.insert_1byte_logits)
+    probs = jnp.exp(log_probs)
+    entropy = -float(jnp.sum(probs * log_probs))
+    metrics['insert_entropy'] = entropy
+
+    # Score statistics on buffer contents
+    sample_size = min(100, replay_buffer.size)
+    seqs = jnp.array(replay_buffer.sequences[:sample_size])
+    msks = jnp.array(replay_buffer.masks[:sample_size])
+    scores = np.asarray(hmm_score_batch(hmm_params, seqs, msks))
+    metrics['score_mean'] = float(np.mean(scores))
+    metrics['score_std'] = float(np.std(scores))
+
+    return metrics
+
+
+# ---------------------------------------------------------------------------
+# 8. Full training loop
+# ---------------------------------------------------------------------------
+
+def train_hmm_nce(hmm_params, oracle_state=None,
+                  board_size=8, num_epochs=100,
+                  samples_per_epoch=1000, sim_budget_per_epoch=100,
+                  oracle_budget_per_epoch=500,
+                  learning_rate=1e-3, replay_buffer_size=10000,
+                  rng_seed=42, lengths=None, max_len=32,
+                  num_quanta=200, verbose=True):
+    """Full NCE training loop.
+
+    Each epoch:
+      1. Sample candidates from HMM at various lengths.
+      2. Run through oracle cascade (HMM filter -> neural oracle -> simulator).
+      3. Add labeled examples to replay buffer.
+      4. Sample minibatch from replay buffer with importance weights.
+      5. NCE gradient step on HMM params (through associative scan).
+      6. Periodically apply EMA mixture update on viable examples.
+      7. Log metrics: B_eff estimate, viable rate, oracle accuracy,
+         insert emission entropy, top bytes by position.
+
+    Args:
+        hmm_params: initial HMMParams.
+        oracle_state: optional neural oracle TrainState.
+        board_size: board size for simulation.
+        num_epochs: number of training epochs.
+        samples_per_epoch: candidates sampled per epoch.
+        sim_budget_per_epoch: max simulations per epoch.
+        oracle_budget_per_epoch: max oracle evaluations per epoch.
+        learning_rate: AdamW learning rate.
+        replay_buffer_size: max replay buffer size.
+        rng_seed: random seed.
+        lengths: list of target sequence lengths (default [8, 10, 12]).
+        max_len: max padded length for sequences.
+        num_quanta: quanta per simulation.
+        verbose: print progress.
+
+    Returns:
+        (trained_params, history, replay_buffer).
+    """
+    if lengths is None:
+        lengths = [8, 10, 12]
+
+    rng_key = jr.PRNGKey(rng_seed)
+
+    # Set up optimizer
+    optimizer = optax.adamw(learning_rate, weight_decay=0.01)
+    opt_state = optimizer.init(hmm_params)
+
+    # Set up replay buffer
+    buffer = ReplayBuffer(max_size=replay_buffer_size, max_len=max_len)
+
+    # Set up oracle cascade
+    cascade = OracleCascade(
+        hmm_params=hmm_params,
+        oracle_state=oracle_state,
+        simulate_fn=partial(simulate_batch_python,
+                            board_size=board_size,
+                            num_quanta=num_quanta),
+        hmm_threshold=20.0,
+        oracle_budget=oracle_budget_per_epoch,
+        sim_budget=sim_budget_per_epoch,
+    )
+
+    history = []
+
+    for epoch in range(num_epochs):
+        t0 = time.time()
+
+        # 1. Sample candidates from HMM
+        rng_key, sample_key, cascade_key, buffer_key = jr.split(rng_key, 4)
+        seqs, masks = sample_from_hmm(
+            hmm_params, samples_per_epoch, lengths, sample_key, max_len=max_len)
+
+        # 2. Run through oracle cascade
+        cascade.hmm_params = hmm_params  # update cascade with current params
+        result = cascade.evaluate(seqs, masks, cascade_key,
+                                  board_size=board_size,
+                                  num_quanta=num_quanta)
+
+        # 3. Add labeled examples to replay buffer
+        labeled_mask = ~np.isnan(result['labels'])
+        if labeled_mask.any():
+            labeled_indices = np.where(labeled_mask)[0]
+            labeled_seqs = np.asarray(seqs[labeled_indices])
+            labeled_masks = np.asarray(masks[labeled_indices])
+            labeled_labels = result['labels'][labeled_indices]
+
+            # Compute log probs at time of sampling
+            labeled_lps = np.asarray(_batch_log_prob(
+                hmm_params,
+                jnp.array(labeled_seqs),
+                jnp.array(labeled_masks)))
+
+            buffer.add(labeled_seqs, labeled_masks, labeled_labels, labeled_lps)
+
+        # 4. Sample minibatch from replay buffer and do NCE step
+        if buffer.size >= 8:
+            batch = buffer.sample_batch(hmm_params, batch_size=64,
+                                        rng_key=buffer_key)
+            if batch is not None:
+                hmm_params, opt_state, loss = _nce_step_inner(
+                    optimizer, hmm_params, opt_state,
+                    batch['sequences'], batch['masks'],
+                    batch['labels'], batch['weights'])
+                loss_val = float(loss)
+            else:
+                loss_val = float('nan')
+        else:
+            loss_val = float('nan')
+
+        # 5. Periodically apply EMA mixture update
+        if (epoch + 1) % 5 == 0 and buffer.viable_count() > 0:
+            viable_idx = np.where(buffer.labels[:buffer.size] > 0.5)[0]
+            if len(viable_idx) > 0:
+                viable_seqs_buf = jnp.array(buffer.sequences[viable_idx])
+                viable_masks_buf = jnp.array(buffer.masks[viable_idx])
+                hmm_params = ema_mixture_update(
+                    hmm_params, viable_seqs_buf, viable_masks_buf, alpha=0.01)
+                # Re-init optimizer state for the updated parameters
+                opt_state = optimizer.init(hmm_params)
+
+        # 6. Compute and log metrics
+        metrics = compute_metrics(hmm_params, buffer, epoch)
+        metrics['loss'] = loss_val
+        metrics['time'] = time.time() - t0
+        metrics['sim_count'] = len(result.get('sim_indices', []))
+
+        # Count newly viable this epoch
+        if labeled_mask.any():
+            new_viable = int((result['labels'][labeled_mask] > 0.5).sum())
+            metrics['new_viable'] = new_viable
+        else:
+            metrics['new_viable'] = 0
+
+        history.append(metrics)
+
+        if verbose:
+            print(f"Epoch {epoch:4d}: loss={loss_val:8.4f}  "
+                  f"B_eff={metrics['beff']:6.1f}  "
+                  f"viable_rate={metrics['viable_rate']:.4f}  "
+                  f"new_viable={metrics['new_viable']}  "
+                  f"buffer={buffer.size}  "
+                  f"entropy={metrics['insert_entropy']:.2f}  "
+                  f"time={metrics['time']:.1f}s")
+
+    return hmm_params, history, buffer
+
+
+# ---------------------------------------------------------------------------
+# 9. Save/load
+# ---------------------------------------------------------------------------
+
+def save_params(hmm_params, path):
+    """Save HMM params to .npz file."""
+    np.savez(path, **{
+        name: np.asarray(val) for name, val in zip(hmm_params._fields, hmm_params)
+    })
+
+
+def load_params(path):
+    """Load HMM params from .npz file."""
+    data = np.load(path)
+    return HMMParams(**{name: jnp.array(data[name]) for name in HMMParams._fields})
+
+
+# ---------------------------------------------------------------------------
+# 10. Entry point
+# ---------------------------------------------------------------------------
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Train HMM replicator generator via NCE')
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--board-size', type=int, default=8)
+    parser.add_argument('--samples', type=int, default=1000)
+    parser.add_argument('--sim-budget', type=int, default=100)
+    parser.add_argument('--lengths', type=int, nargs='+', default=[8, 10, 12])
+    parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--num-quanta', type=int, default=200)
+    parser.add_argument('--save', type=str, default='hmm_trained.npz')
+    args = parser.parse_args()
+
+    # Initialize
+    hmm_params = default_params()
+    n_params = count_params(hmm_params)
+    print(f"HMM parameters: {n_params}")
+    print(f"Training for {args.epochs} epochs, "
+          f"{args.samples} samples/epoch, "
+          f"{args.sim_budget} sims/epoch")
+    print(f"Lengths: {args.lengths}")
+    print()
+
+    # Train
+    hmm_params, history, buffer = train_hmm_nce(
+        hmm_params,
+        board_size=args.board_size,
+        num_epochs=args.epochs,
+        samples_per_epoch=args.samples,
+        sim_budget_per_epoch=args.sim_budget,
+        lengths=args.lengths,
+        learning_rate=args.lr,
+        rng_seed=args.seed,
+        num_quanta=args.num_quanta,
+    )
+
+    # Save
+    save_params(hmm_params, args.save)
+    print(f"\nTrained HMM saved to {args.save}")
+
+    # Report
+    print("\nFinal epochs:")
+    for h in history[-5:]:
+        print(f"  Epoch {h['epoch']}: B_eff={h['beff']:.1f}, "
+              f"viable_rate={h['viable_rate']:.4f}, "
+              f"loss={h['loss']:.4f}")

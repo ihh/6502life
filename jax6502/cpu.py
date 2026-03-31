@@ -38,6 +38,9 @@ from .opcode_table import (
 # JAX-constant opcode table
 _OPC = jnp.array(OPCODE_TABLE, dtype=jnp.int32)
 
+# Address mask — 0x7FF for 2KB bare sim (backward-compat constant)
+ADDR_MASK = 0x7FF
+
 # P flag bits: NV-BDIZC
 F_C = 0x01; F_Z = 0x02; F_I = 0x04; F_D = 0x08
 F_B = 0x10; F_U = 0x20; F_V = 0x40; F_N = 0x80
