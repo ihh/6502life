@@ -6,11 +6,14 @@ A virtual 256x256 grid of interconnected 6502 CPUs simulating cellular automata.
 
 - `board/` — Core engine: memory management, CPU controller, visualizer
 - `engine/` — Shared engine layer (board.js, assembler.js, format.js) used by both CLI and web app
+- `dfa/` — WFST pipeline for replicator scoring, generation, and training (see `dfa/GPU-AGENT-README.md`)
+- `coin/` — Coin protocol: ChaCha20 board init, Merkle trees, sessions, economics, board contracts
+- `webgpu/` — WebGPU + CPU bare-sim engines, opcode tables, PRNG
 - `app/` — React+Vite web dashboard for running and inspecting the board
 - `cli/` — Command-line tools for assembling, running, inspecting, and visualizing the board
-- `6502life-test-app/` — Legacy prototype UI (broken, superseded by `app/`)
-- `tex/` — LaTeX documentation (run `make` in tex/ to build PDF)
+- `tex/` — LaTeX documentation: replicator probability, WFST training, DL survey
 - `doc/` — Built PDFs and tutorials
+- `6502life-test-app/` — Legacy prototype UI (broken, superseded by `app/`)
 
 ## How to Run
 
