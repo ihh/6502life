@@ -447,8 +447,8 @@ def _match_log_prob(params: HMMParams, match_idx: int, byte_val: jnp.ndarray):
         lp = jnp.where(is_match, log_probs, _NEG_INF)
         return jax.scipy.special.logsumexp(lp)
     else:
-        # M8: handled separately (returns 0.0, offset check is external)
-        return 0.0
+        # M8: uniform emission log(1/256) — offset check is post-processing
+        return -jnp.log(256.0)
 
 
 # ---------------------------------------------------------------------------
@@ -478,8 +478,8 @@ def _make_match_emission_table(params: HMMParams, byte_val: jnp.ndarray):
     m7_lps = jnp.where(m7_matches, m7_log_probs, _NEG_INF)
     m7 = jax.scipy.special.logsumexp(m7_lps)
 
-    # M8: offset check done externally, emission is 1.0 (log = 0)
-    m8 = 0.0
+    # M8: uniform emission log(1/256) — offset check is post-processing
+    m8 = -jnp.log(256.0)
 
     return jnp.array([m1, m2, m3, m4, m5, m6, m7, m8])
 
@@ -498,12 +498,15 @@ def make_emission_matrix(params: HMMParams,
                          byte_t1: jnp.ndarray,
                          byte_t2: jnp.ndarray,
                          pos: jnp.ndarray,
-                         m1_pos: jnp.ndarray,
                          mode: str = 'core'):
     """Generate the [S, S] transition-emission matrix for position t.
 
     Each entry M[s, s'] is the log-probability of transitioning from state s
     to state s' while consuming byte_t at position t.
+
+    M8 (branch offset) uses a uniform emission log(1/256). The branch offset
+    is NOT checked by the HMM; it is handled as post-processing (overwritten
+    during sampling, checked externally during scoring if needed).
 
     Args:
         params: HMMParams pytree.
@@ -511,7 +514,6 @@ def make_emission_matrix(params: HMMParams,
         byte_t1: byte at t+1 (for 2-byte emission lookahead).
         byte_t2: byte at t+2 (for 3-byte emission lookahead).
         pos: position index t (scalar int).
-        m1_pos: position of M1 in the sequence (scalar int).
         mode: 'core' or 'full'.
 
     Returns:
@@ -538,10 +540,6 @@ def make_emission_matrix(params: HMMParams,
 
     # Match emission log-probs for byte_t
     match_lp = _make_match_emission_table(params, byte_t)  # [8]
-
-    # M8 offset check: expected offset for M8 at this position
-    expected_offset = (-(pos - m1_pos + 1)) & 0xFF
-    m8_offset_ok = (byte_t == expected_offset).astype(jnp.float32)
 
     # Process each insert state k = 0..8
     for k in range(NUM_INSERT):
@@ -583,15 +581,8 @@ def make_emission_matrix(params: HMMParams,
         if k < 8:
             mk1 = k  # match_lp index (0-based: M1=0, ..., M8=7)
             next_ik = _ik(k + 1)
-
-            if mk1 < 7:
-                w_match = log_1m_delta[k] + match_lp[mk1]
-                mat = mat.at[ik, next_ik].set(w_match)
-            else:
-                # M8: branch offset must match
-                w_match = log_1m_delta[k] + jnp.where(
-                    m8_offset_ok > 0.5, 0.0, _NEG_INF)
-                mat = mat.at[ik, next_ik].set(w_match)
+            w_match = log_1m_delta[k] + match_lp[mk1]
+            mat = mat.at[ik, next_ik].set(w_match)
 
     if mode == 'full':
         # --- Region 2->3 transition: I_8 -> first register state ---
@@ -638,9 +629,9 @@ def make_emission_matrix(params: HMMParams,
 
 
 # Wrapped version for core mode (backward compatible)
-def _make_emission_matrix_core(params, byte_t, byte_t1, byte_t2, pos, m1_pos):
+def _make_emission_matrix_core(params, byte_t, byte_t1, byte_t2, pos):
     """Core-mode emission matrix (backward compatible)."""
-    return make_emission_matrix(params, byte_t, byte_t1, byte_t2, pos, m1_pos,
+    return make_emission_matrix(params, byte_t, byte_t1, byte_t2, pos,
                                 mode='core')
 
 
@@ -673,8 +664,7 @@ def log_matmul(A: jnp.ndarray, B: jnp.ndarray) -> jnp.ndarray:
 
 def _hmm_log_prob_core(params: HMMParams,
                        byte_seq: jnp.ndarray,
-                       length: jnp.ndarray,
-                       m1_pos: jnp.ndarray) -> jnp.ndarray:
+                       length: jnp.ndarray) -> jnp.ndarray:
     """Core mode: log P(seq | HMM) using associative scan."""
     S = NUM_STATES_CORE
     L = byte_seq.shape[0]
@@ -685,8 +675,8 @@ def _hmm_log_prob_core(params: HMMParams,
     bytes_t2 = jnp.concatenate([byte_seq[2:], jnp.zeros(2, dtype=jnp.int32)])
 
     all_matrices = jax.vmap(
-        _make_emission_matrix_core, in_axes=(None, 0, 0, 0, 0, None)
-    )(params, bytes_t, bytes_t1, bytes_t2, positions, m1_pos)
+        _make_emission_matrix_core, in_axes=(None, 0, 0, 0, 0)
+    )(params, bytes_t, bytes_t1, bytes_t2, positions)
 
     mask = (positions < length)[:, None, None]
     identity = jnp.where(
@@ -708,16 +698,15 @@ def _hmm_log_prob_core(params: HMMParams,
     return result[_ik(8)] + log_1m_delta_8
 
 
-def _make_emission_matrix_full(params, byte_t, byte_t1, byte_t2, pos, m1_pos):
+def _make_emission_matrix_full(params, byte_t, byte_t1, byte_t2, pos):
     """Full-mode emission matrix wrapper for vmap."""
-    return make_emission_matrix(params, byte_t, byte_t1, byte_t2, pos, m1_pos,
+    return make_emission_matrix(params, byte_t, byte_t1, byte_t2, pos,
                                 mode='full')
 
 
 def _hmm_log_prob_full(params: HMMParams,
                        byte_seq: jnp.ndarray,
-                       length: jnp.ndarray,
-                       m1_pos: jnp.ndarray) -> jnp.ndarray:
+                       length: jnp.ndarray) -> jnp.ndarray:
     """Full mode: log P(seq | HMM) using associative scan.
 
     Three regions:
@@ -735,8 +724,8 @@ def _hmm_log_prob_full(params: HMMParams,
     bytes_t2 = jnp.concatenate([byte_seq[2:], jnp.zeros(2, dtype=jnp.int32)])
 
     all_matrices = jax.vmap(
-        _make_emission_matrix_full, in_axes=(None, 0, 0, 0, 0, None)
-    )(params, bytes_t, bytes_t1, bytes_t2, positions, m1_pos)
+        _make_emission_matrix_full, in_axes=(None, 0, 0, 0, 0)
+    )(params, bytes_t, bytes_t1, bytes_t2, positions)
 
     mask = (positions < length)[:, None, None]
     identity = jnp.where(
@@ -764,23 +753,24 @@ def _hmm_log_prob_full(params: HMMParams,
 def hmm_log_prob(params: HMMParams,
                  byte_seq: jnp.ndarray,
                  length: jnp.ndarray,
-                 m1_pos: jnp.ndarray,
                  mode: str = 'core') -> jnp.ndarray:
     """Compute log P(seq | HMM) using associative scan.
+
+    M8 (branch offset) uses a uniform emission. The offset is NOT checked
+    by the HMM; it is handled as post-processing.
 
     Args:
         params: HMMParams pytree.
         byte_seq: [L] int32 byte sequence (padded to max length).
         length: scalar int, actual sequence length.
-        m1_pos: scalar int, position of M1 (LDA zpx = 0xB5) in the sequence.
         mode: 'core' or 'full'.
 
     Returns:
         scalar log-probability.
     """
     if mode == 'full':
-        return _hmm_log_prob_full(params, byte_seq, length, m1_pos)
-    return _hmm_log_prob_core(params, byte_seq, length, m1_pos)
+        return _hmm_log_prob_full(params, byte_seq, length)
+    return _hmm_log_prob_core(params, byte_seq, length)
 
 
 @partial(jax.jit, static_argnames=('mode',))
@@ -788,7 +778,10 @@ def hmm_log_prob_marginal(params: HMMParams,
                           byte_seq: jnp.ndarray,
                           length: jnp.ndarray,
                           mode: str = 'core') -> jnp.ndarray:
-    """Compute log P(seq | HMM) marginalised over all possible M1 positions.
+    """Compute log P(seq | HMM).
+
+    Backward-compatible wrapper — now equivalent to hmm_log_prob since M1
+    position marginalization is no longer needed (M8 uses uniform emission).
 
     Args:
         params: HMMParams pytree.
@@ -799,23 +792,7 @@ def hmm_log_prob_marginal(params: HMMParams,
     Returns:
         scalar log-probability.
     """
-    L = byte_seq.shape[0]
-    m1_candidates = jnp.arange(L, dtype=jnp.int32)
-
-    if mode == 'full':
-        # In full mode, M1 must be early enough to fit core + 7 register bytes
-        def score_m1(m1_pos):
-            valid = (byte_seq[m1_pos] == 0xB5) & (m1_pos <= length - 15)
-            lp = hmm_log_prob(params, byte_seq, length, m1_pos, mode='full')
-            return jnp.where(valid, lp, _NEG_INF)
-    else:
-        def score_m1(m1_pos):
-            valid = (byte_seq[m1_pos] == 0xB5) & (m1_pos <= length - 8)
-            lp = hmm_log_prob(params, byte_seq, length, m1_pos, mode='core')
-            return jnp.where(valid, lp, _NEG_INF)
-
-    all_lps = jax.vmap(score_m1)(m1_candidates)
-    return jax.scipy.special.logsumexp(all_lps)
+    return hmm_log_prob(params, byte_seq, length, mode=mode)
 
 
 # ---------------------------------------------------------------------------
@@ -1250,7 +1227,6 @@ def _fill_insert_bytes(params, result, pos, count, rng_key, insert_pos=0):
 def hmm_log_prob_sequential(params: HMMParams,
                             byte_seq: jnp.ndarray,
                             length: jnp.ndarray,
-                            m1_pos: jnp.ndarray,
                             mode: str = 'core') -> jnp.ndarray:
     """Compute log P(seq | HMM) by sequential matrix multiplication.
 
@@ -1273,7 +1249,7 @@ def hmm_log_prob_sequential(params: HMMParams,
             break
         mat = make_emission_matrix(
             params, bytes_t[t], bytes_t1[t], bytes_t2[t],
-            jnp.int32(t), m1_pos, mode=mode)
+            jnp.int32(t), mode=mode)
         alpha = jax.scipy.special.logsumexp(
             alpha[:, None] + mat, axis=0)
 

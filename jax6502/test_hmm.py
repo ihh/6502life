@@ -50,22 +50,21 @@ def test_minimal_replicator_score(params, minimal_replicator):
     from jax6502.hmm import hmm_log_prob, hmm_log_prob_marginal
 
     length = jnp.int32(8)
-    m1_pos = jnp.int32(0)
 
-    log_p = hmm_log_prob(params, minimal_replicator, length, m1_pos)
+    log_p = hmm_log_prob(params, minimal_replicator, length)
     log_p_val = float(log_p)
 
     assert np.isfinite(log_p_val), f"Log-prob should be finite, got {log_p_val}"
     assert log_p_val < 0, f"Log-prob should be negative, got {log_p_val}"
 
-    # Marginal should also work
+    # Marginal wrapper should produce the same result
     log_p_marg = hmm_log_prob_marginal(params, minimal_replicator, length)
     log_p_marg_val = float(log_p_marg)
 
     assert np.isfinite(log_p_marg_val), \
         f"Marginal log-prob should be finite, got {log_p_marg_val}"
     assert abs(log_p_val - log_p_marg_val) < 1e-3, \
-        f"Marginal should match single-M1: {log_p_val} vs {log_p_marg_val}"
+        f"Marginal should match hmm_log_prob: {log_p_val} vs {log_p_marg_val}"
 
 
 # ---------------------------------------------------------------------------
@@ -96,10 +95,9 @@ def test_gradient_flow(params, minimal_replicator):
     from jax6502.hmm import hmm_log_prob
 
     length = jnp.int32(8)
-    m1_pos = jnp.int32(0)
 
     def loss_fn(p):
-        return hmm_log_prob(p, minimal_replicator, length, m1_pos)
+        return hmm_log_prob(p, minimal_replicator, length)
 
     grads = jax.grad(loss_fn)(params)
 
@@ -239,11 +237,10 @@ def test_scan_vs_sequential(params, minimal_replicator):
     from jax6502.hmm import hmm_log_prob, hmm_log_prob_sequential
 
     length = jnp.int32(8)
-    m1_pos = jnp.int32(0)
 
-    scan_result = float(hmm_log_prob(params, minimal_replicator, length, m1_pos))
+    scan_result = float(hmm_log_prob(params, minimal_replicator, length))
     seq_result = float(hmm_log_prob_sequential(
-        params, minimal_replicator, length, m1_pos))
+        params, minimal_replicator, length))
 
     assert abs(scan_result - seq_result) < 1e-2, \
         f"Scan ({scan_result:.6f}) vs sequential ({seq_result:.6f})"
@@ -442,10 +439,9 @@ def test_gradient_flow_full(params_full):
 
     seq_jax = jnp.array(seq, dtype=jnp.int32)
     length = jnp.int32(15)
-    m1_pos = jnp.int32(0)
 
     def loss_fn(p):
-        return hmm_log_prob(p, seq_jax, length, m1_pos, mode='full')
+        return hmm_log_prob(p, seq_jax, length, mode='full')
 
     grads = jax.grad(loss_fn)(params_full)
 
@@ -472,12 +468,11 @@ def test_scan_vs_sequential_full(params_full):
 
     seq_jax = jnp.array(seq, dtype=jnp.int32)
     length = jnp.int32(20)
-    m1_pos = jnp.int32(0)
 
     scan_result = float(hmm_log_prob(
-        params_full, seq_jax, length, m1_pos, mode='full'))
+        params_full, seq_jax, length, mode='full'))
     seq_result = float(hmm_log_prob_sequential(
-        params_full, seq_jax, length, m1_pos, mode='full'))
+        params_full, seq_jax, length, mode='full'))
 
     assert abs(scan_result - seq_result) < 1e-1, \
         f"Scan ({scan_result:.6f}) vs sequential ({seq_result:.6f})"
@@ -509,10 +504,9 @@ def test_core_mode_backward_compat(params, minimal_replicator):
     assert num_states('full') == 44
 
     length = jnp.int32(8)
-    m1_pos = jnp.int32(0)
 
     # Should produce a finite negative log-probability
-    log_p = hmm_log_prob(params, minimal_replicator, length, m1_pos, mode='core')
+    log_p = hmm_log_prob(params, minimal_replicator, length, mode='core')
     log_p_val = float(log_p)
     assert np.isfinite(log_p_val), f"Core mode log-prob should be finite"
     assert log_p_val < 0, f"Core mode log-prob should be negative"
