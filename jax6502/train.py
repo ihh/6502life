@@ -186,11 +186,16 @@ def simulate_candidate(byte_seq, board_size=8, num_quanta=None, rng_key=None):
     # Count spread: how many cells have an exact copy of byte_seq
     storage_np = np.asarray(board.storage, dtype=np.uint8)
     spread = 0
+    # Compare only the core program bytes (first 8). The cargo (bytes 8-248)
+    # drifts on multi-cell boards as cells overwrite each other, and the
+    # register area (0xF9-0xFF) changes during execution. The replicator's
+    # identity is its first 8 bytes.
+    compare_len = min(L, 8)
     for ci in range(B):
         for cj in range(B):
             base = (ci * B + cj) * M
-            cell_bytes = storage_np[base:base + L]
-            if np.array_equal(cell_bytes, byte_seq):
+            cell_bytes = storage_np[base:base + compare_len]
+            if np.array_equal(cell_bytes, byte_seq[:compare_len]):
                 spread += 1
 
     viable = spread > board_size
