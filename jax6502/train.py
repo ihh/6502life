@@ -479,11 +479,8 @@ def _nce_step_inner(optimizer, hmm_params, opt_state,
                     batch_seqs, batch_masks, batch_labels, batch_weights):
     """JIT-compiled NCE step with optimizer as static argument (core mode)."""
     def loss_fn(params):
-        # Use lax.map + checkpoint to avoid OOM from vmap materializing
-        # all intermediate scan matrices simultaneously
         score_fn = jax.checkpoint(lambda args: _score_single(params, args[0], args[1]))
         scores = jax.lax.map(score_fn, (batch_seqs, batch_masks))
-        # Temperature scaling: divide by τ to prevent sigmoid saturation
         tempered = scores / NCE_TEMPERATURE
         log_sigmoid_pos = jax.nn.log_sigmoid(tempered)
         log_sigmoid_neg = jax.nn.log_sigmoid(-tempered)
@@ -491,8 +488,12 @@ def _nce_step_inner(optimizer, hmm_params, opt_state,
             batch_labels * log_sigmoid_pos +
             (1.0 - batch_labels) * log_sigmoid_neg
         )
-        weighted_loss = (batch_weights * per_sample_loss).sum() / batch_weights.sum()
-        return weighted_loss
+        nce_loss = (batch_weights * per_sample_loss).sum() / batch_weights.sum()
+        # Entropy regularizer on insert emissions (prevents collapse)
+        ent_reg = -0.01 * jnp.sum(
+            jax.nn.softmax(params.insert_1byte_logits, axis=-1) *
+            jax.nn.log_softmax(params.insert_1byte_logits, axis=-1))
+        return nce_loss + ent_reg
 
     loss, grads = jax.value_and_grad(loss_fn)(hmm_params)
     updates, new_opt_state = optimizer.update(grads, opt_state, hmm_params)
@@ -507,8 +508,13 @@ def _single_nce_loss_and_grad_full(params, seq, mask, label):
     def loss_fn(p):
         score = _score_single_full(p, seq, mask)
         tempered = score / NCE_TEMPERATURE
-        return -(label * jax.nn.log_sigmoid(tempered) +
-                 (1.0 - label) * jax.nn.log_sigmoid(-tempered))
+        nce = -(label * jax.nn.log_sigmoid(tempered) +
+                (1.0 - label) * jax.nn.log_sigmoid(-tempered))
+        # Entropy regularizer on insert emissions (prevents collapse)
+        ent_reg = -0.01 * jnp.sum(
+            jax.nn.softmax(p.insert_1byte_logits, axis=-1) *
+            jax.nn.log_softmax(p.insert_1byte_logits, axis=-1))
+        return nce + ent_reg
     return jax.value_and_grad(loss_fn)(params)
 
 
@@ -903,23 +909,59 @@ def train_hmm_nce(hmm_params, oracle_state=None,
     # Set up replay buffer
     buffer = ReplayBuffer(max_size=replay_buffer_size, max_len=max_len, mode=mode)
 
-    # Seed with known viable replicators (bootstrap the NCE training)
+    # Seed with viable replicators: generate full-length blocks with random
+    # cargo and correct register area, verify each via simulation.
     if seed_with_known:
-        n_seed = len(KNOWN_VIABLE_CORES)
-        seed_seqs = np.zeros((n_seed, max_len), dtype=np.int32)
-        seed_masks = np.zeros((n_seed, max_len), dtype=np.float32)
-        for i, core in enumerate(KNOWN_VIABLE_CORES):
-            L = len(core)
-            seed_seqs[i, :L] = core
-            seed_masks[i, :L] = 1.0
-        seed_labels = np.ones(n_seed, dtype=np.float32)  # all viable
-        seed_lps = np.asarray(batch_lp_fn(
-            hmm_params,
-            jnp.array(seed_seqs),
-            jnp.array(seed_masks)))
-        buffer.add(seed_seqs, seed_masks, seed_labels, seed_lps)
+        rng_seed_gen = np.random.RandomState(rng_seed)
+        seed_seqs_list = []
+        # Generate viable full-length seed examples
+        n_target = 50 if mode == 'full' else len(KNOWN_VIABLE_CORES)
+        n_attempts = 0
+        for core in KNOWN_VIABLE_CORES:
+            while len(seed_seqs_list) < n_target and n_attempts < n_target * 20:
+                n_attempts += 1
+                block = np.zeros(max_len, dtype=np.int32)
+                block[:len(core)] = core
+                if max_len > len(core):
+                    # Random cargo bytes
+                    block[len(core):] = rng_seed_gen.randint(0, 256, max_len - len(core))
+                    # Set register save area correctly
+                    if max_len >= 256:
+                        block[0xF9] = 0x00  # PCHI
+                        block[0xFA] = 0x00  # PCLO
+                        block[0xFB] = 0x30  # P (C=0 for BCC)
+                        block[0xFC] = rng_seed_gen.randint(0, 256)  # A (don't care)
+                        block[0xFD] = 0x00  # X (start at 0)
+                        block[0xFE] = rng_seed_gen.randint(0, 256)  # Y (don't care)
+                        block[0xFF] = 0x80 + rng_seed_gen.randint(0, 128)  # S (valid stack)
+                # Verify viability
+                r = simulate_candidate(list(block), board_size=board_size,
+                                       rng_key=jr.PRNGKey(n_attempts))
+                if r['viable']:
+                    seed_seqs_list.append(block)
+
+        n_seed = len(seed_seqs_list)
+        if n_seed > 0:
+            seed_seqs = np.stack(seed_seqs_list)
+            seed_masks = np.ones((n_seed, max_len), dtype=np.float32)
+            if mode != 'full':
+                # For core mode, mask only the first L bytes
+                seed_masks[:, 8:] = 0.0
+            seed_labels = np.ones(n_seed, dtype=np.float32)
+            # Score one at a time for full mode to avoid OOM
+            if mode == 'full':
+                seed_lps = np.array([
+                    float(_compute_hmm_log_prob_full(hmm_params,
+                          jnp.array(seed_seqs[i]), jnp.array(seed_masks[i])))
+                    for i in range(n_seed)
+                ], dtype=np.float32)
+            else:
+                seed_lps = np.asarray(batch_lp_fn(
+                    hmm_params, jnp.array(seed_seqs), jnp.array(seed_masks)))
+            buffer.add(seed_seqs, seed_masks, seed_labels, seed_lps)
         if verbose:
-            print(f"Seeded replay buffer with {n_seed} known viable replicators")
+            print(f"Seeded replay buffer with {n_seed} verified viable examples "
+                  f"({n_attempts} attempts)")
 
     # Set up oracle cascade
     cascade = OracleCascade(
