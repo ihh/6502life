@@ -784,9 +784,10 @@ def _log_prob_bwd(res, g):
     # Posterior: exp(alpha_prev[t,i] + M[t,i,j] + beta[t,j] - log_prob)
     # = grad of log_prob w.r.t. M[t,i,j]
     # Shape: [L, S, S]
-    grad_matrices = jnp.exp(
-        alpha_prev[:, :, None] + all_matrices + betas[:, None, :] - log_prob
-    )
+    # Clamp exponent to avoid overflow (impossible transitions have -inf terms)
+    log_posterior = alpha_prev[:, :, None] + all_matrices + betas[:, None, :] - log_prob
+    log_posterior = jnp.clip(log_posterior, -100.0, 0.0)
+    grad_matrices = jnp.exp(log_posterior)
     # Mask out positions past length
     mask = (jnp.arange(L) < length)[:, None, None]
     grad_matrices = jnp.where(mask, grad_matrices, 0.0)
