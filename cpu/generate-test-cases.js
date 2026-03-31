@@ -43,7 +43,7 @@ const TESTS_PER_OPCODE = 15;
 /**
  * Run exactly one instruction through Sfotty, returning cycle-accurate results.
  */
-function runOneInstruction(ram, initPC, initA, initX, initY, initS, initP, instrSize) {
+function runOneInstruction(ram, initPC, initA, initX, initY, initS, initP, instrSize, isBranch) {
   const busLog = [];
 
   const sfotty = new Sfotty({
@@ -87,22 +87,36 @@ function runOneInstruction(ram, initPC, initA, initX, initY, initS, initP, instr
   // Detect instruction cycle count N.
   // busLog[N] is the opcode fetch of the NEXT instruction (a NOP = 0xEA).
   // Since operand bytes are guaranteed non-0xEA, reading 0xEA confirms a NOP fetch.
-  // For branches (instrSize=2, rel mode), taken branches have a dummy read at cycle 2
-  // from the fallthrough address which also contains 0xEA. We handle this by requiring
-  // that for a match at n=2, the next bus op (busLog[n+1]) must read from PC+1
-  // (confirming we're actually executing the NOP, not doing a dummy read).
+  //
+  // Two address checks:
+  // 1. Exact match: busLog[n].addr == snapshots[n-1].PC
+  // 2. Page-relaxed match: for cross-page branches, Sfotty's intermediate PC has wrong
+  //    high byte. We accept if the low byte matches and the read is 0xEA, confirming
+  //    it's reading a NOP at the branch target.
+  //
+  // For n=2 with 2-byte instructions (branches): verify by checking busLog[n+1].
   let N = null;
   for (let n = 2; n <= 8; n++) {
     if (n >= busLog.length) break;
-    if (busLog[n][2] === 'read' &&
-        busLog[n][1] === 0xEA &&
-        busLog[n][0] === snapshots[n - 1].PC) {
-      // For n=2 with 2-byte instructions: verify this is a real opcode fetch
-      // by checking that busLog[n+1] reads from PC+1 (NOP's 2nd cycle)
+    if (busLog[n][2] !== 'read' || busLog[n][1] !== 0xEA) continue;
+
+    const readAddr = busLog[n][0];
+    const prevPC = snapshots[n - 1].PC;
+    const exactMatch = readAddr === prevPC;
+    // Page-relaxed: low bytes match but high bytes differ (cross-page branch only)
+    const pageRelaxed = isBranch && !exactMatch && (readAddr & 0xFF) === (prevPC & 0xFF) && n >= 3;
+
+    if (exactMatch || pageRelaxed) {
+      // For n=2 with 2-byte instructions: verify not a branch dummy read
       if (n === 2 && instrSize === 2 && n + 1 < busLog.length) {
         const nextReadAddr = busLog[n + 1][0];
-        const expectedNext = (snapshots[n - 1].PC + 1) & 0xFFFF;
-        if (nextReadAddr !== expectedNext) continue; // false match (branch dummy read)
+        const expectedNext = (prevPC + 1) & 0xFFFF;
+        if (nextReadAddr !== expectedNext) continue;
+      }
+      // For page-relaxed match: use the actual read address as the real PC
+      if (pageRelaxed) {
+        // Override the snapshot PC with the correct (read) address
+        snapshots[n - 1] = { ...snapshots[n - 1], PC: readAddr };
       }
       N = n;
       break;
@@ -182,7 +196,7 @@ function generateTestCase(opcode, index) {
   // Snapshot ram before execution
   const ramBefore = new Uint8Array(ram);
 
-  const result = runOneInstruction(ram, initPC, initA, initX, initY, initS, initP, size);
+  const result = runOneInstruction(ram, initPC, initA, initX, initY, initS, initP, size, info.mode === 'rel');
   if (!result) return null;
 
   // Build minimal memory map: only addresses accessed during the instruction
