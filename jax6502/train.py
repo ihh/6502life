@@ -429,8 +429,10 @@ def _nce_step_inner(optimizer, hmm_params, opt_state,
                     batch_seqs, batch_masks, batch_labels, batch_weights):
     """JIT-compiled NCE step with optimizer as static argument (core mode)."""
     def loss_fn(params):
-        scores = jax.vmap(_score_single, in_axes=(None, 0, 0))(
-            params, batch_seqs, batch_masks)
+        # Use lax.map + checkpoint to avoid OOM from vmap materializing
+        # all intermediate scan matrices simultaneously
+        score_fn = jax.checkpoint(lambda args: _score_single(params, args[0], args[1]))
+        scores = jax.lax.map(score_fn, (batch_seqs, batch_masks))
         log_sigmoid_pos = jax.nn.log_sigmoid(scores)
         log_sigmoid_neg = jax.nn.log_sigmoid(-scores)
         per_sample_loss = -(
@@ -452,8 +454,8 @@ def _nce_step_inner_full(optimizer, hmm_params, opt_state,
                          batch_seqs, batch_masks, batch_labels, batch_weights):
     """JIT-compiled NCE step with optimizer as static argument (full mode)."""
     def loss_fn(params):
-        scores = jax.vmap(_score_single_full, in_axes=(None, 0, 0))(
-            params, batch_seqs, batch_masks)
+        score_fn = jax.checkpoint(lambda args: _score_single_full(params, args[0], args[1]))
+        scores = jax.lax.map(score_fn, (batch_seqs, batch_masks))
         log_sigmoid_pos = jax.nn.log_sigmoid(scores)
         log_sigmoid_neg = jax.nn.log_sigmoid(-scores)
         per_sample_loss = -(
@@ -745,6 +747,18 @@ def compute_metrics(hmm_params, replay_buffer, epoch):
 # 8. Full training loop
 # ---------------------------------------------------------------------------
 
+
+# Known viable 8-byte replicator core variants
+KNOWN_VIABLE_CORES = [
+    [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8],  # BCC, INX
+    [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0xD0, 0xF8],  # BNE, INX
+    [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x10, 0xF8],  # BPL, INX
+    [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xCA, 0x90, 0xF8],  # BCC, DEX
+    [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xCA, 0xD0, 0xF8],  # BNE, DEX
+    [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xCA, 0x10, 0xF8],  # BPL, DEX
+]
+
+
 def train_hmm_nce(hmm_params, oracle_state=None,
                   board_size=8, num_epochs=100,
                   samples_per_epoch=1000, sim_budget_per_epoch=100,
@@ -752,7 +766,8 @@ def train_hmm_nce(hmm_params, oracle_state=None,
                   learning_rate=1e-3, replay_buffer_size=10000,
                   rng_seed=42, lengths=None, max_len=32,
                   num_quanta=200, verbose=True,
-                  mode='core', chacha_ratio=0.3):
+                  mode='core', chacha_ratio=0.3,
+                  seed_with_known=True):
     """Full NCE training loop with ChaCha20-sourced negatives.
 
     Each epoch:
@@ -813,6 +828,24 @@ def train_hmm_nce(hmm_params, oracle_state=None,
 
     # Set up replay buffer
     buffer = ReplayBuffer(max_size=replay_buffer_size, max_len=max_len)
+
+    # Seed with known viable replicators (bootstrap the NCE training)
+    if seed_with_known:
+        n_seed = len(KNOWN_VIABLE_CORES)
+        seed_seqs = np.zeros((n_seed, max_len), dtype=np.int32)
+        seed_masks = np.zeros((n_seed, max_len), dtype=np.float32)
+        for i, core in enumerate(KNOWN_VIABLE_CORES):
+            L = len(core)
+            seed_seqs[i, :L] = core
+            seed_masks[i, :L] = 1.0
+        seed_labels = np.ones(n_seed, dtype=np.float32)  # all viable
+        seed_lps = np.asarray(batch_lp_fn(
+            hmm_params,
+            jnp.array(seed_seqs),
+            jnp.array(seed_masks)))
+        buffer.add(seed_seqs, seed_masks, seed_labels, seed_lps)
+        if verbose:
+            print(f"Seeded replay buffer with {n_seed} known viable replicators")
 
     # Set up oracle cascade
     cascade = OracleCascade(
