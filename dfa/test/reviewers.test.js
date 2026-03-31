@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { PASS, FAIL } from '../transducer.js';
 import { buildOpcodeReviewer } from '../reviewers/opcode.js';
-import { buildOffsetReviewer } from '../reviewers/offset.js';
+import { buildOffsetReviewer, correctOffsetAt } from '../reviewers/offset.js';
 import { buildAddrMatchReviewer } from '../reviewers/addr-match.js';
 
 // The canonical simple replicator: B5 00 9D 00 04 E8 90 F8
@@ -70,44 +70,39 @@ describe('Opcode reviewer', () => {
     });
 });
 
-describe('Offset reviewer', () => {
-    it('correct offset for 8-byte replicator', () => {
-        const r = buildOffsetReviewer();
-        // REP is 8 bytes. Branch at byte 6, offset at byte 7.
-        // Target = 0. PC at branch = 6, so offset = -(6+2) = -8 = $F8.
-        // At position 7: correct offset = (255-7) & 0xFF = 248 = $F8.
-        const result = r.run(REP);
-        // Verdict at position 7 should be PASS (byte $F8 at pos 7)
-        const v7 = result.verdicts.find(v => v.position === 7);
-        expect(v7).toBeDefined();
-        expect(v7.verdict).toBe(PASS);
-    });
-
-    it('wrong offset fails', () => {
-        const r = buildOffsetReviewer();
-        const bad = [...REP];
-        bad[7] = 0xF7; // wrong offset
-        const result = r.run(bad);
-        const v7 = result.verdicts.find(v => v.position === 7);
-        expect(v7.verdict).toBe(FAIL);
-    });
-
-    it('correct offset for 9-byte sequence (1 NOP)', () => {
-        const r = buildOffsetReviewer();
-        // EA B5 00 9D 00 04 E8 90 F7
-        // Branch at byte 7, offset at byte 8.
-        // Correct offset at pos 8: (255-8) & 0xFF = 247 = $F7.
-        const seq = [0xEA, 0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF7];
-        const result = r.run(seq);
-        const v8 = result.verdicts.find(v => v.position === 8);
-        expect(v8.verdict).toBe(PASS);
-    });
-
-    it('emits a verdict at every position', () => {
+describe('Offset reviewer (silent counter)', () => {
+    it('tracks position without emitting verdicts', () => {
         const r = buildOffsetReviewer();
         const result = r.run(REP);
-        // Should have 8 verdicts (one per byte)
-        expect(result.verdicts.length).toBe(8);
+        // Silent counter: no verdicts emitted
+        expect(result.verdicts.length).toBe(0);
+        // But state advances per byte
+        expect(result.path[7].state).toBe('pos8');
+    });
+
+    it('correctOffsetAt matches known values', () => {
+        // 8-byte rep: offset at pos 7 → (255-7) = 0xF8
+        expect(correctOffsetAt(7)).toBe(0xF8);
+        // 9-byte rep: offset at pos 8 → (255-8) = 0xF7
+        expect(correctOffsetAt(8)).toBe(0xF7);
+        // Edge: pos 0 → 0xFF
+        expect(correctOffsetAt(0)).toBe(0xFF);
+    });
+
+    it('advances through all positions', () => {
+        const r = buildOffsetReviewer();
+        const result = r.run(REP);
+        expect(result.path.length).toBe(8);
+        for (let i = 0; i < 8; i++) {
+            expect(result.path[i].state).toBe(`pos${i + 1}`);
+        }
+    });
+
+    it('handles sequences up to MAX_LEN', () => {
+        const r = buildOffsetReviewer();
+        const long = new Array(48).fill(0xEA);
+        const result = r.run(long);
+        expect(result.path[47].state).toBe('pos48');
     });
 });
 
