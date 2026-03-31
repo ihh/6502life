@@ -1,0 +1,927 @@
+\documentclass{article}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage[margin=1in]{geometry}
+\usepackage{array}
+\usepackage{multirow}
+
+\newcommand{\hex}[1]{\texttt{\$#1}}
+\newcommand{\opcode}[1]{\texttt{#1}}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  columns=fullflexible,
+  frame=single,
+  backgroundcolor=\color{gray!10},
+}
+
+\title{Deep Learning Approaches for 6502 Self-Replicator\\Generation and Analysis: A Survey}
+\author{}
+\date{March 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We survey deep learning approaches applicable to the generation, classification,
+and optimization of self-replicating programs in a 6502-based cellular automaton.
+Our setting involves short byte sequences (8--32 bytes) over a 256-token vocabulary,
+where viable replicators occur with probability $\approx 2^{-61}$ under uniform
+sampling.  An existing WFST (weighted finite-state transducer) pipeline provides
+exact structural inference but is limited to finite-state representations.
+We examine seven complementary neural approaches---autoregressive generation,
+surrogate classification, reinforcement learning, sequence-to-sequence mutation,
+masked prediction, state-space models, and hybrid WFST+neural architectures---analyzing
+their architecture, data requirements, and trade-offs against the WFST baseline.
+\end{abstract}
+
+\tableofcontents
+
+%% ============================================================
+\section{Problem Setting}
+\label{sec:setting}
+
+The 6502life world consists of a $256 \times 256$ grid of cells, each running a
+6502 CPU with 1024 bytes of memory.  A \emph{self-replicating program} is a byte
+sequence that, when loaded into a cell and executed under the preemptive scheduler,
+copies itself into at least one neighboring cell.
+
+\paragraph{Minimal replicator structure.}
+The canonical minimal replicator is an 8-byte loop:
+\begin{lstlisting}
+  B5 00   LDA $00,X    ; load from zero-page + X
+  9D 00 04  STA $0400,X  ; store to neighbor base + X
+  E8      INX          ; increment index
+  90 F8   BCC loop     ; branch if X < 256
+\end{lstlisting}
+followed by a \opcode{BRK} with appropriate operand to trigger the copy/swap
+syscall.  Functional equivalence classes allow variations in addressing mode,
+branch type, target cell, and surrounding NOP slides.
+
+\paragraph{WFST baseline.}
+Our existing pipeline models byte sequences as paths through a weighted
+finite-state transducer whose transition weights are trained from simulation
+oracle labels via importance sampling.  The WFST computes
+\begin{equation}
+  P(\text{viable} \mid L) = \sum_{\mathbf{x} \in \{0,\ldots,255\}^L}
+    w_{\text{WFST}}(\mathbf{x}) \cdot \mathbf{1}[\text{oracle}(\mathbf{x})=1],
+  \label{eq:wfst-prob}
+\end{equation}
+yielding $P(\text{viable} \mid L) \approx 2^{-61}$ for the 1024-byte cell.
+The WFST provides exact inference over its state space but cannot capture
+dependencies beyond its finite memory (e.g., interactions between a \opcode{SEC}
+at position $i$ and a \opcode{BCS} at position $j \gg i$).
+
+\paragraph{Notation.}
+We denote a byte sequence of length $L$ as
+$\mathbf{x} = (x_1, \ldots, x_L) \in \mathcal{V}^L$ where $|\mathcal{V}|=256$.
+The simulation oracle is $f:\mathcal{V}^L \to \{0,1\}$ (binary viability)
+or $f:\mathcal{V}^L \to \mathbb{R}_{\geq 0}$ (spread count).
+A single oracle call requires ${\sim}10^4$ scheduler cycles (${\sim}1$\,ms on CPU).
+
+
+%% ============================================================
+\section{Autoregressive Language Model}
+\label{sec:lm}
+
+\subsection{Architecture}
+
+An autoregressive transformer models the joint distribution over byte sequences:
+\begin{equation}
+  p_\theta(\mathbf{x}) = \prod_{t=1}^{L} p_\theta(x_t \mid x_{<t}).
+  \label{eq:ar}
+\end{equation}
+Each token $x_t \in \{0,\ldots,255\}$ is embedded into $d$-dimensional space.
+Given the short sequence lengths ($L \leq 32$), a small model suffices:
+\begin{itemize}
+  \item Embedding dimension $d = 64$--$128$
+  \item 2--4 transformer layers, 2--4 attention heads
+  \item Causal (left-to-right) attention mask
+  \item Vocabulary: 256 byte values + start/end tokens
+  \item Positional encoding: learned or sinusoidal (sequence is short enough
+        that both work)
+  \item Total parameters: ${\sim}50$K--$500$K
+\end{itemize}
+
+At inference, we sample $\mathbf{x} \sim p_\theta$ autoregressively with
+temperature control, top-$k$, or nucleus sampling.
+
+\subsection{Training}
+
+\paragraph{Data.}
+Training requires a corpus of viable replicator sequences.  Since viable
+replicators are extremely rare under uniform sampling ($2^{-61}$), we use
+the WFST importance sampler to generate candidates, then filter through the
+simulation oracle.  With WFST proposal efficiency of ${\sim}2^{-10}$
+relative to uniform, we need ${\sim}2^{10} \approx 1000$ WFST samples
+per viable sequence, so ${\sim}10^6$ WFST draws yield ${\sim}10^3$ viable
+training examples.
+
+\paragraph{Objective.}
+Standard cross-entropy loss on viable sequences:
+\begin{equation}
+  \mathcal{L}(\theta) = -\mathbb{E}_{\mathbf{x} \sim \mathcal{D}_{\text{viable}}}
+    \left[\sum_{t=1}^{L} \log p_\theta(x_t \mid x_{<t})\right].
+\end{equation}
+Optionally, weight training examples by spread count to bias toward
+high-fitness replicators.
+
+\subsection{Advantages over WFST}
+
+\begin{itemize}
+  \item \textbf{Long-range dependencies.}  Self-attention captures interactions
+        between arbitrary positions (e.g., a \opcode{SEC} at byte 2 enabling
+        \opcode{BCS} at byte 9), while the WFST is limited to its state memory.
+  \item \textbf{Soft generalization.}  The transformer can interpolate between
+        training examples, potentially generating novel replicator families not
+        in the WFST's equivalence classes.
+  \item \textbf{Scalability.}  Adding new replicator families requires only
+        more training data, not manual transducer engineering.
+\end{itemize}
+
+\subsection{Limitations}
+
+\begin{itemize}
+  \item No guarantee of structural validity---generated sequences may be
+        syntactically plausible but non-functional.
+  \item Requires a substantial corpus of viable examples (thousands), which
+        are expensive to obtain.
+  \item Cannot provide exact probabilities or guarantees, unlike the WFST.
+  \item For 8-byte sequences, the WFST may already capture the relevant
+        structure; the transformer's advantage grows with sequence length.
+\end{itemize}
+
+\subsection{Related Work}
+
+Autoregressive models over byte-level program representations have been
+explored in neural program synthesis~\cite{chen2021codex}, though typically
+for high-level languages.  The closest analogue is byte-level language
+modeling for binary analysis~\cite{pei2020trex}, which applies transformers
+to disassembled binary code for function similarity detection.
+
+
+%% ============================================================
+\section{Surrogate Classifier (Learned Oracle)}
+\label{sec:classifier}
+
+\subsection{Architecture}
+
+A discriminative model approximates the simulation oracle:
+\begin{equation}
+  \hat{f}_\phi(\mathbf{x}) = \sigma\bigl(g_\phi(\mathbf{x})\bigr)
+  \approx P(\text{viable} \mid \mathbf{x}),
+\end{equation}
+where $g_\phi$ is a neural network and $\sigma$ is the sigmoid function.
+
+\paragraph{Option A: 1D CNN.}
+Treat the byte sequence as a 1D signal with 256-dimensional one-hot encoding
+(or learned byte embeddings):
+\begin{itemize}
+  \item Embedding: $256 \to 64$
+  \item Conv layers: 3 layers with kernels of size 3, 5, 7 (capturing
+        opcode-operand structure), 64--128 filters each
+  \item Global average pooling $\to$ FC $\to$ sigmoid
+  \item Parameters: ${\sim}100$K
+\end{itemize}
+The CNN naturally captures local opcode-operand groupings (1--3 byte
+instructions) through its receptive field.
+
+\paragraph{Option B: Small transformer encoder.}
+\begin{itemize}
+  \item Byte embedding $d=64$, 2 encoder layers, 2 heads
+  \item \texttt{[CLS]} token pooling $\to$ FC $\to$ sigmoid
+  \item Parameters: ${\sim}50$K
+\end{itemize}
+
+\subsection{Training}
+
+\paragraph{Data.}
+Binary classification requires both positive (viable) and negative
+(non-viable) examples.  The extreme class imbalance ($2^{-61}$) means
+uniform negatives are trivially classifiable.  Instead, we construct
+\emph{hard negatives} via:
+\begin{enumerate}
+  \item WFST samples that pass structural checks but fail simulation
+        (``near-miss'' programs)
+  \item Single-byte mutations of viable replicators
+  \item Random programs seeded with correct opcodes but wrong operands
+\end{enumerate}
+A balanced dataset of ${\sim}10^4$ positive and ${\sim}10^4$ hard negative
+examples suffices for the initial classifier.
+
+\paragraph{Objective.}
+Binary cross-entropy with optional focal loss~\cite{lin2017focal} to handle
+residual class imbalance:
+\begin{equation}
+  \mathcal{L}(\phi) = -\mathbb{E}\bigl[
+    \alpha_t (1 - \hat{f}_\phi)^\gamma \log \hat{f}_\phi
+    + (1 - \alpha_t) \hat{f}_\phi^\gamma \log(1 - \hat{f}_\phi)
+  \bigr].
+\end{equation}
+
+\subsection{Application}
+
+The surrogate classifier serves as a \emph{fast filter} in the sampling
+pipeline:
+\begin{equation}
+  \text{WFST sample} \xrightarrow{\hat{f}_\phi > \tau}
+  \text{simulation oracle} \xrightarrow{f=1} \text{accept}.
+\end{equation}
+If $\hat{f}_\phi$ achieves 95\% recall at 10$\times$ precision improvement,
+simulation cost drops by $10\times$.  The classifier evaluates in
+${\sim}10\,\mu$s (GPU-batched) vs.\ ${\sim}1$\,ms for simulation.
+
+\subsection{Advantages over WFST}
+
+\begin{itemize}
+  \item Orders of magnitude faster than simulation for filtering.
+  \item Can learn nonlinear viability criteria that the WFST's finite
+        states cannot represent.
+  \item Naturally handles soft scoring (confidence), enabling ranking.
+\end{itemize}
+
+\subsection{Limitations}
+
+\begin{itemize}
+  \item False negatives discard viable replicators; false positives waste
+        simulation budget.
+  \item The decision boundary may not generalize to replicator families
+        absent from training data.
+  \item Requires periodic retraining as new replicator types are discovered.
+\end{itemize}
+
+\subsection{Related Work}
+
+Surrogate models for expensive simulations are standard in Bayesian
+optimization~\cite{snoek2012practical} and materials science.
+Neural network surrogates for program behavior prediction appear in
+learned interpreters~\cite{bieber2020learning} and neural execution
+engines.
+
+
+%% ============================================================
+\section{Reinforcement Learning (PPO/REINFORCE)}
+\label{sec:rl}
+
+\subsection{Formulation}
+
+We cast replicator generation as a sequential decision problem:
+\begin{itemize}
+  \item \textbf{State} $s_t = (x_1, \ldots, x_{t-1})$: bytes generated so far
+  \item \textbf{Action} $a_t = x_t \in \{0,\ldots,255\}$: next byte
+  \item \textbf{Policy} $\pi_\theta(a_t \mid s_t)$: autoregressive model
+        (Section~\ref{sec:lm})
+  \item \textbf{Reward} $R(\mathbf{x})$: simulation spread count (or binary
+        viability), received at episode end ($t=L$)
+\end{itemize}
+
+\paragraph{REINFORCE.}
+The policy gradient estimator:
+\begin{equation}
+  \nabla_\theta J = \mathbb{E}_{\mathbf{x} \sim \pi_\theta}
+    \left[R(\mathbf{x}) \sum_{t=1}^{L} \nabla_\theta \log \pi_\theta(x_t \mid x_{<t})\right].
+  \label{eq:reinforce}
+\end{equation}
+This is structurally identical to the WFST training loop: both use
+likelihood-ratio gradient estimation with oracle reward.  The difference
+is the policy class ($\pi_\theta$ is a neural network vs.\ a WFST).
+
+\paragraph{PPO.}
+Proximal Policy Optimization~\cite{schulman2017ppo} stabilizes training via
+a clipped surrogate objective:
+\begin{equation}
+  \mathcal{L}^{\text{PPO}}(\theta) = \mathbb{E}\left[
+    \min\bigl(r_t(\theta) \hat{A}_t,\;
+    \text{clip}(r_t(\theta), 1{-}\epsilon, 1{+}\epsilon)\hat{A}_t\bigr)
+  \right],
+\end{equation}
+where $r_t(\theta) = \pi_\theta(a_t \mid s_t) / \pi_{\theta_{\text{old}}}(a_t \mid s_t)$
+and $\hat{A}_t$ is the advantage estimate.  For terminal-reward-only MDPs,
+the advantage is constant across timesteps within an episode, simplifying to
+$\hat{A}_t = R(\mathbf{x}) - b$ where $b$ is a baseline (e.g., running mean reward).
+
+\subsection{Architecture}
+
+The policy network is the autoregressive model from Section~\ref{sec:lm}.
+PPO additionally requires a value network $V_\psi(s_t)$; for terminal
+rewards, a single scalar baseline suffices.
+
+\subsection{Training}
+
+Each training iteration:
+\begin{enumerate}
+  \item Sample $N$ byte sequences from $\pi_\theta$
+  \item Evaluate each via simulation oracle ($N$ simulation runs)
+  \item Compute policy gradient and update $\theta$
+\end{enumerate}
+
+\paragraph{Sample efficiency.}
+With reward signal $\approx 2^{-61}$ under uniform policy, pure RL from
+scratch is intractable.  Two mitigations:
+\begin{enumerate}
+  \item \textbf{Warm-start}: pretrain $\pi_\theta$ on viable examples
+        (Section~\ref{sec:lm}), then fine-tune with RL. The pretrained
+        policy concentrates probability mass near viable sequences.
+  \item \textbf{Reward shaping}: use the WFST structural score or the
+        surrogate classifier (Section~\ref{sec:classifier}) as a dense
+        reward signal, supplementing the sparse simulation reward.
+\end{enumerate}
+With warm-start, a viable sequence appears roughly every ${\sim}10^3$
+samples, making PPO feasible with ${\sim}10^5$ total simulation calls.
+
+\subsection{Advantages over WFST}
+
+\begin{itemize}
+  \item \textbf{Richer policy class}: neural policies can represent
+        multimodal distributions over replicator families, while the
+        WFST is limited to its state topology.
+  \item \textbf{Continuous optimization}: PPO/REINFORCE optimize in
+        continuous parameter space via gradient descent, vs.\ the WFST's
+        discrete structure.
+  \item \textbf{Multi-objective}: reward can incorporate spread speed,
+        mutation robustness, compactness, etc.\ without redesigning the
+        transducer.
+\end{itemize}
+
+\subsection{Limitations}
+
+\begin{itemize}
+  \item High variance in gradient estimates for rare-event rewards.
+  \item Simulation cost: each policy evaluation requires a full board
+        simulation.
+  \item Risk of mode collapse to a single replicator family.
+  \item The WFST's REINFORCE-like training is simpler and may suffice
+        for the current problem scale.
+\end{itemize}
+
+\subsection{Related Work}
+
+RL for program synthesis has been explored in
+neural program induction~\cite{bunel2018leveraging} and
+code generation~\cite{le2022coderl}.
+The formulation closely resembles REINFORCE-based text
+generation~\cite{williams1992simple,ranzato2016sequence}.
+
+
+%% ============================================================
+\section{Seq2Seq Evolutionary Model}
+\label{sec:seq2seq}
+
+\subsection{Architecture}
+
+An encoder-decoder transformer maps a parent replicator to a viable
+offspring:
+\begin{equation}
+  p_\theta(\mathbf{x}' \mid \mathbf{x}) = \prod_{t=1}^{L}
+    p_\theta(x'_t \mid x'_{<t}, \mathbf{x}),
+\end{equation}
+where $\mathbf{x}$ is a viable parent and $\mathbf{x}'$ is the mutated
+offspring.
+
+\begin{itemize}
+  \item Encoder: 2-layer transformer, $d=64$, encodes parent sequence
+  \item Decoder: 2-layer transformer with cross-attention to encoder
+  \item Shared byte embedding across encoder and decoder
+  \item Parameters: ${\sim}100$K--$200$K
+\end{itemize}
+
+\subsection{Training Data}
+
+Pairs $(\mathbf{x}, \mathbf{x}')$ where both are viable and $\mathbf{x}'$
+is derived from $\mathbf{x}$ via:
+\begin{enumerate}
+  \item \textbf{Simulation lineage}: run the board, extract parent-child
+        pairs from copy events (includes mutation noise from \texttt{pBitNoise}).
+  \item \textbf{Synthetic mutations}: apply $k$-bit flips to viable
+        sequences, keep pairs where both remain viable.
+  \item \textbf{WFST neighborhood}: sample sequences near a viable program
+        in WFST weight space.
+\end{enumerate}
+Target: ${\sim}10^4$ viable pairs.
+
+\subsection{Application}
+
+Given a known replicator $\mathbf{x}$, the model generates a distribution
+over viable neighbors.  This enables:
+\begin{itemize}
+  \item \textbf{Directed evolution}: hill-climb in viability/fitness space
+        by iterating the model.
+  \item \textbf{Diversity search}: sample multiple offspring per parent to
+        explore the replicator landscape.
+  \item \textbf{Robustness analysis}: characterize the viable neighborhood
+        of a given program.
+\end{itemize}
+
+\subsection{Advantages over WFST}
+
+\begin{itemize}
+  \item Models the \emph{mutation kernel} directly, rather than the marginal
+        distribution over viable sequences.
+  \item Can learn which positions tolerate mutation and which are critical.
+  \item Preserves functional structure while varying non-essential bytes.
+\end{itemize}
+
+\subsection{Limitations}
+
+\begin{itemize}
+  \item Requires pairs of viable programs, which are harder to obtain than
+        individual viable programs.
+  \item May learn to copy the input with minimal changes (identity shortcut).
+        Mitigate with minimum edit distance constraints or dropout on the
+        encoder.
+  \item Does not discover \emph{de novo} replicator families---only
+        transforms known ones.
+\end{itemize}
+
+\subsection{Related Work}
+
+Program repair and transformation using seq2seq models is established
+in software engineering~\cite{tufano2019empirical}.  The evolutionary
+framing connects to learned mutation operators in
+genetic programming~\cite{chen2020program}.
+
+
+%% ============================================================
+\section{Masked Bidirectional Model}
+\label{sec:masked}
+
+\subsection{Architecture}
+
+A BERT-style~\cite{devlin2019bert} masked language model trained on viable
+replicator sequences.  During training, a random subset of bytes is masked
+and the model predicts them from bidirectional context:
+\begin{equation}
+  \mathcal{L}(\theta) = -\mathbb{E}_{\mathbf{x} \sim \mathcal{D}}
+    \left[\sum_{t \in \mathcal{M}} \log p_\theta(x_t \mid \mathbf{x}_{\setminus\mathcal{M}})\right],
+\end{equation}
+where $\mathcal{M} \subset \{1,\ldots,L\}$ is the set of masked positions
+(typically 15\% of tokens).
+
+\begin{itemize}
+  \item Encoder-only transformer, 2--4 layers, $d=64$, 2--4 heads
+  \item Special \texttt{[MASK]} token in the 257-token vocabulary
+  \item Parameters: ${\sim}50$K--$200$K
+\end{itemize}
+
+\subsection{Training}
+
+Same viable-sequence corpus as Section~\ref{sec:lm} (${\sim}10^3$--$10^4$
+examples).  Data augmentation via:
+\begin{itemize}
+  \item NOP slide insertion/deletion (shifting positions without changing
+        semantics)
+  \item Equivalent opcode substitution (e.g., \opcode{INX} $\leftrightarrow$
+        \opcode{INY} with matching address mode changes)
+\end{itemize}
+
+\subsection{Application}
+
+\paragraph{Credit assignment.}
+Given a partial program with unknown bytes, the model fills them in:
+``What byte at position 5 makes this a viable replicator, given the
+surrounding context?''  This directly addresses the credit assignment
+problem---which bytes are critical and which are free.
+
+\paragraph{Iterative refinement.}
+Starting from a random sequence, iteratively mask and re-predict positions,
+annealing the mask rate.  This Gibbs-like sampling procedure can converge
+to viable sequences without autoregressive left-to-right generation.
+
+\paragraph{NOP slide design.}
+Mask the slide region and let the model predict which byte values serve
+as functional NOPs given the surrounding loop structure.
+
+\subsection{Advantages over WFST}
+
+\begin{itemize}
+  \item \textbf{Bidirectional context}: can condition on both preceding
+        and following bytes, unlike the WFST's left-to-right processing.
+  \item \textbf{Natural infilling}: directly answers ``what goes here?''
+        queries without marginalization.
+  \item \textbf{Credit assignment}: per-position confidence scores indicate
+        which bytes are constrained vs.\ free.
+\end{itemize}
+
+\subsection{Limitations}
+
+\begin{itemize}
+  \item No tractable joint likelihood $p_\theta(\mathbf{x})$---cannot
+        directly estimate replicator probability.
+  \item Iterative sampling (Gibbs) is slower than single-pass autoregressive
+        generation.
+  \item Mask rate and annealing schedule require tuning.
+\end{itemize}
+
+\subsection{Related Work}
+
+Masked language models for code have been explored for code
+understanding~\cite{feng2020codebert} and completion.
+The iterative refinement procedure connects to
+non-autoregressive machine translation~\cite{ghazvininejad2019mask}.
+
+
+%% ============================================================
+\section{State-Space Models (Mamba-Style)}
+\label{sec:ssm}
+
+\subsection{Motivation}
+
+The WFST is, structurally, a \emph{hand-designed state-space model}:
+it maintains a finite hidden state $h_t$ and updates it linearly as it
+consumes each byte.  Modern learned state-space models
+(SSMs)~\cite{gu2024mamba} generalize this with:
+\begin{equation}
+  h_t = \bar{A} h_{t-1} + \bar{B} x_t, \qquad
+  y_t = C h_t,
+\end{equation}
+where $\bar{A}, \bar{B}$ are input-dependent (selective) parameters
+and $h_t \in \mathbb{R}^N$ is a continuous hidden state.
+
+\subsection{Architecture}
+
+A Mamba-style SSM for byte sequences:
+\begin{itemize}
+  \item Input: byte embedding, $d=64$
+  \item 2--4 Mamba blocks with state dimension $N=16$--$64$
+  \item Linear-time complexity: $O(L \cdot d \cdot N)$, matching the WFST
+  \item Output head: next-byte prediction (generative) or classification
+  \item Parameters: ${\sim}30$K--$150$K
+\end{itemize}
+
+\subsection{Relationship to WFST}
+
+The WFST is a special case: its transition matrices are sparse (one nonzero
+entry per column in the deterministic case) and its state space is discrete
+and finite.  A learned SSM with continuous state $h_t \in \mathbb{R}^N$
+can:
+\begin{enumerate}
+  \item \textbf{Recover} the WFST dynamics if the problem is truly
+        finite-state (the SSM can learn to quantize its states).
+  \item \textbf{Extend} beyond finite states to capture soft, graded
+        structural features---e.g., ``how close is this prefix to needing
+        a branch instruction?''
+  \item \textbf{Learn nonlinear effects} via the selective (input-dependent)
+        gating mechanism, which the WFST's fixed transition weights cannot
+        represent.
+\end{enumerate}
+
+\subsection{Training}
+
+Same data and objectives as Section~\ref{sec:lm} (autoregressive) or
+Section~\ref{sec:classifier} (discriminative).  The SSM replaces the
+transformer backbone in either case.
+
+\subsection{Advantages over WFST}
+
+\begin{itemize}
+  \item Same linear-time sequential processing, but with learned
+        (rather than hand-designed) state dynamics.
+  \item Continuous state enables soft generalization beyond the WFST's
+        discrete equivalence classes.
+  \item Selective gating learns input-dependent transitions, unlike the
+        WFST's fixed (input-independent modulo current state) weights.
+\end{itemize}
+
+\subsection{Limitations}
+
+\begin{itemize}
+  \item For very short sequences ($L \leq 32$), the efficiency advantage
+        over attention ($O(L^2)$) is negligible---$32^2 = 1024$ is small.
+  \item SSMs may underperform transformers on tasks requiring precise
+        positional reasoning (e.g., ``byte 3 must equal byte 7'').
+  \item Less interpretable than the WFST, whose states have explicit
+        semantic meaning.
+\end{itemize}
+
+\subsection{Related Work}
+
+Mamba~\cite{gu2024mamba} and its successors demonstrate strong sequence
+modeling with linear complexity.  Application to byte-level code modeling
+is unexplored but natural given the sequential structure.
+
+
+%% ============================================================
+\section{Hybrid WFST+Neural Architecture}
+\label{sec:hybrid}
+
+\subsection{Motivation}
+
+The WFST excels at hard structural constraints (instruction decoding,
+address mode parsing, loop structure detection) that are \emph{exactly
+specified} by the 6502 ISA.  Neural networks excel at learning soft
+statistical patterns from data.  A hybrid architecture uses each component
+for what it does best.
+
+\subsection{Architecture Variants}
+
+\paragraph{Variant A: WFST proposal + neural importance weights.}
+The WFST generates candidate sequences $\mathbf{x} \sim q_{\text{WFST}}$.
+A neural network computes importance weights:
+\begin{equation}
+  w(\mathbf{x}) = \frac{p_\phi(\text{viable} \mid \mathbf{x})}
+                       {q_{\text{WFST}}(\mathbf{x})},
+\end{equation}
+where $p_\phi$ is the surrogate classifier (Section~\ref{sec:classifier}).
+This importance-weighted sampling corrects the WFST's distributional
+errors while retaining its structural guarantees.
+
+\paragraph{Variant B: WFST features + neural classifier.}
+Extract the WFST's state trajectory
+$\mathbf{h} = (h_1, \ldots, h_L)$ as a feature sequence and feed it
+to a neural classifier:
+\begin{equation}
+  \hat{f}(\mathbf{x}) = \text{NN}(\mathbf{h}_1, \ldots, \mathbf{h}_L).
+\end{equation}
+The WFST states provide a strong inductive bias (instruction boundaries,
+loop detection, etc.) and the neural network learns residual patterns
+the WFST misses.
+
+\paragraph{Variant C: Neural-weighted WFST.}
+Replace the WFST's scalar transition weights with neural network outputs.
+At each position $t$, a small network computes the weight of each
+transition given the prefix:
+\begin{equation}
+  w(h_t \to h_{t+1} \mid x_t, \text{context}_t)
+    = \text{MLP}(\text{embed}(h_t), \text{embed}(x_t), c_t),
+\end{equation}
+where $c_t$ is a neural context vector summarizing $x_{<t}$.
+This preserves the WFST's topology (structural constraints as hard
+edges) while making weights context-dependent.
+
+\subsection{Training}
+
+All variants use the same simulation-labeled data.  Variant C requires
+differentiable WFST forward passes, implementable via the forward
+algorithm on the semiring of real-valued weights.
+
+\subsection{Advantages}
+
+\begin{itemize}
+  \item \textbf{Best of both worlds}: exact structural constraints from
+        the WFST, learned soft patterns from the neural network.
+  \item \textbf{Data efficiency}: the WFST provides a strong prior,
+        reducing the neural network's learning burden.
+  \item \textbf{Interpretability}: the WFST component remains inspectable;
+        the neural component handles the ``residual'' complexity.
+\end{itemize}
+
+\subsection{Limitations}
+
+\begin{itemize}
+  \item Implementation complexity: requires maintaining both WFST and
+        neural components.
+  \item The WFST topology may constrain the hybrid system if the true
+        structure deviates from the hand-designed states.
+  \item Gradient flow through the WFST requires careful engineering
+        (or approximation in Variant A).
+\end{itemize}
+
+\subsection{Related Work}
+
+Hybrid FST+neural models appear in speech recognition, where
+WFST-based decoders are combined with neural acoustic
+models~\cite{mohri2002weighted}.  Neural-weighted automata have
+been studied in formal language theory~\cite{schwartz2018sopa}.
+
+
+%% ============================================================
+\section{Comparison}
+\label{sec:comparison}
+
+\begin{table}[htbp]
+\centering
+\caption{Comparison of approaches for 6502 replicator generation and analysis.
+Training data is measured in viable replicator examples (positive class).
+Inference speed is per-sequence on GPU unless noted.}
+\label{tab:comparison}
+\small
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{@{}l c c c c c@{}}
+\toprule
+\textbf{Approach} &
+\textbf{Task} &
+\textbf{Params} &
+\textbf{Training data} &
+\textbf{Inference} &
+\textbf{Key advantage} \\
+\midrule
+WFST (baseline) &
+Generate &
+${\sim}10^3$ weights &
+${\sim}10^3$ oracle calls &
+${\sim}1\,\mu$s &
+Exact inference \\
+\midrule
+Autoregressive LM &
+Generate &
+50K--500K &
+${\sim}10^3$ viable &
+${\sim}100\,\mu$s &
+Long-range deps \\
+Surrogate classifier &
+Classify &
+50K--100K &
+${\sim}10^4$ pairs &
+${\sim}10\,\mu$s &
+100$\times$ faster oracle \\
+RL (PPO) &
+Generate &
+50K--500K &
+${\sim}10^5$ sim calls &
+${\sim}100\,\mu$s &
+Multi-objective \\
+Seq2seq &
+Mutate &
+100K--200K &
+${\sim}10^4$ pairs &
+${\sim}200\,\mu$s &
+Directed evolution \\
+Masked (BERT) &
+Infill &
+50K--200K &
+${\sim}10^3$ viable &
+${\sim}50\,\mu$s &
+Credit assignment \\
+SSM (Mamba) &
+Gen./Class. &
+30K--150K &
+${\sim}10^3$ viable &
+${\sim}50\,\mu$s &
+Learned WFST \\
+Hybrid WFST+NN &
+Gen./Class. &
+50K--200K &
+${\sim}10^3$ viable &
+${\sim}10\,\mu$s &
+Best of both \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Recommended development order.}
+\begin{enumerate}
+  \item \textbf{Surrogate classifier} (Section~\ref{sec:classifier}):
+        Immediate practical value as a fast filter in the existing WFST
+        pipeline.  Requires the least architectural change.
+  \item \textbf{Hybrid WFST+neural} (Section~\ref{sec:hybrid}, Variant~A):
+        Builds on the existing WFST and new classifier.  Low risk,
+        incremental improvement.
+  \item \textbf{Autoregressive LM} (Section~\ref{sec:lm}):
+        Independent generative model.  Provides a comparison point and
+        may discover novel replicator families.
+  \item \textbf{RL fine-tuning} (Section~\ref{sec:rl}):
+        Warm-start from the LM, optimize for spread/robustness.
+        Highest potential payoff but highest training cost.
+  \item \textbf{Masked model} (Section~\ref{sec:masked}):
+        Useful for analysis and targeted design.  Lower priority for
+        generation but valuable for understanding.
+  \item \textbf{SSM} (Section~\ref{sec:ssm}):
+        Research exploration---test whether a learned SSM can recover
+        and extend the WFST's structure.
+  \item \textbf{Seq2seq} (Section~\ref{sec:seq2seq}):
+        Requires the richest training data.  Deferred until a large
+        library of viable replicators exists.
+\end{enumerate}
+
+
+%% ============================================================
+\section{Discussion}
+\label{sec:discussion}
+
+The fundamental tension across all approaches is \emph{data efficiency
+vs.\ model expressivity}.  The WFST baseline encodes strong domain
+knowledge (6502 instruction structure, memory map layout, loop mechanics)
+directly into its topology, enabling learning from ${\sim}10^3$ oracle
+calls.  Neural approaches trade this inductive bias for representational
+flexibility, but require proportionally more data.
+
+The most promising path forward is \emph{progressive neural augmentation}
+of the existing WFST pipeline:
+\begin{enumerate}
+  \item Use the WFST for what it does exactly (structural parsing, proposal
+        distribution).
+  \item Add a neural surrogate to accelerate filtering.
+  \item Optionally replace the WFST's fixed weights with learned,
+        context-dependent weights.
+  \item Use RL to optimize for objectives beyond viability.
+\end{enumerate}
+
+A key open question is whether the viable replicator distribution has
+structure beyond what the WFST captures.  If replicator families are
+essentially finite and well-separated, the WFST suffices and neural
+models add little.  If there is a rich landscape of marginal replicators
+with complex interdependencies, neural models will prove essential.
+
+Empirically resolving this question requires growing the corpus of
+known replicator families---which itself benefits from the faster
+search enabled by the surrogate classifier.  The approaches are thus
+mutually reinforcing.
+
+
+%% ============================================================
+\bibliographystyle{plain}
+\begin{thebibliography}{99}
+
+\bibitem{chen2021codex}
+M.~Chen, J.~Tworek, H.~Jun, et~al.
+\newblock Evaluating large language models trained on code.
+\newblock \emph{arXiv preprint arXiv:2107.03374}, 2021.
+
+\bibitem{pei2020trex}
+K.~Pei, Z.~Xuan, J.~Yang, S.~Jana, and B.~Ray.
+\newblock {TREX}: Learning execution semantics from micro-traces for binary
+  similarity.
+\newblock \emph{arXiv preprint arXiv:2012.08680}, 2020.
+
+\bibitem{lin2017focal}
+T.-Y.~Lin, P.~Goyal, R.~Girshick, K.~He, and P.~Doll{\'a}r.
+\newblock Focal loss for dense object detection.
+\newblock In \emph{Proc.\ ICCV}, pp.~2980--2988, 2017.
+
+\bibitem{snoek2012practical}
+J.~Snoek, H.~Larochelle, and R.~P.~Adams.
+\newblock Practical {B}ayesian optimization of machine learning algorithms.
+\newblock In \emph{Proc.\ NeurIPS}, pp.~2951--2959, 2012.
+
+\bibitem{bieber2020learning}
+D.~Bieber, C.~Sutton, H.~Larochelle, and D.~Tarlow.
+\newblock Learning to execute programs with instruction pointer attention graph
+  neural networks.
+\newblock In \emph{Proc.\ NeurIPS}, 2020.
+
+\bibitem{bunel2018leveraging}
+R.~Bunel, M.~Hausknecht, J.~Devlin, R.~Singh, and P.~Kohli.
+\newblock Leveraging grammar and reinforcement learning for neural program
+  synthesis.
+\newblock In \emph{Proc.\ ICLR}, 2018.
+
+\bibitem{le2022coderl}
+H.~Le, Y.~Wang, A.~D.~Gotmare, S.~Savarese, and S.~C.~H.~Hoi.
+\newblock {CodeRL}: Mastering code generation through pretrained models and deep
+  reinforcement learning.
+\newblock In \emph{Proc.\ NeurIPS}, 2022.
+
+\bibitem{williams1992simple}
+R.~J.~Williams.
+\newblock Simple statistical gradient-following algorithms for connectionist
+  reinforcement learning.
+\newblock \emph{Machine Learning}, 8(3):229--256, 1992.
+
+\bibitem{ranzato2016sequence}
+M.~Ranzato, S.~Chopra, M.~Auli, and W.~Zaremba.
+\newblock Sequence level training with recurrent neural networks.
+\newblock In \emph{Proc.\ ICLR}, 2016.
+
+\bibitem{schulman2017ppo}
+J.~Schulman, F.~Wolski, P.~Dhariwal, A.~Radford, and O.~Klimov.
+\newblock Proximal policy optimization algorithms.
+\newblock \emph{arXiv preprint arXiv:1707.06347}, 2017.
+
+\bibitem{tufano2019empirical}
+M.~Tufano, C.~Watson, G.~Bavota, M.~{Di Penta}, M.~White, and D.~Poshyvanyk.
+\newblock An empirical study on learning bug-fixing patches in the wild via
+  neural machine translation.
+\newblock \emph{ACM Trans.\ Softw.\ Eng.\ Methodol.}, 28(4):1--29, 2019.
+
+\bibitem{chen2020program}
+Y.~Chen, C.~Qi, and G.~Gao.
+\newblock Program synthesis with learned code idioms.
+\newblock \emph{arXiv preprint}, 2020.
+
+\bibitem{devlin2019bert}
+J.~Devlin, M.-W.~Chang, K.~Lee, and K.~Toutanova.
+\newblock {BERT}: Pre-training of deep bidirectional transformers for language
+  understanding.
+\newblock In \emph{Proc.\ NAACL-HLT}, pp.~4171--4186, 2019.
+
+\bibitem{feng2020codebert}
+Z.~Feng, D.~Guo, D.~Tang, et~al.
+\newblock {CodeBERT}: A pre-trained model for programming and natural languages.
+\newblock In \emph{Proc.\ EMNLP Findings}, pp.~1536--1547, 2020.
+
+\bibitem{ghazvininejad2019mask}
+M.~Ghazvininejad, O.~Levy, Y.~Liu, and L.~Zettlemoyer.
+\newblock Mask-predict: Parallel decoding of conditional masked language models.
+\newblock In \emph{Proc.\ EMNLP-IJCNLP}, pp.~6112--6121, 2019.
+
+\bibitem{gu2024mamba}
+A.~Gu and T.~Dao.
+\newblock Mamba: Linear-time sequence modeling with selective state spaces.
+\newblock \emph{arXiv preprint arXiv:2312.00752}, 2023.
+
+\bibitem{mohri2002weighted}
+M.~Mohri, F.~Pereira, and M.~Riley.
+\newblock Weighted finite-state transducers in speech recognition.
+\newblock \emph{Computer Speech \& Language}, 16(1):69--88, 2002.
+
+\bibitem{schwartz2018sopa}
+R.~Schwartz, S.~Thomson, and N.~A.~Smith.
+\newblock {SoPa}: Bridging {CNN}s, {RNN}s, and weighted finite-state machines.
+\newblock In \emph{Proc.\ ACL}, pp.~295--305, 2018.
+
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,282 @@
+\documentclass{article}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\newcommand{\hex}[1]{\texttt{\$#1}}
+\newcommand{\Beff}{B_{\mathrm{eff}}}
+\newcommand{\PASS}{\textsc{pass}}
+\newcommand{\FAIL}{\textsc{fail}}
+
+\newtheorem{definition}{Definition}
+\newtheorem{proposition}{Proposition}
+
+\title{Simulation-Trained Weighted Finite-State Transducers\\
+for Replicator Viability Estimation}
+\author{}
+\date{March 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We describe a weighted finite-state transducer (WFST) framework for
+estimating the probability that a random byte stream encodes a viable
+self-replicating program in a 6502 cellular automaton. The WFST
+encodes structural constraints (opcode pattern, address alignment,
+branch offset) as hard \FAIL\ verdicts, and learns soft transition
+weights for ``slide'' positions from simulation. We derive an
+AND-gate blame assignment for the EM M-step, validate with importance
+sampling, and report $\Beff \approx 61$ bits for the minimal
+replicator family. Active learning concentrates simulation budget
+on uncertain transitions.
+\end{abstract}
+
+\section{The Scoring Problem}
+
+Given a random byte stream of length $L$, what is the probability it
+encodes a viable self-replicating 6502 program? We define viability as
+exponential spread: the program, when placed in cell $(0,0)$ of an
+$8 \times 8$ board, fills more than half the cells within 80 scheduler
+passes.
+
+The minimal replicator is 8 bytes:
+\begin{equation}
+\underbrace{\hex{B5}}_{\text{LDA zp,X}}
+\underbrace{\hex{00}}_{\text{addr}}
+\underbrace{\hex{9D}}_{\text{STA abs,X}}
+\underbrace{\hex{00}}_{\text{addr}}
+\underbrace{\hex{04}}_{\text{page}}
+\underbrace{\hex{E8}}_{\text{INX}}
+\underbrace{\hex{90}}_{\text{BCC}}
+\underbrace{\hex{F8}}_{\text{offset}}
+\end{equation}
+with variants at the INX/DEX and branch positions. Longer programs
+(9--32 bytes) can include ``slide'' bytes---single-byte opcodes
+inserted between core positions---that may or may not preserve viability.
+
+\section{WFST Architecture}
+
+\subsection{Composed Machine}
+
+The scoring transducer is a product-state composition of two reviewers:
+
+\begin{itemize}
+\item \textbf{Opcode reviewer} (13 states): Recognizes the structural
+  pattern \texttt{LDA~zp,X / STA~abs,X / page / INX|DEX / branch / offset}
+  with four slide states allowing variable-length insertions.
+
+\item \textbf{Offset counter} (50 states): Silent byte-position counter.
+  After composition, offset verdicts are injected at the product states
+  $(\text{seen-branch}, \text{pos}_K)$: \PASS\ if the byte equals
+  $(255 - K) \bmod 256$, \FAIL\ otherwise.
+\end{itemize}
+
+The composed machine has $13 \times 50 = 650$ states. Additional hard
+constraints are injected post-composition:
+\begin{itemize}
+\item \textbf{Address}: \FAIL\ at states $(\text{seen-LDA}, \text{pos}_K)$
+  and $(\text{seen-STA}, \text{pos}_K)$ for any byte $\neq \hex{00}$.
+  Simulation revealed that non-zero addresses cause byte~0 to wrap
+  into the stack page (8-bit vs.\ 16-bit addressing asymmetry).
+\item \textbf{Branch}: \FAIL\ at $(\text{seen-INC}, \text{pos}_K)$
+  for branches other than BVC (\hex{50}) and BCC (\hex{90}). Only
+  these create infinite loops; BPL/BNE terminate and fail to spread.
+\end{itemize}
+
+\subsection{Trainable Weights}
+
+Each non-\FAIL\ transition carries a weight $w_i \in (0, 1]$,
+interpreted as $P(\text{this transition is safe})$. At core positions
+(LDA, STA, page), the only non-\FAIL\ transition has $w = 1$.
+At slide positions, all 256 bytes initially have $w = 1$; training
+adjusts these from simulation data.
+
+\subsection{Weighted Forward Algorithm}
+
+The weighted Forward count is:
+\begin{equation}
+\alpha_s(n) = \sum_{b=0}^{255} w(s, b) \cdot \alpha_{\delta(s,b)}(n-1)
+\end{equation}
+where the sum excludes \FAIL-verdict transitions, and
+$\alpha_s(0) = \mathbf{1}[s \in \mathcal{A}]$ for accept states
+$\mathcal{A}$. The WFST's estimate of $P(\text{viable at length } L)$
+is $\alpha_{s_0}(L) / 256^L$, giving
+$\Beff = -\log_2 \alpha_{s_0}(L) + 8L$.
+
+\section{Training: AND-Gate Blame Assignment}
+
+\subsection{Generative Model}
+
+Each transition $i$ on a path independently passes with probability
+$w_i$. The sequence is viable iff \emph{all} transitions pass (AND gate):
+\begin{equation}
+P(\text{viable} \mid \mathbf{w}) = \prod_{i \in \text{path}} w_i
+\end{equation}
+
+\subsection{E-Step: Posterior Blame}
+
+Given that the oracle reports the sequence as non-viable, the posterior
+probability that transition $i$ failed is:
+\begin{equation}\label{eq:blame}
+P(\FAIL_i \mid \text{non-viable}) =
+\frac{1 - w_i}{1 - \prod_{j \in \text{path}} w_j}
+\end{equation}
+
+When all weights are equal, blame is distributed equally among all
+transitions. When one weight is much lower, it receives proportionally
+more blame. This is the proper Forward-Backward computation for the
+AND-gate topology.
+
+\subsection{M-Step}
+
+For each transition $(s, b)$, accumulate expected counts:
+\begin{align}
+\hat{p}_{s,b} &= \sum_{\text{viable}} 1
++ \sum_{\text{non-viable}} P(\PASS_i \mid \text{non-viable}) \\
+\hat{f}_{s,b} &= \sum_{\text{non-viable}} P(\FAIL_i \mid \text{non-viable})
+\end{align}
+with Laplace smoothing:
+\begin{equation}
+w_{s,b}^{\text{new}} = \frac{\hat{p}_{s,b} + \alpha}
+{\hat{p}_{s,b} + \hat{f}_{s,b} + 2\alpha}
+\end{equation}
+
+\section{Importance Sampling Validation}
+
+The WFST may be miscalibrated. We validate with importance sampling:
+sample $x_1, \ldots, x_N$ from the WFST proposal $q$, simulate each,
+and compute:
+\begin{equation}
+\hat{P}(\text{viable}) = \frac{1}{N} \sum_{i=1}^{N}
+\mathbf{1}[\text{viable}(x_i)] \cdot \frac{P_{\text{uniform}}(x_i)}{q(x_i)}
+\end{equation}
+where $q(x) = \prod_{t=1}^{L} \frac{w(s_t, x_t) \cdot \alpha_{\delta(s_t, x_t)}(L-t-1)}{\alpha_{s_t}(L-t)}$ and $P_{\text{uniform}}(x) = 256^{-L}$.
+
+\begin{table}[h]
+\centering
+\caption{Calibration: WFST vs.\ IS ground truth (after training)}
+\begin{tabular}{ccccc}
+\toprule
+$L$ & WFST $\Beff$ & IS $\Beff$ & Gap (bits) & Viable rate \\
+\midrule
+8  & 62.0 & 62.0 & 0.0  & 100\% \\
+9  & 59.0 & 61.8 & +2.7 & 36\% \\
+10 & 57.2 & 61.5 & +4.3 & 12\% \\
+11 & 55.9 & 60.2 & +4.3 & 8\% \\
+12 & 54.9 & 59.8 & +4.9 & 4\% \\
+\bottomrule
+\end{tabular}
+\label{tab:calibration}
+\end{table}
+
+\section{Cumulative $\Beff$ Across Lengths}
+
+A random $L$-byte stream is viable if its first $l$ bytes form a viable
+$l$-byte program for any $8 \le l \le L$ (infinite-loop replicators
+never execute trailing bytes). Since the offset values at different
+lengths are distinct, these events are mutually exclusive:
+\begin{equation}
+P(\text{viable at length} \le L) = \sum_{l=8}^{L} P_l
+\end{equation}
+
+The per-length probability $P_l$ for programs with $k = l - 8$ slide
+bytes involves the structural count (from Forward) times the fraction
+of safe slide combinations:
+\begin{equation}
+P_l \approx \frac{Z_{\text{struct}}(l)}{256^l} \cdot p_{\text{safe}}^k
+\end{equation}
+where $p_{\text{safe}} \approx 26.5/256 \approx 0.104$ (24 safe +
+5 risky single-byte opcodes at effective weight 0.5). Since
+$p_{\text{safe}} < 1$, the series converges geometrically:
+\begin{equation}
+\sum_{l=8}^{\infty} P_l = P_8 \cdot \sum_{k=0}^{\infty}
+\binom{k+3}{3} \left(\frac{p_{\text{safe}}}{1}\right)^k
+\cdot r^k = \frac{P_8}{(1 - p_{\text{safe}} \cdot r)^4}
+\end{equation}
+where $r$ accounts for the growth of the structural count per
+additional slide byte. Numerically, the series converges by
+$L \approx 12$, giving cumulative $\Beff \approx 60.9$ bits.
+
+\section{Active Learning}
+
+Simulation is expensive; Forward/sampling is cheap. Active learning
+allocates simulation budget to transitions with maximum uncertainty,
+measured by the Bernoulli entropy $H(w_i) = -w_i \log_2 w_i -
+(1-w_i) \log_2(1-w_i)$.
+
+\begin{algorithm}
+\caption{Active Learning Iteration}
+\begin{algorithmic}[1]
+\State Identify transitions with $H(w_i) > \tau$
+\State Temporarily boost their weights by factor $\beta$
+\State Sample $N$ sequences from boosted WFST
+\State Restore original weights
+\State Simulate samples, compute rewards
+\State M-step: update weights with AND-gate blame (Eq.~\ref{eq:blame})
+\State IS validation: estimate true $\Beff$
+\end{algorithmic}
+\end{algorithm}
+
+\section{Simulation-Discovered Constraints}
+
+Several constraints were discovered by simulation rather than
+theoretical analysis:
+
+\begin{enumerate}
+\item \textbf{Address must be \hex{00}}: The LDA zero-page instruction
+  uses 8-bit address wrapping, but STA absolute uses 16-bit arithmetic.
+  For addr $= A > 0$ and $X = 256 - A$, the source reads byte~0
+  (wrapping) but the destination writes to offset $256$ (stack page).
+  Byte~0 is physically unable to reach neighbor offset~0.
+  Fidelity degrades linearly: $\text{fidelity} = \max(0, (8-A)/8)$.
+
+\item \textbf{Only BVC/BCC spread}: BPL and BNE create finite loops
+  (128 and 256 iterations respectively). After the loop, PC falls
+  through to byte~8 (typically BRK), ending execution. These copy
+  but don't sustain exponential growth (spread $\approx 5$ vs.\ 63).
+
+\item \textbf{Position-dependent slide safety}: The same opcode has
+  different viability at different slide positions. TYA (\hex{98})
+  is safe as a prefix but lethal between addr and STA (corrupts~A
+  before the store). RTS (\hex{60}) is safe as prefix but lethal
+  between page and INX.
+
+\item \textbf{Multi-slide interactions}: SEC (\hex{38}) sets carry,
+  killing BCC. But SEC followed by CLC (\hex{18}) restores carry=0,
+  rescuing BCC. This non-additive interaction requires state in
+  the model (or, equivalently, context-dependent weights).
+\end{enumerate}
+
+\section{Results}
+
+\begin{table}[h]
+\centering
+\caption{Effective information content of the minimal replicator}
+\begin{tabular}{lcc}
+\toprule
+Constraint & Bits & Source \\
+\midrule
+LDA = \hex{B5} & 8.0 & Structural \\
+addr = \hex{00} & 8.0 & Simulation \\
+STA = \hex{9D} & 8.0 & Structural \\
+addr match & 8.0 & Structural \\
+page = \hex{04} & 8.0 & Structural \\
+inc $\in$ \{INX, DEX\} + branch $\in$ \{BVC, BCC\} & 14.0 & Simulation \\
+offset (length-dependent) & 8.0 & Structural \\
+\midrule
+Total (single length) & 62.0 & \\
+Cumulative (all lengths $\le 32$) & $\approx 60.9$ & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The IS-validated cumulative $\Beff$ across lengths 8--32 is
+approximately \textbf{60.9 bits}, meaning roughly 1 in $2^{61}
+\approx 2.3 \times 10^{18}$ random byte streams of length $\ge 8$
+encode a viable self-replicating program.
+
+\end{document}
