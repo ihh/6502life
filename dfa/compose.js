@@ -101,3 +101,84 @@ export function composeOpcodeOffset(opcode, offset, opts = {}) {
     const composed = composeCopyTransducers(opcode, offset);
     return injectOffsetVerdicts(composed, opcode, offset, gateState);
 }
+
+/**
+ * Inject addr=0 constraint: at the opcode states where the addr byte
+ * is consumed (seen-LDA and seen-STA), FAIL for any byte ≠ $00.
+ *
+ * @param {CopyTransducer} composed - product of opcode × offset
+ * @param {CopyTransducer} opcode - the opcode reviewer
+ * @param {CopyTransducer} offset - the offset counter
+ * @param {string[]} addrStates - opcode states where addr byte is read
+ * @returns {CopyTransducer}
+ */
+export function injectAddrConstraint(composed, opcode, offset, addrStates = ['seen-LDA', 'seen-STA']) {
+    const nS = offset.numStates;
+
+    for (const stateName of addrStates) {
+        const opcIdx = opcode.stateIdx.get(stateName);
+        if (opcIdx === undefined) continue;
+
+        for (let posK = 0; posK < nS; posK++) {
+            const productFrom = opcIdx * nS + posK;
+            for (let byte = 0; byte < 256; byte++) {
+                if (byte === 0x00) continue; // $00 is the only valid addr
+                const t = composed.trans[productFrom * 256 + byte];
+                if (!t) continue;
+                t.verdict = FAIL;
+                t.tag = 'addr';
+                t.label = `addr must be $00, got $${byte.toString(16).padStart(2, '0')}`;
+            }
+        }
+    }
+
+    return composed;
+}
+
+/**
+ * Inject branch constraint: at the opcode state where the branch byte
+ * is consumed (seen-INC), only allow BVC ($50) and BCC ($90).
+ *
+ * @param {CopyTransducer} composed
+ * @param {CopyTransducer} opcode
+ * @param {CopyTransducer} offset
+ * @param {number[]} [viableBranches=[0x50, 0x90]]
+ * @returns {CopyTransducer}
+ */
+export function injectBranchConstraint(composed, opcode, offset, viableBranches = [0x50, 0x90]) {
+    const nS = offset.numStates;
+    const opcIdx = opcode.stateIdx.get('seen-INC');
+    if (opcIdx === undefined) return composed;
+
+    const allowed = new Set(viableBranches);
+
+    for (let posK = 0; posK < nS; posK++) {
+        const productFrom = opcIdx * nS + posK;
+        for (let byte = 0; byte < 256; byte++) {
+            const t = composed.trans[productFrom * 256 + byte];
+            if (!t) continue;
+            // The opcode reviewer already FAILs non-branch bytes and
+            // PASses branch bytes. We now FAIL the non-viable branches.
+            if (t.verdict === PASS && !allowed.has(byte)) {
+                t.verdict = FAIL;
+                t.tag = 'branch-nonviable';
+                t.label = `branch $${byte.toString(16)} does not spread`;
+            }
+        }
+    }
+
+    return composed;
+}
+
+/**
+ * Build a fully constrained composed machine.
+ * Structural constraints (addr=0, viable branches, offset) are hard FAILs.
+ * Slide transitions retain trainable weights.
+ */
+export function composeFullPipeline(opcode, offset) {
+    let composed = composeCopyTransducers(opcode, offset);
+    composed = injectOffsetVerdicts(composed, opcode, offset, 'seen-branch');
+    composed = injectAddrConstraint(composed, opcode, offset);
+    composed = injectBranchConstraint(composed, opcode, offset);
+    return composed;
+}
