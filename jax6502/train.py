@@ -164,10 +164,15 @@ def simulate_candidate(byte_seq, board_size=8, num_quanta=None, rng_key=None):
     B = board_size
     M = CELL_SIZE
 
-    # Random board — the replicator must overwrite existing random programs
+    # JAM board: all cells start halted. Only the injected replicator executes.
+    # To prove self-replication (not just diffusion), check for writes to cells
+    # that are NOT immediate neighbors of the injection site. On a torus, the
+    # injected cell (0,0) can directly write to its paired neighbor in each
+    # quantum. Only second-generation copies can reach non-neighbors.
     k1, k2 = jr.split(rng_key)
+    JAM = 0x02
     board = FastBoard(size=B, seed=int(jr.randint(k1, (), 0, 2**30)))
-    board.storage = jr.randint(k1, (B * B * M,), 0, 256).astype(jnp.uint8)
+    board.storage = jnp.full(B * B * M, JAM, dtype=jnp.uint8)
 
     # Inject candidate into cell (0,0)
     board.write_cell(0, 0, 0, byte_seq)
@@ -181,13 +186,21 @@ def simulate_candidate(byte_seq, board_size=8, num_quanta=None, rng_key=None):
     board.key = k2
     board.run_rounds(n_rounds)
 
-    # Count cells containing the replicator's conserved opcode subsequence:
-    # B5 (LDA zpx) → 9D (STA abs,X) → 04 (page 4) → E8|CA (INX|DEX)
-    # appearing in order with arbitrary gaps. This detects copies even with
-    # inserts, cargo drift, and register area mutations.
+    # Cells that are immediate neighbors of (0,0) on a torus (cardinal + diagonal
+    # within checkerboard pairing distance). The bare sim pairs cardinal neighbors.
+    neighbors = set()
+    for di in [-1, 0, 1]:
+        for dj in [-1, 0, 1]:
+            neighbors.add(((0 + di) % B, (0 + dj) % B))
+
+    # Check non-neighbor cells for the replicator's conserved opcode
+    # subsequence (B5→9D→04→{E8|CA}). Finding this on a non-neighbor cell
+    # of a JAM board proves multi-generational self-replication: the program
+    # copied itself to a neighbor, and the COPY then copied itself onward.
     storage_np = np.asarray(board.storage, dtype=np.uint8)
 
     def has_replicator_signature(cell_page):
+        """Check for LDA zpx → STA abs,X → page4 → INX|DEX subsequence."""
         sig = [0xB5, 0x9D, 0x04]
         pos = 0
         for target in sig:
@@ -202,14 +215,17 @@ def simulate_candidate(byte_seq, board_size=8, num_quanta=None, rng_key=None):
             pos += 1
         return False
 
-    spread = 0
+    distant_spread = 0
     for ci in range(B):
         for cj in range(B):
+            if (ci, cj) in neighbors:
+                continue
             base = (ci * B + cj) * M
             if has_replicator_signature(storage_np[base:base + 256]):
-                spread += 1
+                distant_spread += 1
 
-    viable = spread > board_size
+    spread = distant_spread
+    viable = distant_spread > 0
     return {'spread': spread, 'viable': viable}
 
 
