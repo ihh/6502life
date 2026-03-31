@@ -3,6 +3,8 @@ import {
     buildCandidate, sweepBranch, sweepInc, sweepAddr, fullSweep,
     estimateWeights, theoreticalBranchPredictions, computeEffectiveBeff,
     sampleWithWeights, runTrainingLoop,
+    sweepPrefix, sweepInsert, classifyPrefixes,
+    buildPrefixCandidate, WORKING_PAIRS,
     BRANCH_NAMES, INC_NAMES, BRANCHES,
 } from '../experiment.js';
 import { PRNG } from '../../webgpu/prng.js';
@@ -195,4 +197,85 @@ describe('Weighted sampling only picks working combos', () => {
             expect(workingKeys.has(key)).toBe(true);
         }
     }, 30000);
+});
+
+describe('Prefix slide sweep (256 × 6 = 1536 simulations)', () => {
+    it('finds safe, risky, and lethal prefixes', async () => {
+        const { byPrefix, summary } = await sweepPrefix({ passes: 80, seed: 42 });
+        const { safe, risky, lethal } = classifyPrefixes(byPrefix);
+
+        console.log(`\n=== Prefix Classification ===`);
+        console.log(`  Safe (p=1.0): ${safe.length} opcodes`);
+        console.log(`  Risky (0<p<1): ${risky.length} opcodes`);
+        console.log(`  Lethal (p=0): ${lethal.length} opcodes`);
+
+        // NOP ($EA) must be safe
+        expect(byPrefix.get(0xEA).p).toBe(1.0);
+
+        // Safe prefixes
+        console.log('\n--- Safe (all 6 pairs replicate) ---');
+        for (const s of safe) {
+            console.log(`  $${s.hex}`);
+        }
+
+        // Risky prefixes — the interesting ones!
+        console.log('\n--- Risky (probability strictly between 0 and 1) ---');
+        for (const r of risky) {
+            const pairList = Object.entries(r.perPair)
+                .filter(([_, ok]) => ok)
+                .map(([k]) => k)
+                .join(', ');
+            console.log(`  $${r.hex}: P=${r.p.toFixed(3)} (${r.successes}/${r.total}) — works with: ${pairList}`);
+        }
+
+        // Should have at least some risky opcodes
+        expect(risky.length).toBeGreaterThan(0);
+
+        // Should have genuine fractional probabilities
+        const fractional = risky.filter(r => r.p > 0 && r.p < 1);
+        console.log(`\n  Fractional probabilities: ${fractional.length} opcodes`);
+        expect(fractional.length).toBeGreaterThan(0);
+
+        // Summary statistics
+        const allPs = [...byPrefix.values()].map(d => d.p);
+        const uniquePs = [...new Set(allPs)].sort((a, b) => a - b);
+        console.log(`\n  Unique probability values: ${uniquePs.map(p => p.toFixed(3)).join(', ')}`);
+
+    }, 120000);
+});
+
+describe('Insertion between INC and branch (pos 6)', () => {
+    it('finds richer probability distribution', async () => {
+        // Insert between INX/DEX and the branch opcode.
+        // The inserted byte executes AFTER the inc, BEFORE the branch.
+        // Flag-modifying opcodes directly affect the branch decision.
+        const { byPrefix, summary } = await sweepInsert(6, { passes: 80, seed: 42 });
+        const { safe, risky, lethal } = classifyPrefixes(byPrefix);
+
+        console.log(`\n=== Insert at pos 6 (between INC and branch) ===`);
+        console.log(`  Safe: ${safe.length}, Risky: ${risky.length}, Lethal: ${lethal.length}`);
+
+        // Risky opcodes — these modify flags that the branch reads
+        console.log('\n--- Risky (0 < P < 1) ---');
+        for (const r of risky) {
+            const pairList = Object.entries(r.perPair)
+                .filter(([_, ok]) => ok)
+                .map(([k]) => k)
+                .join(', ');
+            console.log(`  $${r.hex}: P=${r.p.toFixed(3)} (${r.successes}/${r.total}) — ${pairList}`);
+        }
+
+        // Should have richer probability distribution than prefix position
+        const allPs = [...byPrefix.values()].map(d => d.p);
+        const uniquePs = [...new Set(allPs)].sort((a, b) => a - b);
+        console.log(`\n  Unique probability values: ${uniquePs.map(p => p.toFixed(3)).join(', ')}`);
+
+        // Safe opcodes at this position
+        console.log(`\n--- Safe ($${safe.length} opcodes) ---`);
+        for (const s of safe) {
+            console.log(`  $${s.hex}`);
+        }
+
+        expect(risky.length).toBeGreaterThan(0);
+    }, 120000);
 });

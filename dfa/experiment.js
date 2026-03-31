@@ -399,3 +399,160 @@ export async function runTrainingLoop(opts = {}) {
 
     return history;
 }
+
+// --- Prefix slide experiments ---
+
+/** The 6 working (inc, branch) pairs from the full sweep. */
+const WORKING_PAIRS = [
+    { inc: 0xE8, branch: 0x10 }, // INX+BPL
+    { inc: 0xE8, branch: 0x50 }, // INX+BVC
+    { inc: 0xE8, branch: 0x90 }, // INX+BCC
+    { inc: 0xE8, branch: 0xD0 }, // INX+BNE
+    { inc: 0xCA, branch: 0x50 }, // DEX+BVC
+    { inc: 0xCA, branch: 0x90 }, // DEX+BCC
+];
+
+export { WORKING_PAIRS };
+
+/**
+ * Build a 9-byte replicator with a prefix byte before the copy loop.
+ *
+ * Layout: [prefix] B5 00 9D 00 04 [inc] [branch] [offset_for_9]
+ *
+ * @param {number} prefix - byte to insert before the copy loop
+ * @param {Object} pair - { inc, branch }
+ * @returns {Uint8Array}
+ */
+export function buildPrefixCandidate(prefix, pair) {
+    const offset = correctOffsetAt(8); // position 8 in a 9-byte program
+    return new Uint8Array([
+        prefix,
+        0xB5, 0x00, 0x9D, 0x00, 0x04,
+        pair.inc, pair.branch, offset,
+    ]);
+}
+
+/**
+ * Sweep all 256 prefix bytes across all working (inc,branch) pairs.
+ *
+ * Returns per-prefix survival probability P(replicates | prefix byte).
+ *
+ * @param {Object} [opts]
+ * @param {number} [opts.passes=80]
+ * @param {number} [opts.seed=42]
+ * @param {Object[]} [opts.pairs] - override working pairs
+ * @returns {Promise<Object>} { byPrefix: Map<byte, {p, details}>, summary: [...] }
+ */
+export async function sweepPrefix(opts = {}) {
+    const { passes = 80, seed = 42, pairs = WORKING_PAIRS } = opts;
+
+    // Results: prefix → { successes, total, perPair: { key: bool } }
+    const byPrefix = new Map();
+
+    for (let prefix = 0; prefix < 256; prefix++) {
+        let successes = 0;
+        const perPair = {};
+
+        for (const pair of pairs) {
+            const bytes = buildPrefixCandidate(prefix, pair);
+            const sim = await simulateCandidate(bytes, { passes, seed });
+            const key = `${INC_NAMES[pair.inc]}+${BRANCH_NAMES[pair.branch]}`;
+            perPair[key] = sim.copied;
+            if (sim.copied) successes++;
+        }
+
+        byPrefix.set(prefix, {
+            p: successes / pairs.length,
+            successes,
+            total: pairs.length,
+            perPair,
+        });
+    }
+
+    // Build summary sorted by survival probability
+    const summary = [];
+    for (const [prefix, data] of byPrefix) {
+        if (data.p > 0) {
+            summary.push({ prefix, hex: prefix.toString(16).padStart(2, '0'), ...data });
+        }
+    }
+    summary.sort((a, b) => b.p - a.p || a.prefix - b.prefix);
+
+    return { byPrefix, summary };
+}
+
+/**
+ * Sweep all 256 inserted bytes at a given position within the copy loop.
+ * Position 0 = before LDA (prefix), positions 1-6 between core bytes.
+ *
+ * @param {number} insertPos - 0-based position in the 8-byte template to insert before
+ * @param {Object} [opts]
+ * @param {number} [opts.passes=80]
+ * @param {number} [opts.seed=42]
+ * @param {Object[]} [opts.pairs] - override working pairs
+ * @returns {Promise<Object>} same as sweepPrefix
+ */
+export async function sweepInsert(insertPos, opts = {}) {
+    const { passes = 80, seed = 42, pairs = WORKING_PAIRS } = opts;
+    // Base 8-byte template (canonical): B5 00 9D 00 04 E8 90 F8
+    // Insert a byte at insertPos, making it 9 bytes, and fix the offset
+
+    const byPrefix = new Map();
+    for (let ins = 0; ins < 256; ins++) {
+        let successes = 0;
+        const perPair = {};
+
+        for (const pair of pairs) {
+            // Build 9-byte sequence with insertion
+            const base = [0xB5, 0x00, 0x9D, 0x00, 0x04, pair.inc, pair.branch];
+            base.splice(insertPos, 0, ins);
+            const offset = correctOffsetAt(base.length); // offset for position 8
+            base.push(offset);
+            const bytes = new Uint8Array(base);
+
+            const sim = await simulateCandidate(bytes, { passes, seed });
+            const key = `${INC_NAMES[pair.inc]}+${BRANCH_NAMES[pair.branch]}`;
+            perPair[key] = sim.copied;
+            if (sim.copied) successes++;
+        }
+
+        byPrefix.set(ins, {
+            p: successes / pairs.length,
+            successes,
+            total: pairs.length,
+            perPair,
+        });
+    }
+
+    const summary = [];
+    for (const [prefix, data] of byPrefix) {
+        if (data.p > 0) {
+            summary.push({ prefix, hex: prefix.toString(16).padStart(2, '0'), ...data });
+        }
+    }
+    summary.sort((a, b) => b.p - a.p || a.prefix - b.prefix);
+
+    return { byPrefix, summary };
+}
+
+/**
+ * Classify prefix bytes into safety tiers.
+ *
+ * @param {Map} byPrefix - from sweepPrefix
+ * @returns {Object} { safe: [...], risky: [...], lethal: [...] }
+ */
+export function classifyPrefixes(byPrefix) {
+    const safe = [];   // p = 1.0 (works with all pairs)
+    const risky = [];  // 0 < p < 1 (works with some pairs)
+    const lethal = []; // p = 0 (kills all pairs)
+
+    for (const [prefix, data] of byPrefix) {
+        const entry = { prefix, hex: prefix.toString(16).padStart(2, '0'), ...data };
+        if (data.p >= 1.0) safe.push(entry);
+        else if (data.p > 0) risky.push(entry);
+        else lethal.push(entry);
+    }
+
+    risky.sort((a, b) => b.p - a.p);
+    return { safe, risky, lethal };
+}
