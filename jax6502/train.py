@@ -164,41 +164,30 @@ def simulate_candidate(byte_seq, board_size=8, num_quanta=None, rng_key=None):
     B = board_size
     M = CELL_SIZE
 
-    # Use same seed for both boards so they start identically
-    board_seed = int(jr.randint(rng_key, (), 0, 2**30))
+    # Random board — the replicator must overwrite existing random programs
     k1, k2 = jr.split(rng_key)
-    random_storage = jr.randint(k1, (B * B * M,), 0, 256).astype(jnp.uint8)
+    board = FastBoard(size=B, seed=int(jr.randint(k1, (), 0, 2**30)))
+    board.storage = jr.randint(k1, (B * B * M,), 0, 256).astype(jnp.uint8)
 
-    # Experimental board: inject the candidate
-    board_exp = FastBoard(size=B, seed=board_seed)
-    board_exp.storage = random_storage.copy()
-    board_exp.write_cell(0, 0, 0, byte_seq)
-    board_exp.write_cell(0, 0, REG_PCHI, [0x00])
-    board_exp.write_cell(0, 0, REG_PCLO, [0x00])
-    board_exp.write_cell(0, 0, REG_P, [0x30])
-    board_exp.write_cell(0, 0, REG_S, [0xFF])
+    # Inject candidate into cell (0,0)
+    board.write_cell(0, 0, 0, byte_seq)
+    board.write_cell(0, 0, REG_PCHI, [0x00])
+    board.write_cell(0, 0, REG_PCLO, [0x00])
+    board.write_cell(0, 0, REG_P, [0x30])
+    board.write_cell(0, 0, REG_S, [0xFF])
 
-    # Control board: identical initial state, no injection
-    board_ctrl = FastBoard(size=B, seed=board_seed)
-    board_ctrl.storage = random_storage.copy()
-
-    # Run both with the same PRNG sequence
+    # Run simulation
     n_rounds = max(1, num_quanta // (B * B))
-    board_exp.key = k2
-    board_ctrl.key = k2
-    board_exp.run_rounds(n_rounds)
-    board_ctrl.run_rounds(n_rounds)
+    board.key = k2
+    board.run_rounds(n_rounds)
 
-    # Count cells containing a copy of the replicator.
-    # We check for the conserved opcode subsequence: B5 ... 9D ... 04 ... {E8|CA}
-    # appearing in order (with gaps) in the cell's zero page. This detects
-    # copies even with inserts, cargo drift, and register area changes.
-    exp_np = np.asarray(board_exp.storage, dtype=np.uint8)
+    # Count cells containing the replicator's conserved opcode subsequence:
+    # B5 (LDA zpx) → 9D (STA abs,X) → 04 (page 4) → E8|CA (INX|DEX)
+    # appearing in order with arbitrary gaps. This detects copies even with
+    # inserts, cargo drift, and register area mutations.
+    storage_np = np.asarray(board.storage, dtype=np.uint8)
 
     def has_replicator_signature(cell_page):
-        """Check if cell contains the LDA/STA/inc-dec subsequence in order."""
-        # Look for: B5 (LDA zpx), then 9D (STA abs,X), then 04 (page 4),
-        # then E8 or CA (INX or DEX)
         sig = [0xB5, 0x9D, 0x04]
         pos = 0
         for target in sig:
@@ -207,7 +196,6 @@ def simulate_candidate(byte_seq, board_size=8, num_quanta=None, rng_key=None):
             if pos >= len(cell_page):
                 return False
             pos += 1
-        # After finding 04, look for E8 or CA
         while pos < len(cell_page):
             if cell_page[pos] in (0xE8, 0xCA):
                 return True
@@ -218,8 +206,7 @@ def simulate_candidate(byte_seq, board_size=8, num_quanta=None, rng_key=None):
     for ci in range(B):
         for cj in range(B):
             base = (ci * B + cj) * M
-            cell_page = exp_np[base:base + 256]
-            if has_replicator_signature(cell_page):
+            if has_replicator_signature(storage_np[base:base + 256]):
                 spread += 1
 
     viable = spread > board_size
