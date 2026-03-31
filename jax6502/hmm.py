@@ -694,7 +694,114 @@ def chunked_log_matmul_scan(matrices: jnp.ndarray, chunk_size: int = 16) -> jnp.
 
 
 # ---------------------------------------------------------------------------
-# Forward algorithm via associative scan
+# Forward-Backward with custom VJP (fast gradient for long sequences)
+# ---------------------------------------------------------------------------
+
+def _forward_pass(all_matrices, pi, length, S):
+    """Forward pass: compute alpha[t] = pi · M[0] · M[1] · ... · M[t].
+    Returns all alpha vectors [L, S] and the log-probability."""
+    L = all_matrices.shape[0]
+
+    def scan_fn(alpha, t):
+        mat = all_matrices[t]
+        new_alpha = jax.scipy.special.logsumexp(
+            alpha[:, None] + mat, axis=0)
+        alpha_out = jnp.where(t < length, new_alpha, alpha)
+        return alpha_out, alpha_out
+
+    _, alphas = jax.lax.scan(scan_fn, pi, jnp.arange(L))
+    return alphas  # [L, S]
+
+
+def _backward_pass(all_matrices, length, S, L):
+    """Backward pass: compute beta[t] where beta[L-1] = 1 (log-space: 0).
+    beta[t] = M[t+1] · beta[t+1]."""
+
+    def scan_fn(beta, t_rev):
+        t = L - 1 - t_rev  # reverse index: L-1, L-2, ..., 0
+        mat = all_matrices[t]
+        new_beta = jax.scipy.special.logsumexp(
+            mat + beta[None, :], axis=1)
+        beta_out = jnp.where(t < length, new_beta, beta)
+        return beta_out, beta_out
+
+    init_beta = jnp.zeros(S)  # log(1) = 0 for all states
+    _, betas_rev = jax.lax.scan(scan_fn, init_beta, jnp.arange(L))
+    # betas_rev[i] = beta at position L-1-i, so reverse to get betas[t]
+    betas = betas_rev[::-1]
+    return betas  # [L, S]
+
+
+@jax.custom_vjp
+def _log_prob_from_matrices(all_matrices, pi, final_state_idx, length, S):
+    """Compute log P(x | HMM) from precomputed emission matrices.
+    custom_vjp provides fast O(L×S²) gradient via Forward-Backward."""
+    alphas = _forward_pass(all_matrices, pi, length, S)
+    # Extract from the last valid position
+    final_alpha = alphas[length - 1]
+    return final_alpha[final_state_idx]
+
+
+def _log_prob_fwd(all_matrices, pi, final_state_idx, length, S):
+    """Forward pass for custom_vjp: cache alphas for backward."""
+    alphas = _forward_pass(all_matrices, pi, length, S)
+    final_alpha = alphas[length - 1]
+    log_prob = final_alpha[final_state_idx]
+    return log_prob, (all_matrices, alphas, pi, final_state_idx, length, S)
+
+
+def _log_prob_bwd(res, g):
+    """Backward pass: compute grad w.r.t. all_matrices using Forward-Backward.
+
+    The gradient of log P w.r.t. M[t][i,j] is:
+      ∂log P / ∂M[t][i,j] = alpha[t-1][i] * beta[t][j] / P(x)
+    where alpha and beta are in log-space, and we need the softmax
+    Jacobian of the logsumexp operations.
+
+    For the log-semiring, the gradient of logsumexp(a+b) w.r.t. the
+    matrix entries is the posterior probability of each path through
+    state (i,j) at time t.
+    """
+    all_matrices, alphas, pi, final_state_idx, length, S = res
+    L = all_matrices.shape[0]
+
+    # Run backward pass
+    betas = _backward_pass(all_matrices, length, S, L)
+
+    # Compute gradient w.r.t. each matrix entry.
+    # For log-semiring Forward: alpha_new[j] = logsumexp_i(alpha[i] + M[i,j])
+    # The derivative d(alpha_new[j])/d(M[i,j]) = softmax_i(alpha[i] + M[i,j])
+    # The full gradient is: g * sum_t sum_j beta[t][j] * softmax_i(alpha[t-1][i] + M[t][i,j])
+    #
+    # More precisely: d(log P)/d(M[t][i,j]) = exp(alpha[t-1][i] + M[t][i,j] + beta[t][j] - log P)
+    # This is the posterior probability of transitioning i->j at time t.
+
+    log_prob = alphas[length - 1][final_state_idx]
+
+    # alpha_prev[t] = alpha at t-1 (pi for t=0)
+    alpha_prev = jnp.concatenate([pi[None, :], alphas[:-1]], axis=0)  # [L, S]
+
+    # Posterior: exp(alpha_prev[t,i] + M[t,i,j] + beta[t,j] - log_prob)
+    # = grad of log_prob w.r.t. M[t,i,j]
+    # Shape: [L, S, S]
+    grad_matrices = jnp.exp(
+        alpha_prev[:, :, None] + all_matrices + betas[:, None, :] - log_prob
+    )
+    # Mask out positions past length
+    mask = (jnp.arange(L) < length)[:, None, None]
+    grad_matrices = jnp.where(mask, grad_matrices, 0.0)
+    # Scale by incoming gradient
+    grad_matrices = g * grad_matrices
+
+    # No gradient for pi, final_state_idx, length, S (non-differentiable)
+    return (grad_matrices, None, None, None, None)
+
+
+_log_prob_from_matrices.defvjp(_log_prob_fwd, _log_prob_bwd)
+
+
+# ---------------------------------------------------------------------------
+# Forward algorithm (using custom VJP for fast gradient)
 # ---------------------------------------------------------------------------
 
 def _hmm_log_prob_core(params: HMMParams,
@@ -710,7 +817,7 @@ def _hmm_log_prob_core(params: HMMParams,
     bytes_t2 = jnp.concatenate([byte_seq[2:], jnp.zeros(2, dtype=jnp.int32)])
 
     all_matrices = jax.vmap(
-        _make_emission_matrix_core, in_axes=(None, 0, 0, 0, 0)
+        jax.checkpoint(_make_emission_matrix_core), in_axes=(None, 0, 0, 0, 0)
     )(params, bytes_t, bytes_t1, bytes_t2, positions)
 
     mask = (positions < length)[:, None, None]
@@ -718,26 +825,15 @@ def _hmm_log_prob_core(params: HMMParams,
         jnp.eye(S, dtype=jnp.bool_), 0.0, _NEG_INF)
     all_matrices = jnp.where(mask, all_matrices, identity[None, :, :])
 
-    # Sequential product via fori_loop (compiles as a loop, not unrolled).
-    # Much faster to JIT than associative_scan or chunked scan.
-    identity = jnp.where(jnp.eye(S, dtype=jnp.bool_), 0.0, _NEG_INF)
-    def body(t, acc):
-        # Only multiply non-padding matrices (t < length)
-        mat = all_matrices[t]
-        new_acc = log_matmul(acc, mat)
-        return jnp.where(t < length, new_acc, acc)
-    final_product = jax.lax.fori_loop(0, L, body, identity)
-
+    # Forward with custom VJP: explicit Forward-Backward for O(L×S²) gradient.
     pi = jnp.full(S, _NEG_INF)
     pi = pi.at[_ik(0)].set(0.0)
-
-    result = jax.scipy.special.logsumexp(
-        pi[:, None] + final_product, axis=0)
 
     delta_8 = jax.nn.sigmoid(params.log_delta[8])
     log_1m_delta_8 = jnp.log(1.0 - delta_8 + 1e-30)
 
-    return result[_ik(8)] + log_1m_delta_8
+    log_prob = _log_prob_from_matrices(all_matrices, pi, _ik(8), length, S)
+    return log_prob + log_1m_delta_8
 
 
 def _make_emission_matrix_full(params, byte_t, byte_t1, byte_t2, pos):
@@ -766,27 +862,15 @@ def _hmm_log_prob_full(params: HMMParams,
     bytes_t2 = jnp.concatenate([byte_seq[2:], jnp.zeros(2, dtype=jnp.int32)])
 
     all_matrices = jax.vmap(
-        _make_emission_matrix_full, in_axes=(None, 0, 0, 0, 0)
+        jax.checkpoint(_make_emission_matrix_full), in_axes=(None, 0, 0, 0, 0)
     )(params, bytes_t, bytes_t1, bytes_t2, positions)
 
-    # Sequential product via fori_loop
-    identity = jnp.where(jnp.eye(S, dtype=jnp.bool_), 0.0, _NEG_INF)
-    def body(t, acc):
-        mat = all_matrices[t]
-        new_acc = log_matmul(acc, mat)
-        return jnp.where(t < length, new_acc, acc)
-    final_product = jax.lax.fori_loop(0, L, body, identity)
-
+    # Forward with custom VJP: explicit Forward-Backward for O(L×S²) gradient.
     pi = jnp.full(S, _NEG_INF)
     pi = pi.at[_ik(0)].set(0.0)
 
-    result = jax.scipy.special.logsumexp(
-        pi[:, None] + final_product, axis=0)
-
-    # In full mode, the chain ends at M15 -> END (non-emitting)
-    # M15 is _reg_state(6)
     last_reg = _reg_state(NUM_REG_MATCH - 1)
-    log_p = result[last_reg]
+    log_p = _log_prob_from_matrices(all_matrices, pi, last_reg, length, S)
 
     return log_p
 
