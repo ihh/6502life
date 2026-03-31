@@ -501,7 +501,7 @@ def test_core_mode_backward_compat(params, minimal_replicator):
 
     # Core mode should have 37 states
     assert num_states('core') == 37
-    assert num_states('full') == 44
+    assert num_states('full') == 28
 
     length = jnp.int32(8)
 

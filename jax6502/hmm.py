@@ -17,10 +17,10 @@ mode='core' (original):
   Total states: 9*4 + 1 = 37.
 
 mode='full' (256-byte, three-region):
-  Region 1: Core (bytes 0-7) — same 9 insert + 8 match states
-  Region 2: Cargo (bytes ~8-248) — I4 insert state with long self-loop
-  Region 3: Register save area (bytes 249-255) — 7 register match states
-  Total states: 9*4 + 7 + 1 = 44.
+  Region 1: Core (bytes 0-3) — 5 insert states (I0..I4) + 4 match states (M1..M4)
+  Region 2: Cargo (bytes ~4-248) — I4 insert state with long self-loop
+  Region 3: Register save area (bytes 249-255) — 7 register match states (M9..M15)
+  Total states: 5*4 + 7 + 1 = 28.
 
 Insert emissions are per-position (P=5 active insert positions):
   I0: before LDA — must not clobber X or set carry
@@ -52,7 +52,8 @@ import optax
 # Constants (mirroring dfa/profile-hmm.js)
 # ---------------------------------------------------------------------------
 
-NUM_INSERT = 9   # I0..I8
+NUM_INSERT = 9   # I0..I8 (core mode uses all 9)
+NUM_INSERT_FULL = 5  # I0..I4 (full mode uses only 5 active insert states)
 NUM_MATCH = 8    # M1..M8
 NUM_INSERT_POSITIONS = 5  # P: distinct insert emission distributions
 
@@ -85,7 +86,7 @@ NUM_REG_MATCH = 7  # M9..M15 for PCHI, PCLO, P, A, X, Y, S
 # END        -> 36
 
 NUM_STATES_CORE = NUM_INSERT * 4 + 1  # 37
-NUM_STATES_FULL = NUM_INSERT * 4 + NUM_REG_MATCH + 1  # 44
+NUM_STATES_FULL = NUM_INSERT_FULL * 4 + NUM_REG_MATCH + 1  # 28
 
 # For backward compatibility, NUM_STATES defaults to core
 NUM_STATES = NUM_STATES_CORE
@@ -116,10 +117,10 @@ def _ik_3b(k):
 def _reg_state(r):
     """Index of register match state r (0..6) in full mode.
 
-    Register states come after the 36 insert/phantom states:
-    M9=36, M10=37, ..., M15=42.  END=43.
+    Register states come after the 20 insert/phantom states (5 active × 4):
+    M9=20, M10=21, ..., M15=26.  END=27.
     """
-    return NUM_INSERT * 4 + r
+    return NUM_INSERT_FULL * 4 + r
 
 
 def _end_state(mode='core'):
@@ -541,8 +542,12 @@ def make_emission_matrix(params: HMMParams,
     # Match emission log-probs for byte_t
     match_lp = _make_match_emission_table(params, byte_t)  # [8]
 
-    # Process each insert state k = 0..8
-    for k in range(NUM_INSERT):
+    # Number of insert states depends on mode:
+    # core: 9 insert states (I0..I8), full: 5 insert states (I0..I4)
+    n_insert = NUM_INSERT_FULL if mode == 'full' else NUM_INSERT
+
+    # Process each insert state
+    for k in range(n_insert):
         ik = _ik(k)
         ik_2a = _ik_2a(k)
         ik_3a = _ik_3a(k)
@@ -578,46 +583,28 @@ def make_emission_matrix(params: HMMParams,
         mat = mat.at[ik_3b, ik].set(0.0)
 
         # --- Match transition: I_k -> I_{k+1} ---
-        if k < 8:
+        if k < n_insert - 1:
             mk1 = k  # match_lp index (0-based: M1=0, ..., M8=7)
             next_ik = _ik(k + 1)
             w_match = log_1m_delta[k] + match_lp[mk1]
             mat = mat.at[ik, next_ik].set(w_match)
 
     if mode == 'full':
-        # --- Region 2->3 transition: I_8 -> first register state ---
-        # I_8 can transition to the register region (via (1-delta_8))
-        # The first register state is M9 (r=0, PCHI)
+        # --- Region 2->3 transition: I_4 -> first register state ---
+        # I_4 (cargo) transitions directly to M9 (via (1-delta_4))
         reg_lp = _make_reg_emission_table(params, byte_t)  # [7]
 
-        # I_8 -> M9 (consuming byte as register emission)
+        # I_4 -> M9 (consuming byte as register emission)
+        last_insert = NUM_INSERT_FULL - 1  # 4
         reg0 = _reg_state(0)
-        w_reg_start = log_1m_delta[8] + reg_lp[0]
-        mat = mat.at[_ik(8), reg0].set(w_reg_start)
+        w_reg_start = log_1m_delta[last_insert] + reg_lp[0]
+        mat = mat.at[_ik(last_insert), reg0].set(w_reg_start)
 
         # Register chain: M9 -> M10 -> ... -> M15 -> END
-        # Each register state transitions deterministically to the next
         for r in range(NUM_REG_MATCH - 1):
             rs = _reg_state(r)
             rs_next = _reg_state(r + 1)
-            # At this position, state rs emits byte_t with reg emission,
-            # transitions to rs_next. But emission was already accounted
-            # for when transitioning INTO rs. The outgoing transition
-            # from rs to rs+1 needs the NEXT byte's emission.
-            # Actually: in matrix formulation, mat[rs, rs_next] is the
-            # weight for consuming byte_t while in state rs and going to rs_next.
-            # But we only score byte_t under rs's emission (already done
-            # at entry). For the chain M9->M10->...->M15, at position t
-            # we're in state rs and consume byte_t under rs's emission,
-            # then move to rs_next.
-            # The weight is just the register emission probability.
             mat = mat.at[rs, rs_next].set(reg_lp[r + 1])
-
-        # M15 -> END (deterministic, no more bytes to consume after this
-        # register. The emission for M15 was scored when entering M15.
-        # Actually M15 -> END should not consume a byte, similar to I8->END.
-        # But in matrix formulation we handle that via the final vector.)
-        # So M15 is just absorbing for now; final vector picks it up.
 
         # END state self-loop (absorbing)
         mat = mat.at[END, END].set(0.0)
@@ -710,8 +697,8 @@ def _hmm_log_prob_full(params: HMMParams,
     """Full mode: log P(seq | HMM) using associative scan.
 
     Three regions:
-      Region 1: Core copy loop (bytes 0 to ~7+inserts)
-      Region 2: Cargo/tail (I4/I8 self-loops)
+      Region 1: Core (bytes 0-3) — 5 insert states + 4 match states
+      Region 2: Cargo (I4 self-loop)
       Region 3: Register save area (last 7 bytes, M9-M15)
     """
     S = NUM_STATES_FULL
@@ -1043,16 +1030,16 @@ def _hmm_sample_full(params, length, rng_key):
     """Full mode sampler (256-byte, three-region model).
 
     Structure:
-      Region 1: Core copy loop (8 match bytes + insert bytes)
-      Region 2: Cargo (fill remaining with I4/tail inserts)
-      Region 3: Last 7 bytes are register save area
+      Region 1: Core (4 match bytes M1-M4 + inserts I0-I3)
+      Region 2: Cargo (I4 self-loop fills remaining bytes)
+      Region 3: Last 7 bytes are register save area (M9-M15)
     """
-    if length < 15:  # 8 core match + 7 register bytes minimum
+    if length < 11:  # 4 core match + 7 register bytes minimum
         return None
 
     # The last 7 bytes are registers, so core + cargo = length - 7
     core_cargo_len = length - NUM_REG_MATCH
-    insert_slots = core_cargo_len - 8  # 8 core match bytes
+    insert_slots = core_cargo_len - 4  # 4 core match bytes (M1-M4)
 
     if insert_slots < 0:
         return None
@@ -1061,7 +1048,7 @@ def _hmm_sample_full(params, length, rng_key):
     delta_np = np.array(delta)
 
     rng_key, subkey = jax.random.split(rng_key)
-    counts = _sample_insert_counts(delta_np, insert_slots, subkey)
+    counts = _sample_insert_counts_full(delta_np, insert_slots, subkey)
     if counts is None:
         return None
 
@@ -1069,49 +1056,31 @@ def _hmm_sample_full(params, length, rng_key):
     pos = 0
     rng_key_np = rng_key
 
-    # --- Region 1: Core copy loop ---
+    # --- Region 1: Core match bytes M1-M4 with inserts I0-I3 ---
     # I0 inserts
     rng_key_np, subkey = jax.random.split(rng_key_np)
     pos = _fill_insert_bytes(params, result, pos, counts[0], subkey,
                              insert_pos=0)
 
-    # M1: 0xB5
-    m1_pos = pos
+    # M1: 0xB5 (LDA zpx)
     result[pos] = 0xB5
     pos += 1
 
-    # M2..M8 with inserts
-    for k in range(1, 8):
+    # I1 inserts + M2
+    for k in range(1, 4):
         rng_key_np, subkey = jax.random.split(rng_key_np)
         ip = INSERT_POS_MAP[k]
         pos = _fill_insert_bytes(params, result, pos, counts[k], subkey,
                                  insert_pos=ip)
 
-        mk = k + 1
-        if mk <= 5:
-            result[pos] = MATCH_EMISSIONS[mk - 1][0]
-            pos += 1
-        elif mk == 6:
-            rng_key_np, subkey = jax.random.split(rng_key_np)
-            probs = jax.nn.softmax(params.match6_logits)
-            idx = int(jax.random.categorical(subkey, jnp.log(probs)))
-            result[pos] = _M6_BYTES[idx]
-            pos += 1
-        elif mk == 7:
-            rng_key_np, subkey = jax.random.split(rng_key_np)
-            probs = jax.nn.softmax(params.match7_logits)
-            idx = int(jax.random.categorical(subkey, jnp.log(probs)))
-            result[pos] = _M7_BYTES[idx]
-            pos += 1
-        elif mk == 8:
-            offset = (-(pos - m1_pos + 1)) & 0xFF
-            result[pos] = offset
-            pos += 1
+        mk = k + 1  # M2, M3, M4
+        result[pos] = MATCH_EMISSIONS[mk - 1][0]
+        pos += 1
 
-    # I8 inserts (cargo/tail)
+    # --- Region 2: I4 cargo inserts ---
     rng_key_np, subkey = jax.random.split(rng_key_np)
-    pos = _fill_insert_bytes(params, result, pos, counts[8], subkey,
-                             insert_pos=INSERT_POS_MAP[8])
+    pos = _fill_insert_bytes(params, result, pos, counts[4], subkey,
+                             insert_pos=INSERT_POS_MAP[4])
 
     # --- Region 3: Register save area (7 bytes) ---
     reg_log_probs = jax.nn.log_softmax(params.reg_emission_logits, axis=-1)  # [7, 256]
@@ -1128,7 +1097,7 @@ def _hmm_sample_full(params, length, rng_key):
 
 
 def _sample_insert_counts(delta_np, total, rng_key):
-    """Sample insert byte counts for 9 slots summing to total."""
+    """Sample insert byte counts for 9 slots summing to total (core mode)."""
     counts = [0] * 9
     remaining = total
 
@@ -1152,6 +1121,35 @@ def _sample_insert_counts(delta_np, total, rng_key):
 
     if remaining > 0:
         counts[8] += remaining
+
+    return counts
+
+
+def _sample_insert_counts_full(delta_np, total, rng_key):
+    """Sample insert byte counts for 5 slots summing to total (full mode)."""
+    counts = [0] * 5
+    remaining = total
+
+    for k in range(5):
+        if remaining == 0:
+            counts[k] = 0
+            continue
+        d = float(delta_np[k])
+        if d == 0:
+            counts[k] = 0
+            continue
+        n = 0
+        while n < remaining:
+            rng_key, subkey = jax.random.split(rng_key)
+            u = float(jax.random.uniform(subkey))
+            if u >= d:
+                break
+            n += 1
+        counts[k] = n
+        remaining -= n
+
+    if remaining > 0:
+        counts[4] += remaining
 
     return counts
 
