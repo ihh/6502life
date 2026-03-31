@@ -94,17 +94,19 @@ export function weightedSample(transducer, L, forwardCounts, rng) {
 }
 
 /**
- * Update transducer weights from simulation results (M-step).
+ * Update transducer weights (M-step with proper AND-gate blame assignment).
  *
- * Uses spread count as a continuous reward signal, normalized to [0,1].
- * This gives gradient even from near-misses (spread=1 gets partial credit).
+ * Each transition i independently passes with probability wᵢ.
+ * The sequence passes iff ALL transitions pass (AND gate).
  *
- * For each transition (state, byte), the new weight is the mean reward
- * of examples that used that transition, with Laplace smoothing.
+ * For viable sequences: all transitions get PASS credit.
+ * For non-viable sequences: blame is assigned via posterior:
+ *   P(FAILᵢ | sequence failed) = (1 - wᵢ) / (1 - ∏ wⱼ)
+ * When weights are equal, blame is equal across all risky transitions.
  *
  * @param {import('./transducer.js').CopyTransducer} transducer
  * @param {{ bytes: Uint8Array, reward: number }[]} examples
- *   reward should be in [0,1], e.g. spread/maxSpread
+ *   reward in [0,1]: 1 = fully viable, 0 = not viable
  * @param {Object} [opts]
  * @param {number} [opts.alpha=0.1] - Laplace smoothing pseudocount
  */
@@ -112,27 +114,62 @@ export function updateWeights(transducer, examples, opts = {}) {
     const { alpha = 0.1 } = opts;
     const { trans, initial } = transducer;
 
-    const reward = new Float64Array(transducer.numStates * 256);
-    const total = new Float64Array(transducer.numStates * 256);
+    const passCount = new Float64Array(transducer.numStates * 256);
+    const failCount = new Float64Array(transducer.numStates * 256);
 
     for (const ex of examples) {
+        // Trace path, collect trainable transitions
         let state = initial;
+        const path = []; // [{key, weight}]
         for (const b of ex.bytes) {
             const key = state * 256 + b;
             const t = trans[key];
             if (!t) break;
-            total[key]++;
-            reward[key] += ex.reward;
+            if (t.verdict !== FAIL && t.weight < 1.0) {
+                path.push({ key, weight: t.weight });
+            }
             state = t.next;
+        }
+
+        if (ex.reward >= 0.5) {
+            // Viable: all transitions passed → full PASS credit
+            for (const { key } of path) {
+                passCount[key] += ex.reward;
+            }
+        } else if (path.length > 0) {
+            // Non-viable: AND-gate blame assignment
+            // P(sequence failed) = 1 - ∏ wᵢ
+            let logProd = 0;
+            for (const { weight } of path) logProd += Math.log(weight);
+            const prodW = Math.exp(logProd);
+            const pFailed = 1 - prodW;
+
+            if (pFailed > 1e-15) {
+                for (const { key, weight } of path) {
+                    // P(FAILᵢ | failed) = (1-wᵢ) / (1-∏wⱼ)
+                    const pBlame = (1 - weight) / pFailed;
+                    const pPass = 1 - pBlame;
+                    failCount[key] += pBlame * (1 - ex.reward);
+                    passCount[key] += pPass * (1 - ex.reward);
+                }
+            } else {
+                // All weights ≈ 1, but oracle says fail — spread blame equally
+                const blame = (1 - ex.reward) / path.length;
+                for (const { key } of path) {
+                    failCount[key] += blame;
+                }
+            }
         }
     }
 
-    // Update weights where we have observations
+    // M-step: update weights
     for (let key = 0; key < transducer.numStates * 256; key++) {
-        if (total[key] === 0) continue;
+        const p = passCount[key];
+        const f = failCount[key];
+        if (p + f === 0) continue;
         const t = trans[key];
         if (!t || t.verdict === FAIL) continue;
-        t.weight = (reward[key] + alpha) / (total[key] + 2 * alpha);
+        t.weight = (p + alpha) / (p + f + 2 * alpha);
     }
 }
 
