@@ -27,6 +27,16 @@ from .mine_blake3 import blake3_hash_8bytes, blake3_compress, IV, CHUNK_START, C
 
 # ── Biased byte distribution ─────────────────────────────────────────
 
+# Minimal elevated set: only bytes that appear in viable replicator cores
+# EXCLUDING offset bytes (F8 etc) — offset must arise from background
+# X-family: B5, 9D, E8, CA  Y-family: B7, 99, C8, 88
+# Shared: 00, 04, 90, 50
+CORE_ONLY_ELEVATED = [
+    0x00, 0x04, 0x50, 0x88, 0x90, 0x99, 0x9D,
+    0xB5, 0xB7, 0xC8, 0xCA, 0xE8,
+]
+
+# Broader set including safe inserts (for more diverse organisms)
 DEFAULT_ELEVATED = [
     0x00, 0x04, 0x08, 0x18, 0x1A, 0x3A, 0x48, 0x50,
     0x58, 0x5A, 0x78, 0x7A, 0x88, 0x90, 0x99, 0x9A,
@@ -265,12 +275,14 @@ def confirm_match(seed, cell_index, lookup_table, board_size, bias_weight):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Biased BLAKE3 mining with DFA')
-    parser.add_argument('--bias', type=int, default=64, help='biasWeight')
+    parser.add_argument('--bias', type=int, default=255, help='biasWeight')
     parser.add_argument('--board-size', type=int, default=64)
     parser.add_argument('--seeds', type=int, default=1000000)
-    parser.add_argument('--batch', type=int, default=32)
+    parser.add_argument('--batch', type=int, default=64)
     parser.add_argument('--start', type=int, default=0)
     parser.add_argument('--check-bytes', type=int, default=16)
+    parser.add_argument('--core-only', action='store_true',
+                        help='Use minimal elevated set (core bytes only)')
     args = parser.parse_args()
 
     B = args.board_size
@@ -278,7 +290,8 @@ if __name__ == '__main__':
     bias_weight = args.bias
 
     # Build lookup table
-    lookup = build_bias_table(bias_weight)
+    elevated = CORE_ONLY_ELEVATED if args.core_only else DEFAULT_ELEVATED
+    lookup = build_bias_table(bias_weight, elevated)
     dfa = DFA_TABLE
 
     print(f'Board: {B}×{B} = {n_cells} cells')
