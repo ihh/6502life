@@ -102,9 +102,16 @@ def bias_bytes(raw_bytes, lookup_table):
 
 # Safe single-byte inserts
 SAFE_1BYTE = frozenset([
-    0xEA, 0xC8, 0x88, 0xA8, 0x18, 0x58, 0x78, 0xB8,
-    0xD8, 0xF8, 0x48, 0x08, 0x9A,
+    0xEA,             # NOP
+    0x18, 0x58, 0x78, # CLC, CLI, SEI
+    0xB8, 0xD8, 0xF8, # CLV, CLD, SED
+    0x48, 0x08,       # PHA, PHP
+    # Undocumented single-byte NOPs
     0x1A, 0x3A, 0x5A, 0x7A, 0xDA, 0xFA,
+    # NOTE: Removed A8 (TAY), 9A (TXS), C8 (INY), 88 (DEY)
+    # TAY clobbers Y (breaks Y-indexed family)
+    # C8/88 are core opcodes, not safe inserts (would confuse DFA)
+    # TXS modifies stack pointer (risky)
 ])
 
 # Build DFA transition table as a JAX array for GPU execution.
@@ -173,8 +180,9 @@ def build_dfa_table():
     table[S_I2_Y, 0xC8] = S_INC  # INY
     table[S_I2_Y, 0x88] = S_INC  # DEY
 
-    # INC: 00 → ACCEPT (BRK), safe → I3, 90|50 → BRANCH
-    table[S_INC, 0x00] = S_ACCEPT
+    # INC: safe → I3, 90|50 → BRANCH
+    # BRK path disabled — BRK-reset not implemented in simulator yet
+    # table[S_INC, 0x00] = S_ACCEPT
     for b in SAFE_1BYTE:
         table[S_INC, b] = S_I3
     table[S_INC, 0x90] = S_BRANCH
