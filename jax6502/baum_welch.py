@@ -22,7 +22,8 @@ import jax, jax.numpy as jnp
 import jax.random as jr
 import optax
 
-sys.stdout = open(sys.stdout.fileno(), 'w', buffering=1)
+if __name__ != '__main__': pass
+else: sys.stdout = open(sys.stdout.fileno(), 'w', buffering=1)
 
 from jax6502.hmm import (
     default_params, hmm_log_prob, hmm_sample, HMMParams,

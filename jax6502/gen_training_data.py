@@ -16,7 +16,8 @@ import sys
 import os
 import numpy as np
 
-sys.stdout = open(sys.stdout.fileno(), 'w', buffering=1)
+if __name__ != '__main__': pass
+else: sys.stdout = open(sys.stdout.fileno(), 'w', buffering=1)
 
 # We need to be able to import jax6502 as a package
 from jax6502.train import simulate_candidate

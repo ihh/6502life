@@ -18,7 +18,8 @@ import numpy as np
 import time
 import sys
 
-sys.stdout = open(sys.stdout.fileno(), 'w', buffering=1)
+if __name__ != '__main__': pass
+else: sys.stdout = open(sys.stdout.fileno(), 'w', buffering=1)
 
 
 # ── BLAKE3 compression function in JAX ────────────────────────────────
