@@ -86,14 +86,19 @@ def build_bias_table(bias_weight, elevated_bytes=None):
 
 # ── BLAKE3 → 16 biased bytes ─────────────────────────────────────────
 
-def blake3_hash_16bytes(seed, cell_index):
-    """BLAKE3(seed || cell_index) → first 16 bytes (4 uint32 words)."""
+def blake3_hash_bytes(seed, cell_index, n_words=6):
+    """BLAKE3(seed || cell_index) → first n_words×4 bytes."""
     msg = jnp.zeros(16, dtype=jnp.uint32)
     msg = msg.at[0].set(seed)
     msg = msg.at[1].set(cell_index)
     flags = CHUNK_START | CHUNK_END | ROOT
     out = blake3_compress(msg, IV, jnp.uint32(0), jnp.uint32(8), flags)
-    return out[:4].view(jnp.uint8)  # 16 bytes
+    return out[:n_words].view(jnp.uint8)  # n_words × 4 bytes
+
+
+def blake3_hash_16bytes(seed, cell_index):
+    """Backward compat."""
+    return blake3_hash_bytes(seed, cell_index, 4)
 
 
 def bias_bytes(raw_bytes, lookup_table):
@@ -229,8 +234,8 @@ def run_dfa_on_cell(biased_bytes, dfa_table):
 # ── Fused pipeline: BLAKE3 → bias → DFA ──────────────────────────────
 
 def check_cell(seed, cell_index, lookup_table, dfa_table):
-    """Generate 16 biased bytes for one cell and run DFA."""
-    raw = blake3_hash_16bytes(seed, cell_index)
+    """Generate 24 biased bytes for one cell and run DFA."""
+    raw = blake3_hash_bytes(seed, cell_index, 6)  # 24 bytes
     biased = bias_bytes(raw, lookup_table)
     return run_dfa_on_cell(biased, dfa_table)
 
@@ -255,19 +260,57 @@ def scan_seeds_biased(seeds, lookup_table, dfa_table, board_size=64):
 
 # ── Simulation confirmation ───────────────────────────────────────────
 
+def verify_offset(program):
+    """Check if the branch offset in a DFA-matched program is correct.
+
+    Finds the LDA/LAX position and the branch opcode position, computes
+    the expected offset, and compares to the actual offset byte.
+    Returns True if the offset would loop back to the LDA/LAX.
+    """
+    prog = list(program)
+    # Find LDA (B5) or LAX (B7)
+    lda_pos = None
+    for i, b in enumerate(prog):
+        if b in (0xB5, 0xB7):
+            lda_pos = i
+            break
+    if lda_pos is None:
+        return False
+
+    # Find branch opcode (90 BCC or 50 BVC) after the core
+    branch_pos = None
+    for i in range(lda_pos + 6, len(prog)):
+        if prog[i] in (0x90, 0x50):
+            branch_pos = i
+            break
+    if branch_pos is None or branch_pos + 1 >= len(prog):
+        return False
+
+    # Expected offset: branch target = lda_pos
+    # offset = lda_pos - (branch_pos + 2)  (signed byte)
+    expected = (lda_pos - branch_pos - 2) & 0xFF
+    actual = prog[branch_pos + 1]
+    return expected == actual
+
+
 def confirm_match(seed, cell_index, lookup_table, board_size, bias_weight):
-    """Generate the biased cell bytes and simulate to confirm spread."""
+    """Generate the biased cell bytes, verify offset, optionally simulate."""
     # Regenerate the biased bytes for this cell
-    raw = np.array(blake3_hash_16bytes(jnp.uint32(seed), jnp.uint32(cell_index)))
+    raw = np.array(blake3_hash_bytes(jnp.uint32(seed), jnp.uint32(cell_index), 6))
     lookup_np = np.array(lookup_table)
     biased = lookup_np[(raw.astype(np.uint32) * 257).clip(0, 65535)]
 
-    # Extract the program (the DFA-matched prefix)
-    program = list(biased[:16])
+    # Extract the program
+    program = list(biased[:24])  # check up to 24 bytes
 
-    # Try to simulate
+    # Fast offset check before expensive simulation
+    if not verify_offset(program):
+        return {'spread': 0, 'viable': False, 'reason': 'bad_offset'}, program
+
+    # Offset correct — simulate to confirm spread
     from .train import simulate_candidate
     result = simulate_candidate(program, board_size=4)
+    result['reason'] = 'simulated'
     return result, program
 
 
@@ -280,7 +323,7 @@ if __name__ == '__main__':
     parser.add_argument('--seeds', type=int, default=1000000)
     parser.add_argument('--batch', type=int, default=64)
     parser.add_argument('--start', type=int, default=0)
-    parser.add_argument('--check-bytes', type=int, default=16)
+    parser.add_argument('--check-bytes', type=int, default=24)
     parser.add_argument('--core-only', action='store_true',
                         help='Use minimal elevated set (core bytes only)')
     args = parser.parse_args()
