@@ -64,6 +64,77 @@ rules (noise rate, BRK ops, scheduler mode, difficulty) *before* seeing
 the random initialization. This prevents cherry-picking params after
 finding a seed with a viable replicator.
 
+### Biased initialization (byte distribution)
+
+Board memory is initialized by sampling each byte from a biased
+distribution controlled by `biasWeight` and `biasBytes`:
+
+```
+N₁ = popcount(biasBytes)              // number of elevated bytes
+N₀ = 256 - N₁                         // number of background bytes
+p_elevated = biasWeight / (N₁ × biasWeight + N₀)
+p_background = 1 / (N₁ × biasWeight + N₀)
+```
+
+To sample one byte: generate a uniform random value r in [0, 1).
+If r < N₁ × p_elevated, pick uniformly from the elevated set;
+otherwise pick uniformly from the background set.
+
+At `biasWeight = 1` (default): all bytes equally likely (uniform).
+At higher values: elevated bytes appear more frequently, creating
+a "primordial soup" enriched in replicator-compatible opcodes.
+
+**Default biasBytes** (the known-safe set, 30 bytes elevated):
+
+```
+Byte  Why
+────  ─────────────────────────────────────
+0x00  BRK / address operand (appears 3× in core)
+0x04  STA page operand / undocumented NOP zpg
+0x08  PHP (safe stack push)
+0x18  CLC (safe flag op)
+0x1A  Undocumented NOP
+0x3A  Undocumented NOP
+0x48  PHA (safe stack push)
+0x50  BVC (core branch opcode)
+0x58  CLI (safe flag op)
+0x5A  Undocumented NOP
+0x78  SEI (safe flag op)
+0x7A  Undocumented NOP
+0x88  DEY (core opcode, Y-indexed family)
+0x90  BCC (core branch opcode)
+0x99  STA abs,Y (core opcode, Y-indexed family)
+0x9A  TXS (safe transfer)
+0x9D  STA abs,X (core opcode, X-indexed family)
+0xA0  LDY #imm prefix (safe 2-byte insert)
+0xA8  TAY (safe transfer)
+0xB5  LDA zpx (core opcode, X-indexed family)
+0xB7  LAX zpy (core opcode, Y-indexed family, undocumented)
+0xB8  CLV (safe flag op)
+0xC8  INY (core opcode, Y-indexed family)
+0xCA  DEX (core opcode, X-indexed family)
+0xD8  CLD (safe flag op)
+0xDA  Undocumented NOP
+0xE8  INX (core opcode, X-indexed family)
+0xEA  NOP
+0xF8  SED (safe flag op)
+0xFA  Undocumented NOP
+```
+
+Entropy per byte at various bias weights (with 30 elevated bytes):
+
+| biasWeight | p_elevated | p_background | H (bits/byte) | P(core) relative to uniform |
+|------------|-----------|-------------|----------------|---------------------------|
+| 1          | 1/256     | 1/256       | 8.00           | 1×                        |
+| 2          | 1/143     | 1/286       | 7.85           | ~8×                       |
+| 4          | 1/87      | 1/346       | 7.60           | ~64×                      |
+| 8          | 1/51      | 1/466       | 7.21           | ~1000×                    |
+| 16         | 1/30      | 1/706       | 6.67           | ~30000×                   |
+
+Each doubling of biasWeight roughly halves mining difficulty (shaves
+~1 bit off B_eff per core byte). The board creator chooses their
+world's fertility.
+
 ### Board parameters
 
 ```
@@ -73,6 +144,8 @@ boardParams {
     decayRate:      float   // Cosmic ray bit-flip rate (default 0)
     hasCompass:     bool    // Write orientation to $FA (default false)
     schedulerMode:  string  // 'random' | 'checkerboard' (default 'random')
+    biasWeight:     int     // Elevated/background byte ratio (default 1 = uniform)
+    biasBytes:      hex     // 32-byte bitmask: which bytes are elevated (default: see spec)
     brkOps: {               // BRK operand dispatch
         reset: { range: [0, 0],   enabled: bool }
         swap:  { range: [1, 48],  enabled: bool }
