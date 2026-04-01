@@ -200,19 +200,29 @@ def simulate_candidate(byte_seq, board_size=8, num_quanta=None, rng_key=None):
     storage_np = np.asarray(board.storage, dtype=np.uint8)
 
     def has_replicator_signature(cell_page):
-        """Check for LDA zpx → STA abs,X → page4 → INX|DEX subsequence."""
-        sig = [0xB5, 0x9D, 0x04]
-        pos = 0
-        for target in sig:
-            while pos < len(cell_page) and cell_page[pos] != target:
+        """Check for copy-loop subsequence: load → store_page4 → inc/dec.
+        Matches both X-indexed (B5/9D/E8/CA) and Y-indexed (B7/99/C8/88) families."""
+        # Try X-indexed: B5 (LDA zpx) → 9D (STA absx) → 04 (page) → E8|CA (INX|DEX)
+        # Try Y-indexed: B7 (LAX zpy) → 99 (STA absy) → 04 (page) → C8|88 (INY|DEY)
+        for load_op, store_op, inc_ops in [
+            (0xB5, 0x9D, (0xE8, 0xCA)),  # X-indexed family
+            (0xB7, 0x99, (0xC8, 0x88)),  # Y-indexed (LAX) family
+        ]:
+            sig = [load_op, store_op, 0x04]
+            pos = 0
+            ok = True
+            for target in sig:
+                while pos < len(cell_page) and cell_page[pos] != target:
+                    pos += 1
+                if pos >= len(cell_page):
+                    ok = False
+                    break
                 pos += 1
-            if pos >= len(cell_page):
-                return False
-            pos += 1
-        while pos < len(cell_page):
-            if cell_page[pos] in (0xE8, 0xCA):
-                return True
-            pos += 1
+            if ok:
+                while pos < len(cell_page):
+                    if cell_page[pos] in inc_ops:
+                        return True
+                    pos += 1
         return False
 
     distant_spread = 0
