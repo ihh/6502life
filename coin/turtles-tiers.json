@@ -1,0 +1,76 @@
+{
+  "name": "Turtle's Tiers",
+  "description": "Biased primordial soup for replicator mining. Tiered variant rarity with DEX > INX > INY > DEY. First organism in ~40 min on phone GPU, usually with at least one NOP insert.",
+  "version": 1,
+  "hash": "blake3",
+  "boardSize": 64,
+
+  "soupClasses": {
+    "zero":     { "bytes": ["00"],                                 "weight": 400, "note": "Address byte, appears 2× in core" },
+    "page4":    { "bytes": ["04"],                                 "weight": 100, "note": "STA high byte for standard variants" },
+    "xFamily":  { "bytes": ["B5", "9D"],                           "weight": 200, "note": "LDA zpx, STA absx" },
+    "yFamily":  { "bytes": ["B7", "99"],                           "weight":  63, "note": "LAX zpy, STA absy (10:1 rarity)" },
+    "dex":      { "bytes": ["CA"],                                 "weight": 200, "note": "DEX — most common variant" },
+    "inx":      { "bytes": ["E8"],                                 "weight":  40, "note": "INX (5:1 vs DEX)" },
+    "dey":      { "bytes": ["88"],                                 "weight":   7, "note": "DEY (30:1 vs DEX)" },
+    "iny":      { "bytes": ["C8"],                                 "weight":   2, "note": "INY (100:1 vs DEX)" },
+    "shifted":  { "bytes": ["03", "FF"],                           "weight":   5, "note": "Shifted variant addresses $03FF" },
+    "branches": { "bytes": ["10","30","50","70","90","B0","D0","F0"], "weight": 40, "note": "All 8 branch opcodes" },
+    "safe":     { "weight": 11, "note": "46 safe insert opcodes at this weight",
+      "bytes": [
+        "EA","1A","3A","5A","7A","DA","FA",
+        "08","48","58","78","9A","D8","F8",
+        "18","38","B8",
+        "A8","AA","BA",
+        "98","8A","68",
+        "80","82","89","C2","E2",
+        "44","64",
+        "14","34","54","74","D4","F4",
+        "A0","A2","A9",
+        "0C","1C","3C","5C","7C","DC","FC"
+      ]
+    },
+    "background": { "weight": 1, "note": "All other 190 bytes" }
+  },
+
+  "expectedVariantDistribution": {
+    "DEX": 0.82,
+    "INX": 0.16,
+    "DEY": 0.003,
+    "INY": 0.0008,
+    "INX3FF": 0.0005,
+    "INY3FF": 0.00001
+  },
+
+  "expectedDiscoveryTimeline": {
+    "firstOrganism": "40 min (phone GPU)",
+    "DEX": "48 min",
+    "INX": "4 hours",
+    "DEY": "9 days",
+    "INY": "34 days",
+    "INX3FF": "very rare",
+    "INY3FF": "legendary"
+  },
+
+  "insertDistribution": {
+    "S": 0.126,
+    "modalK": 1,
+    "meanK": 1.0,
+    "meanOrganismLength": 9.0,
+    "P_k0": 0.17,
+    "P_k1": 0.34,
+    "P_k2": 0.40
+  },
+
+  "closedFormParameters": {
+    "n_c": 20,
+    "n_s": 46,
+    "n_u": 190,
+    "rho_phone_gpu": 750000,
+    "rho_rtx3070ti": 4500000,
+    "V": 6,
+    "T_formula": "R^7 · W / (ρ · 24 · bracket · w_b)",
+    "Ek_formula": "7·S / (1-S)",
+    "H_formula": "lg(W) - Σ n_c·w_c·lg(w_c) / W"
+  }
+}
