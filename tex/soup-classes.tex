@@ -40,6 +40,7 @@
 \newcommand{\punsafe}{p_{\mathrm{unsafe}}}
 \newcommand{\pcore}{p_{\mathrm{core}}}
 \newcommand{\pins}{p_{\mathrm{ins}}}
+\newcommand{\pmin}{p_{\min}}
 
 \newtheorem{definition}{Definition}
 \newtheorem{proposition}{Proposition}
@@ -139,8 +140,22 @@ The 8 branch opcodes are:
 \hex{10} (BPL), \hex{30} (BMI), \hex{50} (BVC), \hex{70} (BVS),
 \hex{90} (BCC), \hex{B0} (BCS), \hex{D0} (BNE), \hex{F0} (BEQ).
 Every variant requires exactly one branch opcode plus an offset byte.
-The offset byte is \emph{always} drawn from the full unbiased
-distribution (probability $1/256$).
+The offset byte has a specific value determined by the loop length
+(e.g.\ \hex{F8} for an 8-byte loop, \hex{F7} for 9~bytes, etc.).
+This value is almost certainly not in any elevated soup class, so
+its probability equals the \emph{minimum} byte probability in the
+distribution:
+\[
+  \pmin \;=\; \frac{w_{\mathrm{unsafe}}}{W}
+  \;=\; \frac{1}{W},
+\]
+where $W = \sum_c |C_c|\,w_c$ is the total weight (assuming
+$w_{\mathrm{unsafe}}=1$ as the baseline).
+This acts as a natural floor: no byte can have probability zero,
+because the offset must have nonzero probability.  Concentrating
+the soup on core bytes increases $W$, which \emph{decreases}
+$\pmin$ and makes mining harder---a self-regulating mechanism.
+\label{sec:offset}
 
 \subsection{Safe insert bytes}
 \label{sec:safe}
@@ -311,10 +326,13 @@ Concretely:
 \subsection{Bare core probability}
 
 The 8-byte replicator pattern consists of 6~core bytes, 1~branch
-opcode, and 1~offset byte.  The offset byte is \emph{always}
-unbiased at $1/256$ (a design constraint: the offset must match
-the loop length, which is determined by the byte sequence, so it
-cannot be independently biased).
+opcode, and 1~offset byte.  The offset byte value is determined by
+the loop length and is almost certainly not in any elevated class,
+so its probability is $\pmin = 1/W$ where
+$W = \sum_c |C_c|\,w_c$ is the total weight (Section~\ref{sec:offset}).
+This creates a self-regulating floor: concentrating the soup raises
+$W$ and lowers $\pmin$, increasing the difficulty of finding a
+matching offset.
 
 For each variant, the probability of the bare core (no inserts)
 at a specific position, with a specific branch opcode, is the
@@ -331,7 +349,7 @@ P(\text{DEX bare}) &=
   \underbrace{p(\hex{04})}_{\ppagefour} \cdot
   \underbrace{p(\hex{CA})}_{\pincx/2} \cdot
   \underbrace{p(\text{br})}_{\pbranch/8} \cdot
-  \underbrace{\tfrac{1}{256}}_{\text{offset}}
+  \underbrace{\pmin}_{\text{offset}}
   \nonumber \\
   &= \frac{\px^2 \cdot \pshared^2 \cdot \ppagefour \cdot \pincx
            \cdot \pbranch}{2^4 \cdot 256}. \label{eq:pdex}
@@ -376,12 +394,12 @@ Including the other factors with their $1/2$ denominators:
 P(\text{INX3FF bare}) &=
   p(\hex{B5}) \cdot p(\hex{00}) \cdot p(\hex{E8}) \cdot
   p(\hex{9D}) \cdot p(\hex{FF}) \cdot p(\hex{03}) \cdot
-  p(\text{br}) \cdot \tfrac{1}{256}
+  p(\text{br}) \cdot \pmin
   \nonumber \\
   &= \frac{\px}{2} \cdot \pshared \cdot \frac{\pincx}{2} \cdot
      \frac{\px}{2} \cdot \frac{\ppagethree}{2} \cdot
      \frac{\ppagethree}{2} \cdot \frac{\pbranch}{8} \cdot
-     \frac{1}{256}
+     \pmin
   \nonumber \\
   &= \frac{\px^2 \cdot \pshared \cdot \pincx \cdot
            \ppagethree^2 \cdot \pbranch}{2^6 \cdot 256}.
@@ -436,7 +454,7 @@ So summing over both variants, 3 rotations, and 8 branches:
 \begin{equation}
 P_{\text{std},x} = 3 \cdot
   \frac{\px^2}{4} \cdot \pshared^2 \cdot \ppagefour \cdot
-  \pincx \cdot \pbranch \cdot \frac{1}{256}.
+  \pincx \cdot \pbranch \cdot \pmin.
   \label{eq:pstdx}
 \end{equation}
 
@@ -450,7 +468,7 @@ Summing over 3 rotations and 8 branches:
 \begin{equation}
 P_{\text{shift},x} = 3 \cdot
   \frac{\px^2 \cdot \pincx \cdot \ppagethree^2}{2^5} \cdot
-  \pshared \cdot \pbranch \cdot \frac{1}{256}.
+  \pshared \cdot \pbranch \cdot \pmin.
   \label{eq:pshiftx}
 \end{equation}
 
@@ -832,10 +850,13 @@ The soup class framework reveals several insights:
   (1-\psafe-\punsafe)^{-7}$).
 
 \item \textbf{The offset byte tax.}
-  The fixed $1/256$ probability for the offset byte means that one of
-  the 8 pattern bytes is always ``unbiased,'' contributing a flat
-  factor of $1/256$ regardless of the soup distribution.  This sets
-  a floor on the effective information content of any replicator.
+  The offset byte has probability $\pmin = 1/W$, the minimum
+  across the entire distribution.  As core and insert weights increase,
+  $W$ grows and $\pmin$ shrinks.  This creates a self-regulating
+  mechanism: concentrating the soup \emph{lowers} the offset
+  probability, counteracting the benefit of enriching core bytes.
+  The net effect is that the offset contributes a factor of $\pmin$
+  to the mining difficulty that cannot be independently optimized.
 
 \item \textbf{Symmetry breaking is wasteful.}
   The optimal allocation has $\px = \py$ and $\pincx = \pincy$.
