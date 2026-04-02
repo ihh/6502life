@@ -148,6 +148,48 @@ def scan_cell(cell):
         instrs.append((pc, op, il))
         pc += il
 
+    # Safe insert opcodes (1-byte): harmless regardless of variant
+    ALWAYS_SAFE_1B = {0xEA, 0x1A, 0x3A, 0x5A, 0x7A, 0xDA, 0xFA,  # NOPs
+                      0x08, 0x48, 0x58, 0x78, 0x9A, 0xD8, 0xF8}  # PHA PHP CLI SEI TXS CLD SED
+    # Safe for X-family only (can clobber Y)
+    SAFE_X_EXTRA = {0xA8, 0xC8, 0x88}  # TAY, INY, DEY
+    # Safe for Y-family only (can clobber X)
+    SAFE_Y_EXTRA = {0xAA, 0xBA, 0xE8, 0xCA}  # TAX, TSX, INX, DEX
+    # Conditionally safe (kills specific branch types)
+    SAFE_NO_BCS = {0x18}  # CLC — kills BCS
+    SAFE_NO_BCC = {0x38}  # SEC — kills BCC
+    SAFE_NO_BVS = {0xB8}  # CLV — kills BVS
+    # 2-byte safe prefixes (consume next byte harmlessly)
+    SAFE_2B_PREFIX = {0x80, 0x82, 0x89, 0xC2, 0xE2,  # undoc imm NOPs
+                      0x04, 0x44, 0x64,              # undoc zpg NOPs
+                      0x14, 0x34, 0x54, 0x74, 0xD4, 0xF4,  # undoc zpx NOPs
+                      0xA0}  # LDY# (safe for X, clobbers Y)
+    SAFE_2B_Y_ONLY = {0xA2}  # LDX# (clobbers X, safe for Y)
+    # 3-byte safe prefixes
+    SAFE_3B_PREFIX = {0x0C, 0x1C, 0x3C, 0x5C, 0x7C, 0xDC, 0xFC}
+
+    def is_insert_safe(op, il, family, branch_op):
+        """Check if a non-core opcode is safe as an insert."""
+        if op in ALWAYS_SAFE_1B:
+            return True
+        if family == 'X' and op in SAFE_X_EXTRA:
+            return True
+        if family == 'Y' and op in SAFE_Y_EXTRA:
+            return True
+        if op in SAFE_NO_BCS and branch_op != 0xB0:
+            return True
+        if op in SAFE_NO_BCC and branch_op != 0x90:
+            return True
+        if op in SAFE_NO_BVS and branch_op != 0x70:
+            return True
+        if il == 2 and op in SAFE_2B_PREFIX:
+            return True
+        if il == 2 and op in SAFE_2B_Y_ONLY and family == 'Y':
+            return True
+        if il == 3 and op in SAFE_3B_PREFIX:
+            return True
+        return False
+
     # At each backward branch, analyze the loop
     for idx, (pos, op, il) in enumerate(instrs):
         if op not in BRANCH_SET:
@@ -168,6 +210,8 @@ def scan_cell(cell):
             (0xB5, 0x9D, {0xE8, 0xCA}, 'X'),
             (0xB7, 0x99, {0xC8, 0x88}, 'Y'),
         ]:
+            core_ops = {lda_op, sta_op} | inc_ops
+
             # Find components (any order = any rotation)
             lda_positions = []
             sta_positions = []
@@ -175,52 +219,58 @@ def scan_cell(cell):
 
             for p, o, il2 in loop_body:
                 if o == lda_op and il2 == 2 and p + 1 < L:
-                    lda_positions.append((p, cell[p + 1]))  # (pos, operand)
+                    lda_positions.append((p, cell[p + 1]))
                 elif o == sta_op and il2 == 3 and p + 2 < L:
-                    sta_positions.append((p, cell[p + 1], cell[p + 2]))  # (pos, lo, hi)
+                    sta_positions.append((p, cell[p + 1], cell[p + 2]))
                 elif o in inc_ops:
                     inc_positions.append((p, o))
 
-            # Try all combinations of LDA × STA × INC
             for lda_pos, lda_addr in lda_positions:
                 for sta_pos, sta_lo, sta_hi in sta_positions:
                     for inc_pos, inc_op in inc_positions:
-                        # Standard variant: LDA $00,X + STA $0400,X
+                        # Check addresses
+                        addr_ok = False
+                        shifted = False
                         if lda_addr == 0x00 and sta_lo == 0x00 and sta_hi == 0x04:
-                            # Check branch offset targets loop start
-                            loop_start = target
-                            earliest = min(lda_pos, sta_pos, inc_pos)
-                            if loop_start <= earliest:
-                                inc_name = {0xE8:'INX',0xCA:'DEX',0xC8:'INY',0x88:'DEY'}[inc_op]
-                                branch_name = {0x10:'BPL',0x30:'BMI',0x50:'BVC',0x70:'BVS',
-                                               0x90:'BCC',0xB0:'BCS',0xD0:'BNE',0xF0:'BEQ'}[op]
-                                prog = list(cell[target:pos + 2])
-                                return {
-                                    'variant': f'{family}-{inc_name}',
-                                    'branch': branch_name,
-                                    'program': prog,
-                                    'length': len(prog),
-                                    'pos': target,
-                                    'family': family,
-                                }
+                            addr_ok = True
+                        elif lda_addr == 0x00 and sta_lo == 0xFF and sta_hi == 0x03:
+                            addr_ok = True
+                            shifted = True
+                        if not addr_ok:
+                            continue
 
-                        # Shifted variant: LDA $00,X + STA $03FF,X
-                        if lda_addr == 0x00 and sta_lo == 0xFF and sta_hi == 0x03:
-                            loop_start = target
-                            earliest = min(lda_pos, sta_pos, inc_pos)
-                            if loop_start <= earliest:
-                                inc_name = {0xE8:'INX',0xCA:'DEX',0xC8:'INY',0x88:'DEY'}[inc_op]
-                                branch_name = {0x10:'BPL',0x30:'BMI',0x50:'BVC',0x70:'BVS',
-                                               0x90:'BCC',0xB0:'BCS',0xD0:'BNE',0xF0:'BEQ'}[op]
-                                prog = list(cell[target:pos + 2])
-                                return {
-                                    'variant': f'{family}-{inc_name}-3FF',
-                                    'branch': branch_name,
-                                    'program': prog,
-                                    'length': len(prog),
-                                    'pos': target,
-                                    'family': family,
-                                }
+                        loop_start = target
+                        earliest = min(lda_pos, sta_pos, inc_pos)
+                        if loop_start > earliest:
+                            continue
+
+                        # Check all non-core instructions in the loop are safe
+                        core_positions = {lda_pos, sta_pos, inc_pos}
+                        all_safe = True
+                        for p2, o2, il2 in loop_body:
+                            if p2 in core_positions or p2 == pos:
+                                continue  # core opcode or the branch itself
+                            if o2 in core_ops:
+                                continue  # duplicate core byte (ok)
+                            if not is_insert_safe(o2, il2, family, op):
+                                all_safe = False
+                                break
+                        if not all_safe:
+                            continue
+
+                        inc_name = {0xE8:'INX',0xCA:'DEX',0xC8:'INY',0x88:'DEY'}[inc_op]
+                        branch_name = {0x10:'BPL',0x30:'BMI',0x50:'BVC',0x70:'BVS',
+                                       0x90:'BCC',0xB0:'BCS',0xD0:'BNE',0xF0:'BEQ'}[op]
+                        prog = list(cell[target:pos + 2])
+                        suffix = '-3FF' if shifted else ''
+                        return {
+                            'variant': f'{family}-{inc_name}{suffix}',
+                            'branch': branch_name,
+                            'program': prog,
+                            'length': len(prog),
+                            'pos': target,
+                            'family': family,
+                        }
 
     return None
 
