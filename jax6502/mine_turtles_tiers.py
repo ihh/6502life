@@ -244,15 +244,48 @@ def scan_cell(cell):
                         if loop_start > earliest:
                             continue
 
-                        # Check all non-core instructions in the loop are safe
+                        # Check insert safety with rotation-aware A-clobber check.
+                        # In the cyclic loop, A must survive from LDA to STA.
+                        # Between STA and LDA (the other arc), A can be clobbered.
+                        # Also: nothing should clobber the index register (X or Y).
+                        CLOBBERS_A = {0x98, 0x8A, 0x68, 0xA9,  # TYA TXA PLA LDA#
+                                      0xB5, 0xB7,              # LDA zpx, LAX zpy (re-loads)
+                                      0x69, 0xE9, 0x29, 0x09, 0x49}  # ADC SBC AND ORA EOR
+                        CLOBBERS_X = {0xAA, 0xBA, 0xA2, 0xCA, 0xE8}  # TAX TSX LDX# DEX INX
+                        CLOBBERS_Y = {0xA8, 0xA0, 0xC8, 0x88}  # TAY LDY# INY DEY
+
+                        # Determine which positions are "between LDA and STA" cyclically
+                        # In the loop body sorted by position, the cyclic order is:
+                        # [...lda...sta...] or [...sta...lda...] depending on rotation
+                        loop_positions = sorted(p2 for p2, _, _ in loop_body)
+
+                        def is_between_cyclic(test_pos, start, end, positions):
+                            """Is test_pos between start and end going forward cyclically?"""
+                            if start <= end:
+                                return start < test_pos < end
+                            else:  # wraps around
+                                return test_pos > start or test_pos < end
+
                         core_positions = {lda_pos, sta_pos, inc_pos}
                         all_safe = True
                         for p2, o2, il2 in loop_body:
                             if p2 in core_positions or p2 == pos:
-                                continue  # core opcode or the branch itself
-                            if o2 in core_ops:
-                                continue  # duplicate core byte (ok)
+                                continue
                             if not is_insert_safe(o2, il2, family, op):
+                                all_safe = False
+                                break
+                            # Check A-clobber: fatal only between LDA→STA (the arc where A carries data)
+                            # The matched LDA itself is excluded (it's in core_positions)
+                            # But OTHER LDA/LAX instructions between our LDA and STA kill the value
+                            if o2 in CLOBBERS_A:
+                                if is_between_cyclic(p2, lda_pos, sta_pos, loop_positions):
+                                    all_safe = False
+                                    break
+                            # Check index register clobber (always fatal)
+                            if family == 'X' and o2 in CLOBBERS_X and o2 not in inc_ops:
+                                all_safe = False
+                                break
+                            if family == 'Y' and o2 in CLOBBERS_Y and o2 not in inc_ops:
                                 all_safe = False
                                 break
                         if not all_safe:
