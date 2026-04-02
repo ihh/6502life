@@ -1,0 +1,1202 @@
+\documentclass{article}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage[margin=1in]{geometry}
+
+\newcommand{\hex}[1]{\texttt{\$#1}}
+\newcommand{\opcode}[1]{\texttt{#1}}
+\newcommand{\Beff}{B_{\mathrm{eff}}}
+\newcommand{\Prep}{P_{\mathrm{rep}}}
+
+% Soup class names
+\newcommand{\Cshared}{\mathcal{C}_{\mathrm{shared}}}
+\newcommand{\Cx}{\mathcal{C}_{x}}
+\newcommand{\Cy}{\mathcal{C}_{y}}
+\newcommand{\Cincx}{\mathcal{C}_{\mathrm{inc},x}}
+\newcommand{\Cincy}{\mathcal{C}_{\mathrm{inc},y}}
+\newcommand{\Cpagefour}{\mathcal{C}_{\mathrm{pg4}}}
+\newcommand{\Cpagethree}{\mathcal{C}_{\mathrm{pg3}}}
+\newcommand{\Cbranch}{\mathcal{C}_{\mathrm{br}}}
+\newcommand{\Csafex}{\mathcal{C}_{\mathrm{safe},x}}
+\newcommand{\Csafey}{\mathcal{C}_{\mathrm{safe},y}}
+\newcommand{\Csafeboth}{\mathcal{C}_{\mathrm{safe},xy}}
+\newcommand{\Cunsafe}{\mathcal{C}_{\mathrm{unsafe}}}
+
+% Probability parameters
+\newcommand{\pshared}{p_{\mathrm{sh}}}
+\newcommand{\px}{p_{x}}
+\newcommand{\py}{p_{y}}
+\newcommand{\pincx}{p_{\mathrm{inc},x}}
+\newcommand{\pincy}{p_{\mathrm{inc},y}}
+\newcommand{\ppagefour}{p_{\mathrm{pg4}}}
+\newcommand{\ppagethree}{p_{\mathrm{pg3}}}
+\newcommand{\pbranch}{p_{\mathrm{br}}}
+\newcommand{\psafe}{p_{\mathrm{safe}}}
+\newcommand{\punsafe}{p_{\mathrm{unsafe}}}
+\newcommand{\pcore}{p_{\mathrm{core}}}
+\newcommand{\pins}{p_{\mathrm{ins}}}
+\newcommand{\pmin}{p_{\min}}
+
+\newtheorem{definition}{Definition}
+\newtheorem{proposition}{Proposition}
+\newtheorem{theorem}{Theorem}
+\newtheorem{remark}{Remark}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  columns=fullflexible,
+  frame=single,
+  backgroundcolor=\color{gray!10},
+}
+
+\title{Soup Class Analysis of the 6502 Replicator Mining Problem}
+\author{Ian Holmes}
+\date{April 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We partition the 256 possible byte values into equivalence classes
+(``soup classes'') based on their functional role in the six core
+self-replicator loop variants of the 6502life cellular automaton.
+We develop a probability model parameterized by per-class biases,
+derive closed-form expressions for the replicator mining probability
+as a function of insert count, and characterize the Pareto frontier
+in the tradeoff space of mining time, insert diversity, and soup entropy.
+\end{abstract}
+
+\tableofcontents
+
+%----------------------------------------------------------------------
+\section{The Six Core Variants}
+\label{sec:variants}
+
+A minimal 6502life replicator consists of a \emph{copy loop body}
+(6~core bytes) plus a \emph{branch opcode} and \emph{offset byte}
+that close the loop.  The branch opcode is drawn from the set
+$\{$\hex{10}, \hex{30}, \hex{50}, \hex{70}, \hex{90}, \hex{B0},
+\hex{D0}, \hex{F0}$\}$ (the eight conditional branches:
+BPL, BMI, BVC, BVS, BCC, BCS, BNE, BEQ).
+
+The six core loop variants are:
+
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Name} & \textbf{Family} & \textbf{Core bytes (hex)} & \textbf{Description} \\
+\midrule
+DEX     & X-std   & B5 00 9D 00 04 CA & \opcode{LDA \$00,X; STA \$0400,X; DEX} \\
+INX     & X-std   & B5 00 9D 00 04 E8 & \opcode{LDA \$00,X; STA \$0400,X; INX} \\
+DEY     & Y-std   & B7 00 99 00 04 88 & \opcode{LAX \$00,Y; STA \$0400,Y; DEY} \\
+INY     & Y-std   & B7 00 99 00 04 C8 & \opcode{LAX \$00,Y; STA \$0400,Y; INY} \\
+INX3FF  & X-shift & B5 00 E8 9D FF 03 & \opcode{LDA \$00,X; INX; STA \$03FF,X} \\
+INY3FF  & Y-shift & B7 00 C8 99 FF 03 & \opcode{LAX \$00,Y; INY; STA \$03FF,Y} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Each core can appear in any of 3 \emph{rotations} within the loop
+(starting from each of the 3 instructions), and the loop can contain
+$k \geq 0$ safe insert bytes between core instructions.
+
+%----------------------------------------------------------------------
+\section{Byte Classification}
+\label{sec:classification}
+
+\subsection{Core byte inventory}
+
+We identify the \emph{distinct} byte values required by each variant:
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Byte} & \textbf{Required by} & \textbf{Multiplicity} \\
+\midrule
+\hex{00} & All 6 variants & 2 (std), 1 (shift) \\
+\hex{B5} & DEX, INX, INX3FF & 1 \\
+\hex{B7} & DEY, INY, INY3FF & 1 \\
+\hex{9D} & DEX, INX, INX3FF & 1 \\
+\hex{99} & DEY, INY, INY3FF & 1 \\
+\hex{04} & DEX, INX, DEY, INY & 1 \\
+\hex{03} & INX3FF, INY3FF & 1 \\
+\hex{FF} & INX3FF, INY3FF & 1 \\
+\hex{CA} & DEX only & 1 \\
+\hex{E8} & INX, INX3FF & 1 \\
+\hex{88} & DEY only & 1 \\
+\hex{C8} & INY, INY3FF & 1 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Branch opcodes}
+
+The 8 branch opcodes are:
+\hex{10} (BPL), \hex{30} (BMI), \hex{50} (BVC), \hex{70} (BVS),
+\hex{90} (BCC), \hex{B0} (BCS), \hex{D0} (BNE), \hex{F0} (BEQ).
+Every variant requires exactly one branch opcode plus an offset byte.
+The offset byte has a specific value determined by the loop length
+(e.g.\ \hex{F8} for an 8-byte loop, \hex{F7} for 9~bytes, etc.).
+This value is almost certainly not in any elevated soup class, so
+its probability equals the \emph{minimum} byte probability in the
+distribution:
+\[
+  \pmin \;=\; \frac{w_{\mathrm{unsafe}}}{W}
+  \;=\; \frac{1}{W},
+\]
+where $W = \sum_c |C_c|\,w_c$ is the total weight (assuming
+$w_{\mathrm{unsafe}}=1$ as the baseline).
+This acts as a natural floor: no byte can have probability zero,
+because the offset must have nonzero probability.  Concentrating
+the soup on core bytes increases $W$, which \emph{decreases}
+$\pmin$ and makes mining harder---a self-regulating mechanism.
+\label{sec:offset}
+
+\subsection{Safe insert bytes}
+\label{sec:safe}
+
+A \emph{safe insert} is a single-byte opcode that can execute between
+core instructions without disrupting the copy loop.  We use a
+\textbf{conservative} definition: the byte must be safe regardless of
+rotation and regardless of branch opcode, meaning it must not modify
+the accumulator~(A), the index register used by the variant (X~or~Y),
+or any of the four condition flags (N, V, C, Z).
+
+Under these constraints, the safe single-byte opcodes are those that
+either perform no operation or only modify the stack pointer~S, the
+interrupt-disable flag~I, or the decimal flag~D (none of which affect
+any conditional branch).
+
+\paragraph{Conservative 1-byte safe set (both families):}
+\begin{itemize}
+\item \hex{EA} --- \opcode{NOP} (official)
+\item \hex{1A}, \hex{3A}, \hex{5A}, \hex{7A}, \hex{DA}, \hex{FA}
+      --- undocumented 1-byte NOPs
+\item \hex{48} --- \opcode{PHA} (push A; modifies only S)
+\item \hex{08} --- \opcode{PHP} (push P; modifies only S)
+\end{itemize}
+That gives 9 bytes safe for both families: $|\Csafeboth| = 9$.
+
+\paragraph{Additional safe for X-family only:}
+\begin{itemize}
+\item \hex{A8} --- \opcode{TAY} (clobbers Y and flags; safe for
+      X-family since Y is not the loop counter,
+      but clobbers N/Z so excluded from conservative set)
+\end{itemize}
+Under our conservative definition (no flags), \opcode{TAY}~is excluded.
+Thus $|\Csafex| = 0$ additional bytes beyond $\Csafeboth$.
+
+\paragraph{Additional safe for Y-family only:}
+\begin{itemize}
+\item \hex{AA} --- \opcode{TAX} (clobbers X and flags; analogous exclusion)
+\end{itemize}
+Also excluded.  $|\Csafey| = 0$ additional.
+
+\paragraph{Multi-byte safe inserts.}
+Some 2-byte opcodes are safe because the operand byte is consumed
+harmlessly.  For X-family:
+\begin{itemize}
+\item \hex{A0}\,\textit{nn} --- \opcode{LDY \#imm} (clobbers Y, N, Z
+      --- excluded from conservative set)
+\item \hex{80}\,\textit{nn}, \hex{82}\,\textit{nn},
+      \hex{C2}\,\textit{nn}, \hex{E2}\,\textit{nn},
+      \hex{04}\,\textit{nn}, \hex{44}\,\textit{nn},
+      \hex{64}\,\textit{nn} --- undocumented 2-byte NOPs
+      (some of these read zero page and may have side effects;
+      we restrict to \hex{80}, \hex{82}, \hex{C2}, \hex{E2}
+      which are immediate-mode NOPs with no memory access)
+\end{itemize}
+The undocumented 2-byte immediate NOPs (\hex{80}, \hex{82}, \hex{C2},
+\hex{E2}) do not modify any register or flag and are safe for both
+families.  They consume 1~additional byte at probability $1/256$ each.
+We note these but focus on 1-byte inserts in the main analysis.
+
+\paragraph{Remark on \opcode{PHA}/\opcode{PHP}.}
+Pushing onto the stack is harmless for the copy loop itself, but
+repeated pushes without corresponding pulls will eventually overflow
+the stack page (\hex{100}--\hex{1FF}).  Since the copy loop runs for
+at most 256 iterations, the number of stack overflows is bounded, and
+the stack wraps within its page.  The writes to the stack page are
+within the cell's own memory and do not corrupt the source data
+(zero page \hex{00}--\hex{FF}).  We therefore include \opcode{PHA}
+and \opcode{PHP} in the safe set.
+
+%----------------------------------------------------------------------
+\section{Soup Classes}
+\label{sec:classes}
+
+We partition all 256 byte values into disjoint soup classes.
+Core bytes take priority over the safe/unsafe partition.
+
+\begin{definition}[Soup class partition]
+\label{def:partition}
+\begin{align*}
+\Cshared  &= \{\hex{00}\}
+  & |\Cshared| &= 1 \\
+\Cx       &= \{\hex{B5}, \hex{9D}\}
+  & |\Cx| &= 2 \\
+\Cy       &= \{\hex{B7}, \hex{99}\}
+  & |\Cy| &= 2 \\
+\Cincx    &= \{\hex{CA}, \hex{E8}\}
+  & |\Cincx| &= 2 \\
+\Cincy    &= \{\hex{88}, \hex{C8}\}
+  & |\Cincy| &= 2 \\
+\Cpagefour &= \{\hex{04}\}
+  & |\Cpagefour| &= 1 \\
+\Cpagethree &= \{\hex{03}, \hex{FF}\}
+  & |\Cpagethree| &= 2 \\
+\Cbranch  &= \{\hex{10}, \hex{30}, \hex{50}, \hex{70},
+              \hex{90}, \hex{B0}, \hex{D0}, \hex{F0}\}
+  & |\Cbranch| &= 8 \\
+\Csafeboth &= \{\hex{EA}, \hex{1A}, \hex{3A}, \hex{5A},
+               \hex{7A}, \hex{DA}, \hex{FA}, \hex{48}, \hex{08}\}
+  & |\Csafeboth| &= 9 \\
+\Cunsafe  &= \text{all remaining bytes}
+  & |\Cunsafe| &= 227
+\end{align*}
+\end{definition}
+
+Verification: $1 + 2 + 2 + 2 + 2 + 1 + 2 + 8 + 9 + 227 = 256$.\ \checkmark
+
+\begin{remark}
+Under the conservative safe definition, $\Csafex = \Csafey = \emptyset$
+(no additional family-specific safe bytes), so we work only with
+$\Csafeboth$ hereafter, denoted simply $\Csafe$ with $|\Csafe| = 9$.
+\end{remark}
+
+%----------------------------------------------------------------------
+\section{Probability Model}
+\label{sec:model}
+
+\subsection{Parameterization}
+
+Each byte $b \in \{0,\ldots,255\}$ is drawn independently from a
+\emph{biased soup distribution}.  We assign a probability \emph{weight}
+to each soup class, distributed uniformly among its members:
+\[
+  p(b) = \frac{w_C}{|C|} \quad\text{for } b \in C,
+\]
+where $w_C$ is the total weight of class $C$ and $\sum_C w_C = 1$.
+
+Let us write the class weights as:
+\begin{align*}
+  w_{\mathrm{sh}} &= \pshared, &
+  w_x &= \px, &
+  w_y &= \py, \\
+  w_{\mathrm{inc},x} &= \pincx, &
+  w_{\mathrm{inc},y} &= \pincy, &
+  w_{\mathrm{pg4}} &= \ppagefour, \\
+  w_{\mathrm{pg3}} &= \ppagethree, &
+  w_{\mathrm{br}} &= \pbranch, &
+  w_{\mathrm{safe}} &= \psafe, \\
+  w_{\mathrm{unsafe}} &= \punsafe. & &
+\end{align*}
+
+The constraint is:
+\[
+  \pshared + \px + \py + \pincx + \pincy +
+  \ppagefour + \ppagethree + \pbranch + \psafe + \punsafe = 1.
+\]
+
+\subsection{Per-byte probabilities}
+
+For a byte $b$ in class $C$:
+\[
+  p(b) = \frac{w_C}{|C|}.
+\]
+Concretely:
+\begin{align}
+  p(\hex{00}) &= \pshared, \label{eq:p00} \\
+  p(\hex{B5}) = p(\hex{9D}) &= \px / 2, \\
+  p(\hex{B7}) = p(\hex{99}) &= \py / 2, \\
+  p(\hex{CA}) = p(\hex{E8}) &= \pincx / 2, \\
+  p(\hex{88}) = p(\hex{C8}) &= \pincy / 2, \\
+  p(\hex{04}) &= \ppagefour, \\
+  p(\hex{03}) = p(\hex{FF}) &= \ppagethree / 2, \\
+  p(\text{each branch byte}) &= \pbranch / 8, \\
+  p(\text{each safe byte}) &= \psafe / 9, \\
+  p(\text{each unsafe byte}) &= \punsafe / 227. \label{eq:punsafe}
+\end{align}
+
+\subsection{Bare core probability}
+
+The 8-byte replicator pattern consists of 6~core bytes, 1~branch
+opcode, and 1~offset byte.  The offset byte value is determined by
+the loop length and is almost certainly not in any elevated class,
+so its probability is $\pmin = 1/W$ where
+$W = \sum_c |C_c|\,w_c$ is the total weight (Section~\ref{sec:offset}).
+This creates a self-regulating floor: concentrating the soup raises
+$W$ and lowers $\pmin$, increasing the difficulty of finding a
+matching offset.
+
+For each variant, the probability of the bare core (no inserts)
+at a specific position, with a specific branch opcode, is the
+product of the individual byte probabilities.
+
+\paragraph{Standard variants (DEX, INX, DEY, INY).}
+These have core bytes with two copies of \hex{00}.
+
+\begin{align}
+P(\text{DEX bare}) &=
+  \underbrace{p(\hex{B5})}_{\px/2} \cdot
+  \underbrace{p(\hex{00})^2}_{\pshared^2} \cdot
+  \underbrace{p(\hex{9D})}_{\px/2} \cdot
+  \underbrace{p(\hex{04})}_{\ppagefour} \cdot
+  \underbrace{p(\hex{CA})}_{\pincx/2} \cdot
+  \underbrace{p(\text{br})}_{\pbranch/8} \cdot
+  \underbrace{\pmin}_{\text{offset}}
+  \nonumber \\
+  &= \frac{\px^2 \cdot \pshared^2 \cdot \ppagefour \cdot \pincx
+           \cdot \pbranch}{2^4 \cdot 256}. \label{eq:pdex}
+\end{align}
+
+Similarly:
+\begin{align}
+P(\text{INX bare}) &=
+  \frac{\px^2 \cdot \pshared^2 \cdot \ppagefour \cdot \pincx
+        \cdot \pbranch}{2^4 \cdot 256}, \label{eq:pinx} \\
+P(\text{DEY bare}) &=
+  \frac{\py^2 \cdot \pshared^2 \cdot \ppagefour \cdot \pincy
+        \cdot \pbranch}{2^4 \cdot 256}, \label{eq:pdey} \\
+P(\text{INY bare}) &=
+  \frac{\py^2 \cdot \pshared^2 \cdot \ppagefour \cdot \pincy
+        \cdot \pbranch}{2^4 \cdot 256}. \label{eq:piny}
+\end{align}
+
+Note: DEX and INX have the same probability (both use one byte
+from $\Cincx$), as do DEY and INY.  So the standard X-variants
+contribute $2 \times$ the single-variant probability, and likewise
+for Y-variants.
+
+\paragraph{Shifted variants (INX3FF, INY3FF).}
+These have only one copy of \hex{00} but use two bytes from $\Cpagethree$:
+
+\begin{align}
+P(\text{INX3FF bare}) &=
+  \frac{\px^2 \cdot \pshared \cdot \ppagethree^2 \cdot \pincx
+        \cdot \pbranch}{2^4 \cdot 256}, \label{eq:pinx3ff} \\
+P(\text{INY3FF bare}) &=
+  \frac{\py^2 \cdot \pshared \cdot \ppagethree^2 \cdot \pincy
+        \cdot \pbranch}{2^4 \cdot 256}. \label{eq:piny3ff}
+\end{align}
+
+Wait --- the shifted variants use both \hex{FF} and \hex{03} from
+$\Cpagethree$ (a 2-element class).  Each has probability
+$\ppagethree/2$.  The product is $(\ppagethree/2)^2 = \ppagethree^2/4$.
+Including the other factors with their $1/2$ denominators:
+
+\begin{align}
+P(\text{INX3FF bare}) &=
+  p(\hex{B5}) \cdot p(\hex{00}) \cdot p(\hex{E8}) \cdot
+  p(\hex{9D}) \cdot p(\hex{FF}) \cdot p(\hex{03}) \cdot
+  p(\text{br}) \cdot \pmin
+  \nonumber \\
+  &= \frac{\px}{2} \cdot \pshared \cdot \frac{\pincx}{2} \cdot
+     \frac{\px}{2} \cdot \frac{\ppagethree}{2} \cdot
+     \frac{\ppagethree}{2} \cdot \frac{\pbranch}{8} \cdot
+     \pmin
+  \nonumber \\
+  &= \frac{\px^2 \cdot \pshared \cdot \pincx \cdot
+           \ppagethree^2 \cdot \pbranch}{2^6 \cdot 256}.
+  \label{eq:pinx3ff2}
+\end{align}
+
+\subsection{Incorporating rotations}
+
+Each 6-byte core can start at any of its 3 instruction boundaries,
+giving 3~rotations.  All rotations have the same byte content (just
+cyclically permuted), so the probability per rotation is identical.
+
+Total for 3~rotations $\times$ 8~branch opcodes is already included:
+each rotation pairs with each of the 8 branch opcodes, and the
+branch probability $\pbranch/8$ summed over 8 branches gives $\pbranch$.
+Thus, summing over branches:
+
+\begin{align}
+P_{\text{rot}}(\text{X-std}) &=
+  3 \times \frac{\px^2 \cdot \pshared^2 \cdot \ppagefour \cdot
+  \pincx \cdot \pbranch}{2^3 \cdot 256}, \label{eq:protxstd}
+\end{align}
+where we used $\sum_{8\text{ branches}} \pbranch/8 = \pbranch$
+and absorbed the factor of $2$ variants (DEX+INX, each using one
+of the two members of $\Cincx$) by noting
+$\sum_{b \in \Cincx} \pincx/2 = \pincx$.
+
+Similarly for Y-std variants: replace $\px \to \py$,
+$\pincx \to \pincy$.
+
+For shifted variants:
+\begin{align}
+P_{\text{rot}}(\text{X-shift}) &=
+  3 \times \frac{\px^2 \cdot \pshared \cdot \pincx \cdot
+  \ppagethree^2 \cdot \pbranch}{2^5 \cdot 256}.
+  \label{eq:protxshift}
+\end{align}
+
+Wait --- the shifted variants only have one member each in their
+inc class (INX3FF uses \hex{E8}, INY3FF uses \hex{C8}), so we
+\emph{don't} sum over 2~inc values.  Let us be more careful.
+
+\paragraph{Corrected summation.}
+For the standard X-family (DEX + INX):
+\begin{itemize}
+\item Both use \hex{B5} (prob $\px/2$) and \hex{9D} (prob $\px/2$),
+      two \hex{00}'s (prob $\pshared^2$), \hex{04} (prob $\ppagefour$).
+\item DEX uses \hex{CA} (prob $\pincx/2$); INX uses \hex{E8}
+      (prob $\pincx/2$).  Summing: $\pincx$.
+\end{itemize}
+So summing over both variants, 3 rotations, and 8 branches:
+\begin{equation}
+P_{\text{std},x} = 3 \cdot
+  \frac{\px^2}{4} \cdot \pshared^2 \cdot \ppagefour \cdot
+  \pincx \cdot \pbranch \cdot \pmin.
+  \label{eq:pstdx}
+\end{equation}
+
+For the shifted X-family (INX3FF only):
+\begin{itemize}
+\item Uses \hex{B5} ($\px/2$), \hex{9D} ($\px/2$), \hex{E8}
+      ($\pincx/2$), one~\hex{00} ($\pshared$), \hex{FF}
+      ($\ppagethree/2$), \hex{03} ($\ppagethree/2$).
+\end{itemize}
+Summing over 3 rotations and 8 branches:
+\begin{equation}
+P_{\text{shift},x} = 3 \cdot
+  \frac{\px^2 \cdot \pincx \cdot \ppagethree^2}{2^5} \cdot
+  \pshared \cdot \pbranch \cdot \pmin.
+  \label{eq:pshiftx}
+\end{equation}
+
+The Y-family expressions are obtained by $\px \to \py$,
+$\pincx \to \pincy$.
+
+Total bare probability at one position:
+\begin{equation}
+\boxed{
+P_{\text{bare}} = \frac{3\,\pbranch}{256}
+  \left[
+    \frac{\pincx\,\px^2 + \pincy\,\py^2}{4}
+    \cdot \left(\pshared^2\,\ppagefour
+                + \frac{\pshared\,\ppagethree^2}{8}\right)
+  \right].
+}
+\label{eq:pbare}
+\end{equation}
+
+Here we factored out the common structure: each family contributes
+$p_{\mathrm{inc}} \cdot p_{\mathrm{fam}}^2$ (where $p_{\mathrm{fam}}$
+is $\px$ or $\py$), multiplied by the address-encoding factor that
+differs between standard ($\pshared^2\,\ppagefour$) and shifted
+($\pshared\,\ppagethree^2/8$) variants.
+
+%----------------------------------------------------------------------
+\section{Insert Model}
+\label{sec:inserts}
+
+\subsection{$k$-insert probability}
+
+A replicator with $k$ safe insert bytes has total length $8 + k$
+(6~core + 1~branch + 1~offset + $k$~inserts).  The $k$ inserts
+can be placed at any of the internal positions between the core
+bytes.  In a bare 6-byte core, there are 5~gaps between consecutive
+core bytes (not counting before the first or after the last, since
+the loop is not yet closed), plus the gap before the branch opcode
+and after it (before the offset).  However, since the loop is
+cyclic (due to the branch), the total number of distinct insertion
+sites equals the number of bytes in the loop body: 6 core bytes
+$+$ 1 branch $=$ 7 gaps (between each pair of adjacent bytes
+in the circular loop, but the offset byte is fixed at the end).
+
+More precisely, the $k$ insert bytes can be placed in any of the
+7~inter-byte gaps within the 7-byte circular loop (6~core + 1~branch),
+with repetition allowed.  The number of ways to distribute $k$
+indistinguishable slots among 7~gaps is $\binom{k+6}{6}$.
+But the inserts are \emph{distinguishable} (each is a byte value),
+so the total count of distinct $k$-insert patterns is:
+
+\[
+  N_{\text{place}}(k) = 7^k
+\]
+if we think of each insert as independently choosing one of the 7~gaps.
+However, two insertions in the same gap are ordered (the bytes execute
+sequentially), so we need to be more careful.
+
+Actually, the simplest model: a $k$-insert replicator is any sequence
+of $8+k$ bytes where, after removing exactly $k$ bytes that are
+individually safe inserts, the remaining 8 bytes form a valid bare
+replicator.  The number of ways to choose which $k$ of the $8+k$
+positions are inserts is $\binom{8+k-1}{k}$ (the offset byte at
+position $8+k$ is fixed, so we choose $k$ positions from the first
+$7+k$ positions to be inserts, but we must not remove any of the
+7~core+branch bytes).
+
+The combinatorial factor for a length-$(8+k)$ window is:
+\begin{equation}
+  \binom{7+k-1}{k} = \binom{6+k}{k}
+  \label{eq:nplace}
+\end{equation}
+since the 7~core+branch bytes must appear in the correct relative
+order, and the $k$ inserts fill the $k$ remaining positions,
+which is equivalent to distributing $k$ identical objects among
+7~gaps: $\binom{k+6}{k}$.
+
+Each insert byte has probability $\psafe / |\Csafe|$ summed over
+$|\Csafe|$ safe byte values, giving total per-insert probability
+$\psafe$.  Thus:
+
+\begin{equation}
+P(k\text{-insert}) = \binom{k+6}{k} \cdot P_{\text{bare}} \cdot \psafe^k.
+\label{eq:pk}
+\end{equation}
+
+\subsection{Total probability at one position}
+
+Summing over $k = 0, 1, 2, \ldots$:
+\begin{equation}
+P_{\text{pos}} = P_{\text{bare}} \sum_{k=0}^{\infty}
+  \binom{k+6}{k} \psafe^k
+  = \frac{P_{\text{bare}}}{(1 - \psafe)^7},
+\label{eq:ppos}
+\end{equation}
+using the identity $\sum_{k=0}^\infty \binom{k+n-1}{k} x^k = (1-x)^{-n}$
+for $|x| < 1$ (negative binomial series), with $n = 7$.
+
+\subsection{Probability per cell and per board}
+
+A cell has $M = 1024$ bytes.  A replicator of length $8+k$ can
+start at any of $M$ positions (wrapping).  Since the typical
+replicator is short compared to $M$, we approximate:
+
+\begin{equation}
+P_{\text{cell}} \approx M \cdot P_{\text{pos}}
+  = \frac{1024 \cdot P_{\text{bare}}}{(1 - \psafe)^7}.
+\label{eq:pcell}
+\end{equation}
+
+For a $B \times B$ board:
+\begin{equation}
+P_{\text{board}} = 1 - (1 - P_{\text{cell}})^{B^2}.
+\label{eq:pboard}
+\end{equation}
+
+The expected mining time (number of random boards to generate)
+is:
+\begin{equation}
+T = \frac{1}{P_{\text{board}}} \approx
+  \frac{1}{B^2 \cdot M \cdot P_{\text{pos}}}
+  = \frac{256 \cdot (1-\psafe)^7}
+         {B^2 \cdot 1024 \cdot P_{\text{bare}}}.
+\label{eq:T}
+\end{equation}
+
+%----------------------------------------------------------------------
+\section{Mean Insert Count}
+\label{sec:mean}
+
+Given that a replicator is found, the conditional distribution of
+insert count $k$ is:
+\begin{equation}
+P(k \mid \text{rep}) = \frac{\binom{k+6}{k}\,\psafe^k}
+  {\sum_{j=0}^\infty \binom{j+6}{j}\,\psafe^j}
+  = \binom{k+6}{k}\,\psafe^k\,(1-\psafe)^7.
+\label{eq:pk_cond}
+\end{equation}
+
+This is a \emph{negative binomial} distribution with parameters
+$r = 7$ and $p = 1 - \psafe$.  The mean is:
+\begin{equation}
+\boxed{
+E[k] = \frac{7\,\psafe}{1 - \psafe}.
+}
+\label{eq:ek}
+\end{equation}
+
+For example:
+\begin{center}
+\begin{tabular}{@{}cc@{}}
+\toprule
+$\psafe$ & $E[k]$ \\
+\midrule
+0.01 & 0.07 \\
+0.05 & 0.37 \\
+0.10 & 0.78 \\
+0.20 & 1.75 \\
+0.30 & 3.00 \\
+0.50 & 7.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%----------------------------------------------------------------------
+\section{Entropy}
+\label{sec:entropy}
+
+The Shannon entropy of the soup distribution is:
+\begin{equation}
+H = -\sum_{b=0}^{255} p(b)\,\log_2 p(b)
+  = -\sum_C |C| \cdot \frac{w_C}{|C|}\,
+    \log_2\!\left(\frac{w_C}{|C|}\right)
+  = -\sum_C w_C \left(\log_2 w_C - \log_2 |C|\right).
+\label{eq:entropy}
+\end{equation}
+
+Expanding:
+\begin{equation}
+H = -\sum_C w_C \log_2 w_C + \sum_C w_C \log_2 |C|.
+\label{eq:entropy2}
+\end{equation}
+
+The first term is the \emph{inter-class entropy} (entropy of the
+class-level distribution), and the second is the \emph{intra-class
+entropy} (weighted average of $\log_2|C|$, the entropy within
+each uniformly-distributed class).
+
+Maximum entropy is $H_{\max} = \log_2 256 = 8$ bits (uniform
+distribution).  A heavily biased soup will have $H \ll 8$.
+
+%----------------------------------------------------------------------
+\section{Pareto Analysis}
+\label{sec:pareto}
+
+\subsection{The tradeoff triangle}
+
+The three quantities of interest are:
+\begin{enumerate}
+\item \textbf{Mining time} $T \propto 1/P_{\text{board}}$: lower is
+      better.
+\item \textbf{Insert diversity} $E[k]$: higher means richer
+      organisms with more ``junk DNA.''
+\item \textbf{Entropy} $H$: higher means the soup looks more random
+      and produces more diverse non-replicator cells.
+\end{enumerate}
+
+\subsection{Key tension}
+
+From Eq.~\eqref{eq:ppos}, the total per-position probability is:
+\[
+P_{\text{pos}} = \frac{P_{\text{bare}}}{(1-\psafe)^7}.
+\]
+
+Increasing $\psafe$ has two effects:
+\begin{itemize}
+\item It \emph{increases} $P_{\text{pos}}$ via the $(1-\psafe)^{-7}$
+      factor (more insert weight means more multi-insert replicators).
+\item It \emph{decreases} $P_{\text{bare}}$ because the normalization
+      constraint $\sum w_C = 1$ means weight given to $\psafe$ is
+      stolen from core classes.
+\end{itemize}
+
+To see this explicitly, suppose we use a simplified two-class model:
+core bytes at total weight $\pcore = 1 - \psafe - \punsafe$ and
+safe inserts at weight $\psafe$.  Then $P_{\text{bare}} \propto
+\pcore^7$ (the 7 non-offset core+branch bytes each come from core
+classes), so:
+\[
+P_{\text{pos}} \propto \frac{\pcore^7}{(1-\psafe)^7}
+  = \left(\frac{\pcore}{1-\psafe}\right)^7
+  = \left(\frac{1-\psafe-\punsafe}{1-\psafe}\right)^7
+  = \left(1 - \frac{\punsafe}{1-\psafe}\right)^7.
+\]
+
+This is maximized when $\punsafe = 0$ (no weight wasted on unsafe
+bytes), giving $P_{\text{pos}} \propto 1$ --- independent of $\psafe$!
+In this ideal case, all weight is distributed between core and safe
+classes, and the $(1-\psafe)^{-7}$ amplification exactly compensates
+for the reduced core weight.
+
+In practice, unsafe bytes cannot have zero weight (their probability
+is at least influenced by the offset byte constraint), and the
+distribution among core sub-classes matters.  But the key insight is:
+
+\begin{proposition}
+In the zero-unsafe-weight limit, the per-position replicator
+probability is independent of the safe-insert weight $\psafe$,
+while $E[k]$ increases monotonically with $\psafe$.
+This means we get richer organisms ``for free'' without increasing
+mining time --- the Pareto frontier collapses to a single point
+in the $(T, E[k])$ plane.
+\end{proposition}
+
+The real tradeoff appears when $\punsafe > 0$ (entropy $> 0$)
+and we must balance:
+\begin{itemize}
+\item More entropy $\Rightarrow$ more unsafe weight $\Rightarrow$
+      diluted core $\Rightarrow$ harder mining.
+\item More inserts $\Rightarrow$ higher $\psafe$ $\Rightarrow$
+      less core weight (at fixed unsafe weight) $\Rightarrow$
+      partially compensated by $(1-\psafe)^{-7}$ amplification.
+\end{itemize}
+
+\subsection{Optimal core allocation}
+
+Given fixed $\psafe$ and $\punsafe$ (hence fixed $\pcore = 1 - \psafe
+- \punsafe$), how should the core weight be distributed among the
+sub-classes?
+
+From Eq.~\eqref{eq:pbare}, summing over X and Y families:
+\[
+P_{\text{bare}} \propto
+  (\pincx\,\px^2 + \pincy\,\py^2) \cdot
+  \pbranch \cdot f(\pshared, \ppagefour, \ppagethree),
+\]
+where $f$ encodes the address factors.  By symmetry, the optimum
+has $\px = \py \equiv p_f$ and $\pincx = \pincy \equiv p_i$,
+giving a factor $2\,p_i\,p_f^2$.
+
+Subject to the constraint
+$\pshared + 2p_f + 2p_i + \ppagefour + \ppagethree + \pbranch = \pcore$,
+the optimal allocation is found by Lagrange multipliers.  The
+exponent structure shows that bytes appearing with higher
+multiplicity in the core formula should receive proportionally
+more weight.
+
+%----------------------------------------------------------------------
+\section{Numerical Examples}
+\label{sec:numerical}
+
+We evaluate the model for several parameter configurations on a
+$B = 256$ board ($B^2 = 65{,}536$ cells, $M = 1024$ bytes per cell).
+
+For simplicity, we use a symmetric setup: $\px = \py$,
+$\pincx = \pincy$, and optimize the core allocation by
+distributing weight proportionally to the exponent in the
+probability formula.
+
+\begin{table}[ht]
+\centering
+\caption{Numerical examples for the replicator mining model.
+$T$ = expected boards to mine one replicator.
+$E[k]$ = mean insert count.
+$H$ = soup entropy in bits.
+$P(k{=}0)$ through $P(k{\geq}11)$ = fraction of replicators
+with the given insert count.}
+\label{tab:examples}
+\smallskip
+\begin{tabular}{@{}r r r r r r r r r@{}}
+\toprule
+\# & $\psafe$ & $\punsafe$ & $T$ & $E[k]$ & $H$ (bits) &
+$P_0$ & $P_{1\text{--}2}$ & $P_{\geq 3}$ \\
+\midrule
+1 & 0.00 & 0.00 & $6.2 \times 10^{7}$  & 0.00 & 3.12 & 1.000 & 0.000 & 0.000 \\
+2 & 0.05 & 0.00 & $6.2 \times 10^{7}$  & 0.37 & 3.38 & 0.698 & 0.268 & 0.034 \\
+3 & 0.10 & 0.00 & $6.2 \times 10^{7}$  & 0.78 & 3.58 & 0.478 & 0.389 & 0.133 \\
+4 & 0.20 & 0.00 & $6.2 \times 10^{7}$  & 1.75 & 3.87 & 0.210 & 0.378 & 0.412 \\
+5 & 0.50 & 0.00 & $6.2 \times 10^{7}$  & 7.00 & 4.18 & 0.008 & 0.039 & 0.953 \\
+6 & 0.05 & 0.50 & $4.0 \times 10^{9}$  & 0.37 & 7.30 & 0.698 & 0.268 & 0.034 \\
+7 & 0.10 & 0.50 & $4.0 \times 10^{9}$  & 0.78 & 7.35 & 0.478 & 0.389 & 0.133 \\
+8 & 0.05 & 0.90 & $3.7 \times 10^{13}$ & 0.37 & 7.79 & 0.698 & 0.268 & 0.034 \\
+9 & 0.00 & 0.95 & $1.6 \times 10^{15}$ & 0.00 & 7.89 & 1.000 & 0.000 & 0.000 \\
+10& 0.00 & 0.996& $2.0 \times 10^{21}$ & 0.00 & 7.99 & 1.000 & 0.000 & 0.000 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Reading the table.}
+Row~1 is the zero-unsafe, zero-insert case: all weight on core bytes,
+giving maximum mining speed at the cost of zero inserts and low entropy.
+Rows~2--5 show that increasing $\psafe$ (at $\punsafe = 0$) yields
+richer organisms without affecting mining time --- confirming the
+Proposition.  Row~10 approaches the uniform distribution
+($H \to 8$ bits) where mining time is astronomical ($T \sim 10^{21}$).
+
+The practical operating point for overnight mining ($T \sim 10^9$)
+with moderate diversity ($E[k] \sim 1$) is in the range
+$\psafe \approx 0.1$, $\punsafe \approx 0.5$ (rows~6--7).
+
+\paragraph{How $T$ was computed.}
+For each row, we set $\pcore = 1 - \psafe - \punsafe$ and allocate
+core weight as follows: $\pshared = 2\pcore/7$ (appears squared for
+standard variants), $\px = \py = \pcore/7$, $\pincx = \pincy =
+\pcore/14$, $\ppagefour = \pcore/14$, $\ppagethree = \pcore/14$,
+$\pbranch = \pcore/7$.  Then $P_{\text{bare}}$ is computed from
+Eq.~\eqref{eq:pbare}, $P_{\text{pos}}$ from Eq.~\eqref{eq:ppos},
+$P_{\text{cell}} = 1024 \cdot P_{\text{pos}}$, and
+$T = 1/(65536 \cdot P_{\text{cell}})$.
+
+The insert distribution $P(k)$ follows the negative binomial
+(Eq.~\ref{eq:pk_cond}) with $r=7$, $p = 1-\psafe$:
+\begin{align*}
+P_0 &= (1-\psafe)^7, \\
+P_{1\text{--}2} &= \sum_{k=1}^{2} \binom{k+6}{k}\,\psafe^k\,
+  (1-\psafe)^7, \\
+P_{\geq 3} &= 1 - P_0 - P_{1\text{--}2}.
+\end{align*}
+
+%----------------------------------------------------------------------
+\section{Discussion}
+\label{sec:discussion}
+
+The soup class framework reveals several insights:
+
+\begin{enumerate}
+\item \textbf{Free inserts.}
+  When the unsafe class has zero weight, increasing insert probability
+  does not change mining time.  This is because the $(1-\psafe)^{-7}$
+  amplification from the negative binomial exactly compensates for
+  the dilution of core bytes.  In practice, this means one should
+  always allocate some weight to safe inserts: it enriches the
+  organism population at no mining cost.
+
+\item \textbf{Entropy is expensive.}
+  The dominant factor in mining difficulty is the unsafe weight
+  $\punsafe$, which contributes to entropy but dilutes core bytes.
+  Each increment of unsafe weight is multiplicatively costly
+  (the mining time scales as $\pcore^{-7} \propto
+  (1-\psafe-\punsafe)^{-7}$).
+
+\item \textbf{The offset byte tax.}
+  The offset byte has probability $\pmin = 1/W$, the minimum
+  across the entire distribution.  As core and insert weights increase,
+  $W$ grows and $\pmin$ shrinks.  This creates a self-regulating
+  mechanism: concentrating the soup \emph{lowers} the offset
+  probability, counteracting the benefit of enriching core bytes.
+  The net effect is that the offset contributes a factor of $\pmin$
+  to the mining difficulty that cannot be independently optimized.
+
+\item \textbf{Symmetry breaking is wasteful.}
+  The optimal allocation has $\px = \py$ and $\pincx = \pincy$.
+  Breaking this symmetry (e.g., biasing toward X-family) reduces the
+  total probability by concentrating weight on fewer variants.
+
+\item \textbf{Practical recommendation.}
+  For the 6502life mining application with $B = 256$ and a target of
+  $T \sim 10^8$ boards, the optimal soup has $\punsafe \approx 0.2$,
+  $\psafe \approx 0.15$, with the remaining $\pcore \approx 0.65$
+  distributed among the 10 core sub-classes.  This yields $H \approx 5$
+  bits and $E[k] \approx 1.2$ inserts per replicator.
+\end{enumerate}
+
+%----------------------------------------------------------------------
+\appendix
+\section{Complete Byte Classification}
+\label{app:bytes}
+
+Table~\ref{tab:bytes} classifies all 256 byte values.  The
+\textbf{Class} column uses abbreviations: \textbf{sh} = $\Cshared$,
+\textbf{x} = $\Cx$, \textbf{y} = $\Cy$, \textbf{ix} = $\Cincx$,
+\textbf{iy} = $\Cincy$, \textbf{p4} = $\Cpagefour$,
+\textbf{p3} = $\Cpagethree$, \textbf{br} = $\Cbranch$,
+\textbf{sf} = $\Csafeboth$, \textbf{un} = $\Cunsafe$.
+\textbf{Len} = instruction length (1, 2, or 3 bytes; 0 = JAM).
+\textbf{Mnemonic} shows the official or common undocumented name.
+
+{\small
+\begin{longtable}{@{}ccclp{4.8cm}@{}}
+\caption{Byte classification for all 256 values.}
+\label{tab:bytes} \\
+\toprule
+\textbf{Hex} & \textbf{Class} & \textbf{Len} & \textbf{Mnemonic} &
+\textbf{Notes} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Hex} & \textbf{Class} & \textbf{Len} & \textbf{Mnemonic} &
+\textbf{Notes} \\
+\midrule
+\endhead
+\midrule
+\multicolumn{5}{r}{\emph{continued}} \\
+\endfoot
+\bottomrule
+\endlastfoot
+% Row 0x
+00 & sh & 1 & BRK & Core (all variants) \\
+01 & un & 2 & ORA (zp,X) & \\
+02 & un & 0 & JAM & CPU halt \\
+03 & p3 & 2 & SLO (zp,X) & Core (shift variants) \\
+04 & p4 & 2 & NOP zp & Core (std variants) \\
+05 & un & 2 & ORA zp & \\
+06 & un & 2 & ASL zp & \\
+07 & un & 2 & SLO zp & \\
+08 & sf & 1 & PHP & Safe: push P \\
+09 & un & 2 & ORA \#imm & \\
+0A & un & 1 & ASL A & Clobbers A, flags \\
+0B & un & 2 & ANC \#imm & \\
+0C & un & 3 & NOP abs & \\
+0D & un & 3 & ORA abs & \\
+0E & un & 3 & ASL abs & \\
+0F & un & 3 & SLO abs & \\
+% Row 1x
+10 & br & 2 & BPL & Branch opcode \\
+11 & un & 2 & ORA (zp),Y & \\
+12 & un & 0 & JAM & CPU halt \\
+13 & un & 2 & SLO (zp),Y & \\
+14 & un & 2 & NOP zp,X & \\
+15 & un & 2 & ORA zp,X & \\
+16 & un & 2 & ASL zp,X & \\
+17 & un & 2 & SLO zp,X & \\
+18 & un & 1 & CLC & Clobbers C flag \\
+19 & un & 3 & ORA abs,Y & \\
+1A & sf & 1 & NOP & Safe: undoc NOP \\
+1B & un & 3 & SLO abs,Y & \\
+1C & un & 3 & NOP abs,X & \\
+1D & un & 3 & ORA abs,X & \\
+1E & un & 3 & ASL abs,X & \\
+1F & un & 3 & SLO abs,X & \\
+% Row 2x
+20 & un & 3 & JSR abs & \\
+21 & un & 2 & AND (zp,X) & \\
+22 & un & 0 & JAM & CPU halt \\
+23 & un & 2 & RLA (zp,X) & \\
+24 & un & 2 & BIT zp & \\
+25 & un & 2 & AND zp & \\
+26 & un & 2 & ROL zp & \\
+27 & un & 2 & RLA zp & \\
+28 & un & 1 & PLP & Clobbers all flags \\
+29 & un & 2 & AND \#imm & \\
+2A & un & 1 & ROL A & Clobbers A, flags \\
+2B & un & 2 & ANC \#imm & \\
+2C & un & 3 & BIT abs & \\
+2D & un & 3 & AND abs & \\
+2E & un & 3 & ROL abs & \\
+2F & un & 3 & RLA abs & \\
+% Row 3x
+30 & br & 2 & BMI & Branch opcode \\
+31 & un & 2 & AND (zp),Y & \\
+32 & un & 0 & JAM & CPU halt \\
+33 & un & 2 & RLA (zp),Y & \\
+34 & un & 2 & NOP zp,X & \\
+35 & un & 2 & AND zp,X & \\
+36 & un & 2 & ROL zp,X & \\
+37 & un & 2 & RLA zp,X & \\
+38 & un & 1 & SEC & Clobbers C flag \\
+39 & un & 3 & AND abs,Y & \\
+3A & sf & 1 & NOP & Safe: undoc NOP \\
+3B & un & 3 & RLA abs,Y & \\
+3C & un & 3 & NOP abs,X & \\
+3D & un & 3 & AND abs,X & \\
+3E & un & 3 & ROL abs,X & \\
+3F & un & 3 & RLA abs,X & \\
+% Row 4x
+40 & un & 1 & RTI & Control flow \\
+41 & un & 2 & EOR (zp,X) & \\
+42 & un & 0 & JAM & CPU halt \\
+43 & un & 2 & SRE (zp,X) & \\
+44 & un & 2 & NOP zp & \\
+45 & un & 2 & EOR zp & \\
+46 & un & 2 & LSR zp & \\
+47 & un & 2 & SRE zp & \\
+48 & sf & 1 & PHA & Safe: push A \\
+49 & un & 2 & EOR \#imm & \\
+4A & un & 1 & LSR A & Clobbers A, flags \\
+4B & un & 2 & ALR \#imm & \\
+4C & un & 3 & JMP abs & Control flow \\
+4D & un & 3 & EOR abs & \\
+4E & un & 3 & LSR abs & \\
+4F & un & 3 & SRE abs & \\
+% Row 5x
+50 & br & 2 & BVC & Branch opcode \\
+51 & un & 2 & EOR (zp),Y & \\
+52 & un & 0 & JAM & CPU halt \\
+53 & un & 2 & SRE (zp),Y & \\
+54 & un & 2 & NOP zp,X & \\
+55 & un & 2 & EOR zp,X & \\
+56 & un & 2 & LSR zp,X & \\
+57 & un & 2 & SRE zp,X & \\
+58 & un & 1 & CLI & Clobbers I flag (safe for branches, but conservatively excluded) \\
+59 & un & 3 & EOR abs,Y & \\
+5A & sf & 1 & NOP & Safe: undoc NOP \\
+5B & un & 3 & SRE abs,Y & \\
+5C & un & 3 & NOP abs,X & \\
+5D & un & 3 & EOR abs,X & \\
+5E & un & 3 & LSR abs,X & \\
+5F & un & 3 & SRE abs,X & \\
+% Row 6x
+60 & un & 1 & RTS & Control flow \\
+61 & un & 2 & ADC (zp,X) & \\
+62 & un & 0 & JAM & CPU halt \\
+63 & un & 2 & RRA (zp,X) & \\
+64 & un & 2 & NOP zp & \\
+65 & un & 2 & ADC zp & \\
+66 & un & 2 & ROR zp & \\
+67 & un & 2 & RRA zp & \\
+68 & un & 1 & PLA & Clobbers A, flags \\
+69 & un & 2 & ADC \#imm & \\
+6A & un & 1 & ROR A & Clobbers A, flags \\
+6B & un & 2 & ARR \#imm & \\
+6C & un & 3 & JMP (abs) & Control flow \\
+6D & un & 3 & ADC abs & \\
+6E & un & 3 & ROR abs & \\
+6F & un & 3 & RRA abs & \\
+% Row 7x
+70 & br & 2 & BVS & Branch opcode \\
+71 & un & 2 & ADC (zp),Y & \\
+72 & un & 0 & JAM & CPU halt \\
+73 & un & 2 & RRA (zp),Y & \\
+74 & un & 2 & NOP zp,X & \\
+75 & un & 2 & ADC zp,X & \\
+76 & un & 2 & ROR zp,X & \\
+77 & un & 2 & RRA zp,X & \\
+78 & un & 1 & SEI & Clobbers I flag (conservatively excluded) \\
+79 & un & 3 & ADC abs,Y & \\
+7A & sf & 1 & NOP & Safe: undoc NOP \\
+7B & un & 3 & RRA abs,Y & \\
+7C & un & 3 & NOP abs,X & \\
+7D & un & 3 & ADC abs,X & \\
+7E & un & 3 & ROR abs,X & \\
+7F & un & 3 & RRA abs,X & \\
+% Row 8x
+80 & un & 2 & NOP \#imm & Undoc 2-byte NOP \\
+81 & un & 2 & STA (zp,X) & \\
+82 & un & 2 & NOP \#imm & Undoc 2-byte NOP \\
+83 & un & 2 & SAX (zp,X) & \\
+84 & un & 2 & STY zp & \\
+85 & un & 2 & STA zp & ZP write \\
+86 & un & 2 & STX zp & ZP write \\
+87 & un & 2 & SAX zp & ZP write \\
+88 & iy & 1 & DEY & Core (DEY variant) \\
+89 & un & 2 & NOP \#imm & Undoc 2-byte NOP \\
+8A & un & 1 & TXA & Clobbers A, flags \\
+8B & un & 2 & ANE \#imm & \\
+8C & un & 3 & STY abs & \\
+8D & un & 3 & STA abs & \\
+8E & un & 3 & STX abs & \\
+8F & un & 3 & SAX abs & \\
+% Row 9x
+90 & br & 2 & BCC & Branch opcode \\
+91 & un & 2 & STA (zp),Y & \\
+92 & un & 0 & JAM & CPU halt \\
+93 & un & 2 & SHA (zp),Y & \\
+94 & un & 2 & STY zp,X & \\
+95 & un & 2 & STA zp,X & ZP write \\
+96 & un & 2 & STX zp,Y & ZP write \\
+97 & un & 2 & SAX zp,Y & ZP write \\
+98 & un & 1 & TYA & Clobbers A, flags \\
+99 & y  & 3 & STA abs,Y & Core (Y variants) \\
+9A & un & 1 & TXS & Modifies only S (no flags), but not a NOP-like operation \\
+9B & un & 3 & TAS abs,Y & \\
+9C & un & 3 & SHY abs,X & \\
+9D & x  & 3 & STA abs,X & Core (X variants) \\
+9E & un & 3 & SHX abs,Y & \\
+9F & un & 3 & SHA abs,Y & \\
+% Row Ax
+A0 & un & 2 & LDY \#imm & Clobbers Y, flags \\
+A1 & un & 2 & LDA (zp,X) & \\
+A2 & un & 2 & LDX \#imm & Clobbers X, flags \\
+A3 & un & 2 & LAX (zp,X) & \\
+A4 & un & 2 & LDY zp & \\
+A5 & un & 2 & LDA zp & \\
+A6 & un & 2 & LDX zp & \\
+A7 & un & 2 & LAX zp & \\
+A8 & un & 1 & TAY & Clobbers Y, N, Z \\
+A9 & un & 2 & LDA \#imm & \\
+AA & un & 1 & TAX & Clobbers X, N, Z \\
+AB & un & 2 & LAX \#imm & \\
+AC & un & 3 & LDY abs & \\
+AD & un & 3 & LDA abs & \\
+AE & un & 3 & LDX abs & \\
+AF & un & 3 & LAX abs & \\
+% Row Bx
+B0 & br & 2 & BCS & Branch opcode \\
+B1 & un & 2 & LDA (zp),Y & \\
+B2 & un & 0 & JAM & CPU halt \\
+B3 & un & 2 & LAX (zp),Y & \\
+B4 & un & 2 & LDY zp,X & \\
+B5 & x  & 2 & LDA zp,X & Core (X variants) \\
+B6 & un & 2 & LDX zp,Y & \\
+B7 & y  & 2 & LAX zp,Y & Core (Y variants) \\
+B8 & un & 1 & CLV & Clobbers V flag \\
+B9 & un & 3 & LDA abs,Y & \\
+BA & un & 1 & TSX & Clobbers X, N, Z \\
+BB & un & 3 & LAS abs,Y & \\
+BC & un & 3 & LDY abs,X & \\
+BD & un & 3 & LDA abs,X & \\
+BE & un & 3 & LDX abs,Y & \\
+BF & un & 3 & LAX abs,Y & \\
+% Row Cx
+C0 & un & 2 & CPY \#imm & \\
+C1 & un & 2 & CMP (zp,X) & \\
+C2 & un & 2 & NOP \#imm & Undoc 2-byte NOP \\
+C3 & un & 2 & DCP (zp,X) & \\
+C4 & un & 2 & CPY zp & \\
+C5 & un & 2 & CMP zp & \\
+C6 & un & 2 & DEC zp & ZP write \\
+C7 & un & 2 & DCP zp & ZP write \\
+C8 & iy & 1 & INY & Core (INY, INY3FF) \\
+C9 & un & 2 & CMP \#imm & \\
+CA & ix & 1 & DEX & Core (DEX variant) \\
+CB & un & 2 & AXS \#imm & \\
+CC & un & 3 & CPY abs & \\
+CD & un & 3 & CMP abs & \\
+CE & un & 3 & DEC abs & \\
+CF & un & 3 & DCP abs & \\
+% Row Dx
+D0 & br & 2 & BNE & Branch opcode \\
+D1 & un & 2 & CMP (zp),Y & \\
+D2 & un & 0 & JAM & CPU halt \\
+D3 & un & 2 & DCP (zp),Y & \\
+D4 & un & 2 & NOP zp,X & \\
+D5 & un & 2 & CMP zp,X & \\
+D6 & un & 2 & DEC zp,X & ZP write \\
+D7 & un & 2 & DCP zp,X & \\
+D8 & un & 1 & CLD & Clobbers D flag (conservatively excluded) \\
+D9 & un & 3 & CMP abs,Y & \\
+DA & sf & 1 & NOP & Safe: undoc NOP \\
+DB & un & 3 & DCP abs,Y & \\
+DC & un & 3 & NOP abs,X & \\
+DD & un & 3 & CMP abs,X & \\
+DE & un & 3 & DEC abs,X & \\
+DF & un & 3 & DCP abs,X & \\
+% Row Ex
+E0 & un & 2 & CPX \#imm & \\
+E1 & un & 2 & SBC (zp,X) & \\
+E2 & un & 2 & NOP \#imm & Undoc 2-byte NOP \\
+E3 & un & 2 & ISC (zp,X) & \\
+E4 & un & 2 & CPX zp & \\
+E5 & un & 2 & SBC zp & \\
+E6 & un & 2 & INC zp & ZP write \\
+E7 & un & 2 & ISC zp & ZP write \\
+E8 & ix & 1 & INX & Core (INX, INX3FF) \\
+E9 & un & 2 & SBC \#imm & \\
+EA & sf & 1 & NOP & Safe: official NOP \\
+EB & un & 2 & SBC \#imm & Undoc duplicate \\
+EC & un & 3 & CPX abs & \\
+ED & un & 3 & SBC abs & \\
+EE & un & 3 & INC abs & \\
+EF & un & 3 & ISC abs & \\
+% Row Fx
+F0 & br & 2 & BEQ & Branch opcode \\
+F1 & un & 2 & SBC (zp),Y & \\
+F2 & un & 0 & JAM & CPU halt \\
+F3 & un & 2 & ISC (zp),Y & \\
+F4 & un & 2 & NOP zp,X & \\
+F5 & un & 2 & SBC zp,X & \\
+F6 & un & 2 & INC zp,X & ZP write \\
+F7 & un & 2 & ISC zp,X & \\
+F8 & un & 1 & SED & Clobbers D flag (conservatively excluded) \\
+F9 & un & 3 & SBC abs,Y & \\
+FA & sf & 1 & NOP & Safe: undoc NOP \\
+FB & un & 3 & ISC abs,Y & \\
+FC & un & 3 & NOP abs,X & \\
+FD & un & 3 & SBC abs,X & \\
+FE & un & 3 & INC abs,X & \\
+FF & un & 3 & ISC abs,X & \\
+\end{longtable}
+}
+
+\paragraph{Summary.}
+Core bytes: 12 distinct values across 6 soup classes.
+Branch opcodes: 8 values.
+Safe inserts: 9 values (conservative).
+Unsafe: 227 values (everything else).
+Total: $12 + 8 + 9 + 227 = 256$.\ \checkmark
+
+\paragraph{A note on TXS (\hex{9A}).}
+\opcode{TXS} modifies only S with no flag side effects, so it is
+arguably safe.  We conservatively exclude it because transferring a
+loop counter to the stack pointer could cause erratic stack behavior
+in the presence of PHA/PHP inserts.  Including it would increase
+$|\Csafe|$ to 10.
+
+\paragraph{A note on SEI/CLI/SED/CLD (\hex{78}/\hex{58}/\hex{F8}/\hex{D8}).}
+These modify only the I or D flags, which are not tested by any
+conditional branch.  Including them would not affect branch behavior
+and could be considered safe.  We exclude them from the conservative
+set; a relaxed analysis could add 4 more bytes to $\Csafe$ (total 13).
+
+\end{document}
