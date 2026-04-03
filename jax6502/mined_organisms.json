@@ -1,0 +1,379 @@
+{
+  "soup": "Turtle's Tiers",
+  "miningTime": 3600,
+  "seedsScanned": 12262240,
+  "dfaHits": 798,
+  "viableCount": 9,
+  "variantDistribution": {
+    "X-DEX/BCC": 3,
+    "X-DEX/BVC": 6
+  },
+  "presets": {
+    "tt-x-dex-bcc-417314": {
+      "name": "tt-x-dex-bcc-417314",
+      "seed": 417314,
+      "cell": [
+        28,
+        6
+      ],
+      "variant": "X-DEX",
+      "branch": "BCC",
+      "length": 8,
+      "program": [
+        181,
+        0,
+        157,
+        0,
+        4,
+        202,
+        144,
+        248
+      ],
+      "hex": "B5 00 9D 00 04 CA 90 F8",
+      "spread": 7,
+      "discoveryTime": 127.5
+    },
+    "tt-x-dex-bvc-1548160": {
+      "name": "tt-x-dex-bvc-1548160",
+      "seed": 1548160,
+      "cell": [
+        15,
+        38
+      ],
+      "variant": "X-DEX",
+      "branch": "BVC",
+      "length": 12,
+      "program": [
+        181,
+        0,
+        157,
+        0,
+        4,
+        216,
+        124,
+        186,
+        202,
+        202,
+        80,
+        244
+      ],
+      "hex": "B5 00 9D 00 04 D8 7C BA CA CA 50 F4",
+      "spread": 4,
+      "discoveryTime": 459.0
+    },
+    "tt-x-dex-bcc-2025457": {
+      "name": "tt-x-dex-bcc-2025457",
+      "seed": 2025457,
+      "cell": [
+        22,
+        36
+      ],
+      "variant": "X-DEX",
+      "branch": "BCC",
+      "length": 12,
+      "program": [
+        4,
+        0,
+        181,
+        0,
+        157,
+        0,
+        4,
+        202,
+        116,
+        157,
+        144,
+        244
+      ],
+      "hex": "04 00 B5 00 9D 00 04 CA 74 9D 90 F4",
+      "spread": 4,
+      "discoveryTime": 598.4
+    },
+    "tt-x-dex-bvc-2805158": {
+      "name": "tt-x-dex-bvc-2805158",
+      "seed": 2805158,
+      "cell": [
+        53,
+        25
+      ],
+      "variant": "X-DEX",
+      "branch": "BVC",
+      "length": 8,
+      "program": [
+        181,
+        0,
+        157,
+        0,
+        4,
+        202,
+        80,
+        248
+      ],
+      "hex": "B5 00 9D 00 04 CA 50 F8",
+      "spread": 7,
+      "discoveryTime": 822.3
+    },
+    "tt-x-dex-bvc-4818116": {
+      "name": "tt-x-dex-bvc-4818116",
+      "seed": 4818116,
+      "cell": [
+        30,
+        45
+      ],
+      "variant": "X-DEX",
+      "branch": "BVC",
+      "length": 8,
+      "program": [
+        181,
+        0,
+        157,
+        0,
+        4,
+        202,
+        80,
+        248
+      ],
+      "hex": "B5 00 9D 00 04 CA 50 F8",
+      "spread": 7,
+      "discoveryTime": 1416.1
+    },
+    "tt-x-dex-bvc-5843534": {
+      "name": "tt-x-dex-bvc-5843534",
+      "seed": 5843534,
+      "cell": [
+        53,
+        51
+      ],
+      "variant": "X-DEX",
+      "branch": "BVC",
+      "length": 8,
+      "program": [
+        181,
+        0,
+        157,
+        0,
+        4,
+        202,
+        80,
+        248
+      ],
+      "hex": "B5 00 9D 00 04 CA 50 F8",
+      "spread": 7,
+      "discoveryTime": 1713.2
+    },
+    "tt-x-dex-bcc-7430868": {
+      "name": "tt-x-dex-bcc-7430868",
+      "seed": 7430868,
+      "cell": [
+        8,
+        63
+      ],
+      "variant": "X-DEX",
+      "branch": "BCC",
+      "length": 8,
+      "program": [
+        181,
+        0,
+        157,
+        0,
+        4,
+        202,
+        144,
+        248
+      ],
+      "hex": "B5 00 9D 00 04 CA 90 F8",
+      "spread": 7,
+      "discoveryTime": 2167.2
+    },
+    "tt-x-dex-bvc-10998689": {
+      "name": "tt-x-dex-bvc-10998689",
+      "seed": 10998689,
+      "cell": [
+        15,
+        37
+      ],
+      "variant": "X-DEX",
+      "branch": "BVC",
+      "length": 8,
+      "program": [
+        181,
+        0,
+        157,
+        0,
+        4,
+        202,
+        80,
+        248
+      ],
+      "hex": "B5 00 9D 00 04 CA 50 F8",
+      "spread": 7,
+      "discoveryTime": 3195.3
+    },
+    "tt-x-dex-bvc-11664352": {
+      "name": "tt-x-dex-bvc-11664352",
+      "seed": 11664352,
+      "cell": [
+        40,
+        40
+      ],
+      "variant": "X-DEX",
+      "branch": "BVC",
+      "length": 8,
+      "program": [
+        181,
+        0,
+        157,
+        0,
+        4,
+        202,
+        80,
+        248
+      ],
+      "hex": "B5 00 9D 00 04 CA 50 F8",
+      "spread": 7,
+      "discoveryTime": 3408.3
+    }
+  },
+  "nearMisses": [
+    {
+      "seed": 47661,
+      "variant": "X-DEX/BCC",
+      "length": 8,
+      "hex": "9D 00 04 CA B5 00 90 F8",
+      "spread": 0
+    },
+    {
+      "seed": 204945,
+      "variant": "X-DEX/BVC",
+      "length": 16,
+      "hex": "B0 F4 D0 B5 00 7C 00 CA 04 90 9D 00 04 CA 50 F0",
+      "spread": 0
+    },
+    {
+      "seed": 237223,
+      "variant": "X-DEX/BCC",
+      "length": 8,
+      "hex": "CA B5 00 9D 00 04 90 F8",
+      "spread": 0
+    },
+    {
+      "seed": 646647,
+      "variant": "X-DEX/BVC",
+      "length": 8,
+      "hex": "CA B5 00 9D 00 04 50 F8",
+      "spread": 0
+    },
+    {
+      "seed": 937493,
+      "variant": "X-DEX/BCC",
+      "length": 8,
+      "hex": "9D 00 04 CA B5 00 90 F8",
+      "spread": 0
+    },
+    {
+      "seed": 1116515,
+      "variant": "X-INX/BCC",
+      "length": 8,
+      "hex": "9D 00 04 E8 B5 00 90 F8",
+      "spread": 0
+    },
+    {
+      "seed": 1120638,
+      "variant": "X-INX/BCC",
+      "length": 8,
+      "hex": "9D 00 04 E8 B5 00 90 F8",
+      "spread": 0
+    },
+    {
+      "seed": 1377505,
+      "variant": "X-DEX/BCC",
+      "length": 12,
+      "hex": "CA B5 00 18 D4 00 9D 00 04 1A 90 F4",
+      "spread": 0
+    },
+    {
+      "seed": 1572037,
+      "variant": "X-INX/BCC",
+      "length": 12,
+      "hex": "AA E8 3C 82 00 B5 00 9D 00 04 90 F4",
+      "spread": 0
+    },
+    {
+      "seed": 3261593,
+      "variant": "X-INX/BCC",
+      "length": 12,
+      "hex": "E8 44 00 B5 00 04 9D 9D 00 04 90 F4",
+      "spread": 0
+    },
+    {
+      "seed": 3702863,
+      "variant": "X-DEX/BVC",
+      "length": 8,
+      "hex": "9D 00 04 CA B5 00 50 F8",
+      "spread": 0
+    },
+    {
+      "seed": 3851726,
+      "variant": "X-DEX/BVC",
+      "length": 8,
+      "hex": "9D 00 04 CA B5 00 50 F8",
+      "spread": 0
+    },
+    {
+      "seed": 4274613,
+      "variant": "X-DEX/BCC",
+      "length": 12,
+      "hex": "3C 7A 35 9D 00 04 CA F8 B5 00 90 F4",
+      "spread": 0
+    },
+    {
+      "seed": 4326395,
+      "variant": "X-DEX/BVC",
+      "length": 8,
+      "hex": "CA B5 00 9D 00 04 50 F8",
+      "spread": 0
+    },
+    {
+      "seed": 4353428,
+      "variant": "X-INX/BVC",
+      "length": 12,
+      "hex": "B7 B5 00 DC 00 B5 9D 00 04 E8 50 F4",
+      "spread": 0
+    },
+    {
+      "seed": 4540367,
+      "variant": "X-DEX/BCC",
+      "length": 8,
+      "hex": "9D 00 04 CA B5 00 90 F8",
+      "spread": 0
+    },
+    {
+      "seed": 4984616,
+      "variant": "X-DEX/BCC",
+      "length": 16,
+      "hex": "7A 0C 70 9D 9D 00 04 CA B5 00 7C 10 04 78 90 F0",
+      "spread": 0
+    },
+    {
+      "seed": 5004952,
+      "variant": "X-DEX/BVC",
+      "length": 12,
+      "hex": "10 18 B5 00 9D 00 04 04 44 CA 50 F4",
+      "spread": 0
+    },
+    {
+      "seed": 5633757,
+      "variant": "X-DEX/BCC",
+      "length": 8,
+      "hex": "CA B5 00 9D 00 04 90 F8",
+      "spread": 0
+    },
+    {
+      "seed": 5833553,
+      "variant": "X-DEX/BVC",
+      "length": 8,
+      "hex": "CA B5 00 9D 00 04 50 F8",
+      "spread": 0
+    }
+  ]
+}
