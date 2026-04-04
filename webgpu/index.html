@@ -834,42 +834,88 @@
 
         $('soup').onclick = () => initSoup();
 
-        // --- GPU Mining ---
+        // --- GPU Mining (toggle state with visual preview) ---
         let miner = null;
+        let mining = false;
+        let mineTotal = 0, mineHits = 0, mineT0 = 0;
+
+        async function mineLoop() {
+            if (!mining) return;
+            const batchSize = 1024;
+            const seedBase = (crypto.getRandomValues(new Uint32Array(1))[0]) & 0x7FFFFFFF;
+
+            // DFA scan batch
+            const hits = await miner.scanBatch(seedBase, batchSize);
+            mineTotal += batchSize;
+
+            for (let i = 0; i < hits.length; i++) {
+                if (hits[i]) {
+                    mineHits++;
+                    const seed = seedBase + i;
+                    print(`  ⭐ HIT seed=${seed}`);
+                    $('seedInput').value = seed;
+                }
+            }
+
+            // Visual preview: load a random seed from this batch, run a few frames
+            const previewSeed = seedBase + Math.floor(Math.random() * batchSize);
+            const previewData = blake3soup(previewSeed, B);
+            if (gpuMode && gpuSim) {
+                for (let i = 0; i < B; i++)
+                    for (let j = 0; j < B; j++) {
+                        const off = (i * B + j) * 1024;
+                        gpuSim.writeCell(i, j, 0, previewData.subarray(off, off + 1024));
+                    }
+                // Run a handful of passes to show activity
+                for (let p = 0; p < 3; p++) await gpuSim.runPass();
+                lastCensus = await gpuSim.census();
+                totalQuanta = gpuSim.totalQuanta;
+            } else if (worker) {
+                workerSend({type:'init', B});
+                // Fill via worker is slow — just show the stats
+            }
+            requestCellViews();
+
+            // Status update
+            const elapsed = (performance.now() - mineT0) / 1000;
+            const rate = mineTotal / elapsed;
+            $('mine').textContent = `Stop (${mineHits} hits, ${(rate/1000).toFixed(0)}K/s)`;
+            currentSeed = previewSeed;
+            $('seedInput').value = previewSeed;
+
+            // Schedule next batch after a frame
+            if (mining) requestAnimationFrame(() => mineLoop());
+        }
+
         $('mine').onclick = async () => {
+            if (mining) {
+                // Stop
+                mining = false;
+                $('mine').textContent = 'Mine';
+                const elapsed = (performance.now() - mineT0) / 1000;
+                print(`Mining stopped. ${mineTotal} seeds in ${elapsed.toFixed(1)}s, ${mineHits} hits.`);
+                return;
+            }
+
             if (!navigator.gpu) { print('WebGPU not available for mining.'); return; }
-            print('Starting GPU miner...');
+
+            // Start
             try {
                 if (!miner) {
+                    print('Initializing GPU miner...');
                     const { WebGPUMiner } = await import('./miner.js');
                     miner = await WebGPUMiner.create({ boardSize: B, batchSize: 1024 });
-                    print('Miner ready. Scanning seeds...');
                 }
-                const batchSize = 1024;
-                let seedBase = (crypto.getRandomValues(new Uint32Array(1))[0]) & 0x7FFFFFFF;
-                let totalScanned = 0, found = 0;
-                const t0 = performance.now();
-
-                for (let batch = 0; batch < 100; batch++) {
-                    const hits = await miner.scanBatch(seedBase + batch * batchSize, batchSize);
-                    totalScanned += batchSize;
-                    for (let i = 0; i < hits.length; i++) {
-                        if (hits[i]) {
-                            found++;
-                            const seed = seedBase + batch * batchSize + i;
-                            print(`  HIT seed=${seed}`);
-                            $('seedInput').value = seed;
-                        }
-                    }
-                    if (found > 0) break;
-                    if (batch % 10 === 9) {
-                        const elapsed = (performance.now() - t0) / 1000;
-                        print(`  ${totalScanned} seeds, ${(totalScanned/elapsed).toFixed(0)}/s...`);
-                    }
-                }
-                const elapsed = (performance.now() - t0) / 1000;
-                print(`Mined ${totalScanned} seeds in ${elapsed.toFixed(1)}s (${(totalScanned/elapsed).toFixed(0)}/s), ${found} hits.`);
-                if (found > 0) print('Enter the seed and click Soup to see it.');
+                mining = true;
+                mineTotal = 0;
+                mineHits = 0;
+                mineT0 = performance.now();
+                // Stop normal sim
+                running = false;
+                $('toggle').textContent = 'Start';
+                $('mine').textContent = 'Stop (0 hits)';
+                print('Mining... previewing random seeds on the board.');
+                mineLoop();
             } catch(e) {
                 print('Mining error: ' + e.message);
                 console.error(e);
