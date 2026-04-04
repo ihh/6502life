@@ -881,12 +881,28 @@
             REPLICATOR_PRESETS.forEach((p, i) => {
                 const opt = document.createElement('option');
                 opt.value = i;
-                opt.textContent = p.name;
+                opt.textContent = p.seed != null ? `seed:${p.seed} ${p.name}` : p.name;
                 sel.appendChild(opt);
             });
-            sel.onchange = () => { selectedPreset = parseInt(sel.value); };
+            sel.onchange = () => {
+                selectedPreset = parseInt(sel.value);
+                const preset = REPLICATOR_PRESETS[selectedPreset];
+                if (preset.seed != null) {
+                    $('seedInput').value = preset.seed;
+                }
+            };
         }
-        $('rep').onclick = () => initRep();
+        $('rep').onclick = () => {
+            const preset = REPLICATOR_PRESETS[selectedPreset];
+            if (preset.seed != null) {
+                // Mined organism: load BLAKE3 soup with this seed.
+                // The replicator is naturally present in the random init.
+                initSoup(preset.seed);
+            } else {
+                // Synthetic: paste code onto blank board
+                initRep();
+            }
+        };
         $('jam').onclick = () => initJam();
 
         main();
