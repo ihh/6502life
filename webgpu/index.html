@@ -68,6 +68,9 @@
             background: #030; color: #0f0; border: 1px solid #0f0;
             cursor: pointer; width: 100%;
         }
+        button:disabled, select:disabled, input:disabled {
+            opacity: 0.3; cursor: default;
+        }
         #repSelect { font-size: 10px; padding: 3px 4px; }
         #specimens { display: flex; flex-direction: column; gap: 2px; }
         .specimen {
@@ -392,7 +395,7 @@
             } else {
                 statsEl.style.color = '';
             }
-            statsEl.textContent=c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s '+fpsVal+'fps';
+            if (!mining) statsEl.textContent=c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s '+fpsVal+'fps';
 
             gridCtx.fillStyle='#111'; gridCtx.fillRect(0,0,gridCanvas.width,gridCanvas.height);
             gridCtx.font='10px monospace'; gridCtx.textBaseline='top';
