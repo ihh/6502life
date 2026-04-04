@@ -934,6 +934,10 @@
         // --- GPU Mining (toggle state with visual preview) ---
         let miner = null;
         let mining = false;
+        function setMiningUI(on) {
+            for (const id of ['toggle','soup','repSelect','seedInput','speed','engine','noise','brush','capture'])
+                if ($(id)) $(id).disabled = on;
+        }
         let mineTotal = 0, mineDfaHits = 0, mineVerified = 0, mineT0 = 0;
         let pendingVerify = []; // seeds awaiting verification
 
@@ -1010,6 +1014,7 @@
         $('mine').onclick = async () => {
             if (mining) {
                 mining = false;
+                setMiningUI(false);
                 $('mine').textContent = 'Mine';
                 const elapsed = (performance.now() - mineT0) / 1000;
                 print(`Mining stopped. ${mineTotal} seeds in ${elapsed.toFixed(1)}s, ${mineDfaHits} DFA hits, ${mineVerified} verified.`);
@@ -1025,6 +1030,7 @@
                     miner = await WebGPUMiner.create({ boardSize: B, batchSize: 1024 });
                 }
                 mining = true;
+                setMiningUI(true);
                 mineTotal = 0; mineDfaHits = 0; mineVerified = 0;
                 pendingVerify = [];
                 mineT0 = performance.now();
