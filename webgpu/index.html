@@ -834,72 +834,158 @@
 
         $('soup').onclick = () => initSoup();
 
+        // --- Discovered organisms: localStorage persistence ---
+        const STORAGE_KEY = '6502life_discoveries';
+        function loadDiscoveries() {
+            try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
+            catch { return []; }
+        }
+        function saveDiscovery(d) {
+            const all = loadDiscoveries();
+            if (all.some(x => x.seed === d.seed)) return; // dedup
+            all.unshift(d); // newest first
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+            addDiscoveryToDropdown(d);
+        }
+        function addDiscoveryToDropdown(d) {
+            const sel = $('repSelect');
+            const opt = document.createElement('option');
+            opt.value = 'disc_' + d.seed;
+            opt.textContent = `★ seed:${d.seed} spread=${d.spread} L=${d.length || '?'}`;
+            opt.style.color = '#0f0';
+            // Insert before the first non-discovery option
+            const firstPreset = sel.querySelector('option:not([value^="disc_"])');
+            sel.insertBefore(opt, firstPreset);
+        }
+        // Load saved discoveries into dropdown on startup
+        for (const d of loadDiscoveries()) addDiscoveryToDropdown(d);
+
+        // --- Verify a DFA hit by simulation ---
+        async function verifyHit(seed) {
+            if (!gpuMode || !gpuSim) return null;
+
+            // Load BLAKE3 soup
+            const data = blake3soup(seed, B);
+            gpuSim.totalQuanta = 0;
+            for (let i = 0; i < B; i++)
+                for (let j = 0; j < B; j++) {
+                    const off = (i * B + j) * 1024;
+                    gpuSim.writeCell(i, j, 0, data.subarray(off, off + 1024));
+                }
+
+            // Run 60 passes (~enough for a replicator to spread)
+            for (let p = 0; p < 60; p++) await gpuSim.runPass();
+
+            // Census: check for functional replicators
+            const census = await gpuSim.census();
+            lastCensus = census;
+            totalQuanta = gpuSim.totalQuanta;
+            requestCellViews();
+
+            if (census.functional < 2) return null; // no spread
+
+            // Find the replicator signature
+            const top = census.topLoops[0];
+            if (!top) return null;
+            const [sig, count] = top;
+            const progBytes = [];
+            for (let i = 0; i < sig.length; i += 2)
+                progBytes.push(parseInt(sig.substr(i, 2), 16));
+
+            return {
+                seed,
+                spread: count,
+                functional: census.functional,
+                hex: sig,
+                length: progBytes.length,
+                program: progBytes,
+                time: new Date().toISOString(),
+            };
+        }
+
         // --- GPU Mining (toggle state with visual preview) ---
         let miner = null;
         let mining = false;
-        let mineTotal = 0, mineHits = 0, mineT0 = 0;
+        let mineTotal = 0, mineDfaHits = 0, mineVerified = 0, mineT0 = 0;
+        let pendingVerify = []; // seeds awaiting verification
 
         async function mineLoop() {
             if (!mining) return;
-            const batchSize = 1024;
-            const seedBase = (crypto.getRandomValues(new Uint32Array(1))[0]) & 0x7FFFFFFF;
 
-            // DFA scan batch
+            // If we have hits to verify, verify ONE per frame (show it on screen)
+            if (pendingVerify.length > 0) {
+                const seed = pendingVerify.shift();
+                print(`  Verifying seed=${seed}...`);
+                const result = await verifyHit(seed);
+                currentSeed = seed;
+                $('seedInput').value = seed;
+
+                if (result) {
+                    mineVerified++;
+                    saveDiscovery(result);
+                    const hex = result.program.map(b=>b.toString(16).padStart(2,'0')).join(' ');
+                    print(`  ⭐ VERIFIED seed=${seed} spread=${result.spread} L=${result.length} [${hex}]`);
+                    $('mine').textContent = `Stop (${mineVerified}★ ${mineDfaHits}dfa, ${(mineTotal/(performance.now()-mineT0)*1000).toFixed(0)}/s)`;
+                } else {
+                    print(`  ✗ dud seed=${seed} (DFA match but no spread)`);
+                }
+
+                if (mining) requestAnimationFrame(() => mineLoop());
+                return;
+            }
+
+            // Otherwise: scan a batch of seeds with DFAs
+            const batchSize = 1024;
+            const seedBase = (crypto.getRandomValues(new Uint32Array(1))[0]) >>> 0;
+
             const hits = await miner.scanBatch(seedBase, batchSize);
             mineTotal += batchSize;
 
             for (let i = 0; i < hits.length; i++) {
                 if (hits[i]) {
-                    mineHits++;
-                    const seed = seedBase + i;
-                    print(`  ⭐ HIT seed=${seed}`);
-                    $('seedInput').value = seed;
+                    mineDfaHits++;
+                    pendingVerify.push((seedBase + i) >>> 0);
                 }
             }
 
-            // Visual preview: load a random seed from this batch, run a few frames
-            const previewSeed = seedBase + Math.floor(Math.random() * batchSize);
-            const previewData = blake3soup(previewSeed, B);
-            if (gpuMode && gpuSim) {
-                for (let i = 0; i < B; i++)
-                    for (let j = 0; j < B; j++) {
-                        const off = (i * B + j) * 1024;
-                        gpuSim.writeCell(i, j, 0, previewData.subarray(off, off + 1024));
-                    }
-                // Run a handful of passes to show activity
-                for (let p = 0; p < 3; p++) await gpuSim.runPass();
-                lastCensus = await gpuSim.census();
-                totalQuanta = gpuSim.totalQuanta;
-            } else if (worker) {
-                workerSend({type:'init', B});
-                // Fill via worker is slow — just show the stats
+            // Visual preview: flash a random seed from this batch
+            if (pendingVerify.length === 0) {
+                const previewSeed = (seedBase + Math.floor(Math.random() * batchSize)) >>> 0;
+                const previewData = blake3soup(previewSeed, B);
+                if (gpuMode && gpuSim) {
+                    for (let i = 0; i < B; i++)
+                        for (let j = 0; j < B; j++) {
+                            const off = (i * B + j) * 1024;
+                            gpuSim.writeCell(i, j, 0, previewData.subarray(off, off + 1024));
+                        }
+                    for (let p = 0; p < 3; p++) await gpuSim.runPass();
+                    lastCensus = await gpuSim.census();
+                    totalQuanta = gpuSim.totalQuanta;
+                }
+                requestCellViews();
+                currentSeed = previewSeed;
+                $('seedInput').value = previewSeed;
             }
-            requestCellViews();
 
-            // Status update
+            // Status
             const elapsed = (performance.now() - mineT0) / 1000;
             const rate = mineTotal / elapsed;
-            $('mine').textContent = `Stop (${mineHits} hits, ${(rate/1000).toFixed(0)}K/s)`;
-            currentSeed = previewSeed;
-            $('seedInput').value = previewSeed;
+            $('mine').textContent = `Stop (${mineVerified}★ ${mineDfaHits}dfa, ${(rate).toFixed(0)}/s)`;
 
-            // Schedule next batch after a frame
             if (mining) requestAnimationFrame(() => mineLoop());
         }
 
         $('mine').onclick = async () => {
             if (mining) {
-                // Stop
                 mining = false;
                 $('mine').textContent = 'Mine';
                 const elapsed = (performance.now() - mineT0) / 1000;
-                print(`Mining stopped. ${mineTotal} seeds in ${elapsed.toFixed(1)}s, ${mineHits} hits.`);
+                print(`Mining stopped. ${mineTotal} seeds in ${elapsed.toFixed(1)}s, ${mineDfaHits} DFA hits, ${mineVerified} verified.`);
                 return;
             }
 
             if (!navigator.gpu) { print('WebGPU not available for mining.'); return; }
 
-            // Start
             try {
                 if (!miner) {
                     print('Initializing GPU miner...');
@@ -907,14 +993,13 @@
                     miner = await WebGPUMiner.create({ boardSize: B, batchSize: 1024 });
                 }
                 mining = true;
-                mineTotal = 0;
-                mineHits = 0;
+                mineTotal = 0; mineDfaHits = 0; mineVerified = 0;
+                pendingVerify = [];
                 mineT0 = performance.now();
-                // Stop normal sim
                 running = false;
                 $('toggle').textContent = 'Start';
-                $('mine').textContent = 'Stop (0 hits)';
-                print('Mining... previewing random seeds on the board.');
+                $('mine').textContent = 'Stop (0★ 0dfa)';
+                print('Mining... DFA hits will be verified by simulation.');
                 mineLoop();
             } catch(e) {
                 print('Mining error: ' + e.message);
@@ -931,22 +1016,30 @@
                 sel.appendChild(opt);
             });
             sel.onchange = () => {
-                selectedPreset = parseInt(sel.value);
-                const preset = REPLICATOR_PRESETS[selectedPreset];
-                if (preset.seed != null) {
-                    $('seedInput').value = preset.seed;
+                const v = sel.value;
+                if (v.startsWith('disc_')) {
+                    const seed = parseInt(v.slice(5));
+                    $('seedInput').value = seed;
+                    selectedPreset = -1;
+                } else {
+                    selectedPreset = parseInt(v);
+                    const preset = REPLICATOR_PRESETS[selectedPreset];
+                    if (preset && preset.seed != null) $('seedInput').value = preset.seed;
                 }
             };
         }
         $('rep').onclick = () => {
-            const preset = REPLICATOR_PRESETS[selectedPreset];
-            if (preset.seed != null) {
-                // Mined organism: load BLAKE3 soup with this seed.
-                // The replicator is naturally present in the random init.
-                initSoup(preset.seed);
-            } else {
-                // Synthetic: paste code onto blank board
-                initRep();
+            const v = $('repSelect').value;
+            if (v.startsWith('disc_')) {
+                // Discovered organism: load from BLAKE3 seed
+                initSoup(parseInt(v.slice(5)));
+            } else if (selectedPreset >= 0) {
+                const preset = REPLICATOR_PRESETS[selectedPreset];
+                if (preset.seed != null) {
+                    initSoup(preset.seed);
+                } else {
+                    initRep();
+                }
             }
         };
         $('jam').onclick = () => initJam();
