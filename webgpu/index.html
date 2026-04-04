@@ -934,9 +934,22 @@
         // --- GPU Mining (toggle state with visual preview) ---
         let miner = null;
         let mining = false;
+        let miningBlink = null;
         function setMiningUI(on) {
             for (const id of ['toggle','soup','repSelect','seedInput','speed','engine','noise','brush','capture'])
                 if ($(id)) $(id).disabled = on;
+            if (on) {
+                let vis = true;
+                miningBlink = setInterval(() => {
+                    vis = !vis;
+                    statsEl.textContent = vis ? '⛏ MINING' : '';
+                    statsEl.style.color = '#ff0';
+                }, 600);
+            } else {
+                if (miningBlink) { clearInterval(miningBlink); miningBlink = null; }
+                statsEl.textContent = '';
+                statsEl.style.color = '';
+            }
         }
         let mineTotal = 0, mineDfaHits = 0, mineVerified = 0, mineT0 = 0;
         let pendingVerify = []; // seeds awaiting verification
@@ -965,7 +978,7 @@
                     print(`  ✗ verify error: ${e.message}`);
                     console.error('verifyHit error:', e);
                 }
-                $('mine').textContent = `Stop (${mineVerified}★ ${mineDfaHits}dfa)`;
+                $('mine').textContent = 'Stop';
                 if (mining) requestAnimationFrame(() => mineLoop());
                 return;
             }
@@ -1003,10 +1016,18 @@
                 $('seedInput').value = previewSeed;
             }
 
-            // Status
+            // Update blinking status with stats
             const elapsed = (performance.now() - mineT0) / 1000;
             const rate = mineTotal / elapsed;
-            $('mine').textContent = `Stop (${mineVerified}★ ${mineDfaHits}dfa, ${(rate).toFixed(0)}/s)`;
+            if (miningBlink) { clearInterval(miningBlink); }
+            let vis = true;
+            miningBlink = setInterval(() => {
+                vis = !vis;
+                statsEl.textContent = vis
+                    ? `⛏ MINING  ${mineVerified}★  ${mineDfaHits} dfa  ${(rate).toFixed(0)} seeds/s`
+                    : `⛏ MINING  ${mineTotal.toLocaleString()} scanned`;
+                statsEl.style.color = '#ff0';
+            }, 600);
 
             if (mining) requestAnimationFrame(() => mineLoop());
         }
@@ -1036,7 +1057,7 @@
                 mineT0 = performance.now();
                 running = false;
                 $('toggle').textContent = 'Start';
-                $('mine').textContent = 'Stop (0★ 0dfa)';
+                $('mine').textContent = 'Stop';
                 print('Mining... DFA hits will be verified by simulation.');
                 mineLoop();
             } catch(e) {
