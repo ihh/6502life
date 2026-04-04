@@ -68,6 +68,7 @@
             background: #030; color: #0f0; border: 1px solid #0f0;
             cursor: pointer; width: 100%;
         }
+        #repSelect { font-size: 10px; padding: 3px 4px; }
         #specimens { display: flex; flex-direction: column; gap: 2px; }
         .specimen {
             font-family: monospace; font-size: 10px; padding: 2px 4px;
@@ -118,6 +119,7 @@
             </div>
             <div class="ctrl-col">
                 <button id="soup">Soup</button>
+                <select id="repSelect"></select>
                 <button id="rep">Rep</button>
                 <button id="jam">Jam</button>
             </div>
@@ -166,7 +168,24 @@
         let nbrDir='s';
 
         // --- Replicator program (LDA zp,X; STA abs,X; INX; BCC) ---
-        const REP_CODE = [0xB5, 0x00, 0x9D, 0x00, 0x04, 0xE8, 0x90, 0xF8];
+        // Turtle's Tiers mined organisms
+        const REPLICATOR_PRESETS = [
+            { name: '#1 DEX/BCC L=8 (bare)', seed: 417314, code: [0xB5,0x00,0x9D,0x00,0x04,0xCA,0x90,0xF8] },
+            { name: '#2 DEX/BVC L=12 (4ins)', seed: 1548160, code: [0xB5,0x00,0x9D,0x00,0x04,0xD8,0x7C,0xBA,0xCA,0xCA,0x50,0xF4] },
+            { name: '#3 DEX/BCC L=12 (4ins)', seed: 2025457, code: [0x04,0x00,0xB5,0x00,0x9D,0x00,0x04,0xCA,0x74,0x9D,0x90,0xF4] },
+            { name: '#4 DEX/BVC L=8 (bare)', seed: 2805158, code: [0xB5,0x00,0x9D,0x00,0x04,0xCA,0x50,0xF8] },
+            { name: '#5 DEX/BVC L=8', seed: 4818116, code: [0xB5,0x00,0x9D,0x00,0x04,0xCA,0x50,0xF8] },
+            { name: '#6 DEX/BVC L=8', seed: 5843534, code: [0xB5,0x00,0x9D,0x00,0x04,0xCA,0x50,0xF8] },
+            { name: '#7 DEX/BCC L=8', seed: 7430868, code: [0xB5,0x00,0x9D,0x00,0x04,0xCA,0x90,0xF8] },
+            { name: '#8 DEX/BVC L=8', seed: 10998689, code: [0xB5,0x00,0x9D,0x00,0x04,0xCA,0x50,0xF8] },
+            { name: '#9 DEX/BVC L=8', seed: 11664352, code: [0xB5,0x00,0x9D,0x00,0x04,0xCA,0x50,0xF8] },
+            { name: 'INX/BCC L=8', seed: null, code: [0xB5,0x00,0x9D,0x00,0x04,0xE8,0x90,0xF8] },
+            { name: 'INX/BVC L=8', seed: null, code: [0xB5,0x00,0x9D,0x00,0x04,0xE8,0x50,0xF8] },
+            { name: 'DEY/BCC L=8 (LAX)', seed: null, code: [0xB7,0x00,0x99,0x00,0x04,0x88,0x90,0xF8] },
+            { name: 'INY/BVC L=8 (LAX)', seed: null, code: [0xB7,0x00,0x99,0x00,0x04,0xC8,0x50,0xF8] },
+        ];
+        let selectedPreset = 0;
+        function REP_CODE() { return REPLICATOR_PRESETS[selectedPreset].code; }
         // --- Alien-killer: continuous loop, shibboleth $42, JAM+copy+BMI ---
         const ALIEN_KILLER_CODE = [
             0xA9, 0x42, 0xCD, 0x01, 0x04, 0xF0, 0xF9,   // LDA #$42; CMP $0401; BEQ @start
@@ -571,7 +590,7 @@
                 for (let i = 0; i < B; i++)
                     for (let j = 0; j < B; j++)
                         gpuSim.writeCell(i, j, 0, new Uint8Array(1024));
-                gpuSim.writeCell(0, 0, 0, REP_CODE);
+                gpuSim.writeCell(0, 0, 0, REP_CODE());
                 gpuSim.writeCell(0, 0, 0xF9, [0x00, 0x00]);
                 gpuSim.writeCell(0, 0, 0xFF, [0xFF]);
                 gpuSim.census().then(c => { lastCensus = c; });
@@ -598,7 +617,7 @@
                     for (let j = 0; j < B; j++)
                         gpuSim.writeCell(i, j, 0, new Uint8Array(1024));
                 // Replicator at (0,0)
-                gpuSim.writeCell(0, 0, 0, REP_CODE);
+                gpuSim.writeCell(0, 0, 0, REP_CODE());
                 gpuSim.writeCell(0, 0, 0xF9, [0x00, 0x00]);
                 gpuSim.writeCell(0, 0, 0xFF, [0xFF]);
                 // Alien-killer at center
@@ -647,7 +666,7 @@
                 if(msg.type==='ready'){
                     if (!gpuMode) {
                         // Always place replicator at (0,0)
-                        workerSend({type:'writeCell',i:0,j:0,offset:0,data:[...REP_CODE]});
+                        workerSend({type:'writeCell',i:0,j:0,offset:0,data:[...REP_CODE()]});
                         workerSend({type:'writeCell',i:0,j:0,offset:0xF9,data:[0x00,0x00]});
                         workerSend({type:'writeCell',i:0,j:0,offset:0xFF,data:[0xFF]});
                         // Jam mode: also place alien-killer at center
@@ -793,6 +812,17 @@
         };
 
         $('soup').onclick = () => initSoup();
+        // Populate replicator preset dropdown
+        {
+            const sel = $('repSelect');
+            REPLICATOR_PRESETS.forEach((p, i) => {
+                const opt = document.createElement('option');
+                opt.value = i;
+                opt.textContent = p.name;
+                sel.appendChild(opt);
+            });
+            sel.onchange = () => { selectedPreset = parseInt(sel.value); };
+        }
         $('rep').onclick = () => initRep();
         $('jam').onclick = () => initJam();
 
