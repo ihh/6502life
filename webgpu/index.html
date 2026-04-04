@@ -844,6 +844,11 @@
         // seed input: Enter key loads BLAKE3 soup
 
 
+        // Mining state (declared early so updateDiscoveryStats can read them)
+        let mineTotal = 0, mineDfaHits = 0, mineVerified = 0, mineT0 = 0;
+        let pendingVerify = [];
+        let mineDebugSeed = null;
+
         // --- Discovered organisms: localStorage persistence ---
         const STORAGE_KEY = '6502life_discoveries';
         const MINE_STATS_KEY = '6502life_mine_stats';
@@ -1007,9 +1012,7 @@
             statsEl.textContent = `⛏ MINING  seeds:${totalSeeds.toLocaleString()}  near-misses:${totalDfa}  discoveries:${disc}  ${(rate).toFixed(0)}/s`;
             statsEl.style.color = '#ff0';
         }
-        let mineTotal = 0, mineDfaHits = 0, mineVerified = 0, mineT0 = 0;
-        let pendingVerify = [];
-        let mineDebugSeed = null; // if set, first batch starts here
+        // (mineTotal etc. declared above, before localStorage code)
 
         async function mineLoop() {
             if (!mining) return;
