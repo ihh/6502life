@@ -123,6 +123,7 @@
                 <select id="repSelect"></select>
                 <button id="rep">Rep</button>
                 <button id="jam">Jam</button>
+                <button id="mine" title="GPU mine for replicator seeds">Mine</button>
             </div>
             <div class="ctrl-col">
                 <select id="noise">
@@ -832,6 +833,48 @@
         };
 
         $('soup').onclick = () => initSoup();
+
+        // --- GPU Mining ---
+        let miner = null;
+        $('mine').onclick = async () => {
+            if (!navigator.gpu) { print('WebGPU not available for mining.'); return; }
+            print('Starting GPU miner...');
+            try {
+                if (!miner) {
+                    const { WebGPUMiner } = await import('./miner.js');
+                    miner = await WebGPUMiner.create({ boardSize: B, batchSize: 1024 });
+                    print('Miner ready. Scanning seeds...');
+                }
+                const batchSize = 1024;
+                let seedBase = (crypto.getRandomValues(new Uint32Array(1))[0]) & 0x7FFFFFFF;
+                let totalScanned = 0, found = 0;
+                const t0 = performance.now();
+
+                for (let batch = 0; batch < 100; batch++) {
+                    const hits = await miner.scanBatch(seedBase + batch * batchSize, batchSize);
+                    totalScanned += batchSize;
+                    for (let i = 0; i < hits.length; i++) {
+                        if (hits[i]) {
+                            found++;
+                            const seed = seedBase + batch * batchSize + i;
+                            print(`  HIT seed=${seed}`);
+                            $('seedInput').value = seed;
+                        }
+                    }
+                    if (found > 0) break;
+                    if (batch % 10 === 9) {
+                        const elapsed = (performance.now() - t0) / 1000;
+                        print(`  ${totalScanned} seeds, ${(totalScanned/elapsed).toFixed(0)}/s...`);
+                    }
+                }
+                const elapsed = (performance.now() - t0) / 1000;
+                print(`Mined ${totalScanned} seeds in ${elapsed.toFixed(1)}s (${(totalScanned/elapsed).toFixed(0)}/s), ${found} hits.`);
+                if (found > 0) print('Enter the seed and click Soup to see it.');
+            } catch(e) {
+                print('Mining error: ' + e.message);
+                console.error(e);
+            }
+        };
         // Populate replicator preset dropdown
         {
             const sel = $('repSelect');
