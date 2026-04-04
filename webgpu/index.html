@@ -845,6 +845,8 @@
 
 
         // Mining state (declared early so updateDiscoveryStats can read them)
+        let miner = null;
+        let mining = false;
         let mineTotal = 0, mineDfaHits = 0, mineVerified = 0, mineT0 = 0;
         let pendingVerify = [];
         let mineDebugSeed = null;
@@ -989,8 +991,7 @@
         }
 
         // --- GPU Mining (toggle state with visual preview) ---
-        let miner = null;
-        let mining = false;
+        // (miner, mining declared above)
         let miningStatsInterval = null;
         function setMiningUI(on) {
             for (const id of ['toggle','repSelect','seedInput','speed','engine','noise','brush','capture'])
