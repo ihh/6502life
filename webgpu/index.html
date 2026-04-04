@@ -119,8 +119,7 @@
             </div>
             <div class="ctrl-col">
                 <select id="repSelect"></select>
-                <input id="seedInput" type="number" placeholder="seed" style="width:80px;font:11px monospace;background:#222;color:#0f0;border:1px solid #0a0;padding:2px">
-                <button id="soup">Go</button>
+                <input id="seedInput" type="number" placeholder="seed" style="width:80px;font:11px monospace;background:#222;color:#0f0;border:1px solid #0a0;padding:2px" title="Enter seed, press Enter">
                 <button id="mine" title="GPU mine for replicator seeds">Mine</button>
             </div>
             <div class="ctrl-col">
@@ -830,7 +829,8 @@
             }
         };
 
-        $('soup').onclick = () => initSoup();
+        // seed input: Enter key loads BLAKE3 soup
+
 
         // --- Discovered organisms: localStorage persistence ---
         const STORAGE_KEY = '6502life_discoveries';
@@ -934,22 +934,22 @@
         // --- GPU Mining (toggle state with visual preview) ---
         let miner = null;
         let mining = false;
-        let miningBlink = null;
+        let miningStatsInterval = null;
         function setMiningUI(on) {
-            for (const id of ['toggle','soup','repSelect','seedInput','speed','engine','noise','brush','capture'])
+            for (const id of ['toggle','repSelect','seedInput','speed','engine','noise','brush','capture'])
                 if ($(id)) $(id).disabled = on;
             if (on) {
-                let vis = true;
-                miningBlink = setInterval(() => {
-                    vis = !vis;
-                    statsEl.textContent = vis ? '⛏ MINING' : '';
-                    statsEl.style.color = '#ff0';
-                }, 600);
+                miningStatsInterval = setInterval(updateMiningStats, 500);
             } else {
-                if (miningBlink) { clearInterval(miningBlink); miningBlink = null; }
-                statsEl.textContent = '';
+                if (miningStatsInterval) { clearInterval(miningStatsInterval); miningStatsInterval = null; }
                 statsEl.style.color = '';
             }
+        }
+        function updateMiningStats() {
+            const elapsed = (performance.now() - mineT0) / 1000;
+            const rate = elapsed > 0 ? mineTotal / elapsed : 0;
+            statsEl.textContent = `⛏ MINING  seeds:${mineTotal.toLocaleString()}  near-misses:${mineDfaHits}  hits:${mineVerified}  ${(rate).toFixed(0)}/s`;
+            statsEl.style.color = '#ff0';
         }
         let mineTotal = 0, mineDfaHits = 0, mineVerified = 0, mineT0 = 0;
         let pendingVerify = []; // seeds awaiting verification
@@ -1016,19 +1016,6 @@
                 $('seedInput').value = previewSeed;
             }
 
-            // Update blinking status with stats
-            const elapsed = (performance.now() - mineT0) / 1000;
-            const rate = mineTotal / elapsed;
-            if (miningBlink) { clearInterval(miningBlink); }
-            let vis = true;
-            miningBlink = setInterval(() => {
-                vis = !vis;
-                statsEl.textContent = vis
-                    ? `⛏ MINING  ${mineVerified}★  ${mineDfaHits} dfa  ${(rate).toFixed(0)} seeds/s`
-                    : `⛏ MINING  ${mineTotal.toLocaleString()} scanned`;
-                statsEl.style.color = '#ff0';
-            }, 600);
-
             if (mining) requestAnimationFrame(() => mineLoop());
         }
 
@@ -1091,7 +1078,8 @@
             };
         }
         // Go button / Enter key: load whatever seed is in the input
-        $('soup').onclick = () => initSoup();
+        // seed input: Enter key loads BLAKE3 soup
+
         $('seedInput').onkeydown = (e) => { if (e.key === 'Enter') initSoup(); };
 
         main();
