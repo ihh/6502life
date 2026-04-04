@@ -859,44 +859,65 @@
         for (const d of loadDiscoveries()) addDiscoveryToDropdown(d);
 
         // --- Verify a DFA hit by simulation ---
+        // Uses the display sim (GPU or worker) so the user sees it happen.
+        // Falls back to inline BareSimCPU if neither is available.
         async function verifyHit(seed) {
-            if (!gpuMode || !gpuSim) return null;
-
-            // Load BLAKE3 soup
             const data = blake3soup(seed, B);
-            gpuSim.totalQuanta = 0;
-            for (let i = 0; i < B; i++)
-                for (let j = 0; j < B; j++) {
-                    const off = (i * B + j) * 1024;
-                    gpuSim.writeCell(i, j, 0, data.subarray(off, off + 1024));
-                }
 
-            // Run 60 passes (~enough for a replicator to spread)
-            for (let p = 0; p < 60; p++) await gpuSim.runPass();
+            if (gpuMode && gpuSim) {
+                // GPU path — fastest, visual
+                gpuSim.totalQuanta = 0;
+                for (let i = 0; i < B; i++)
+                    for (let j = 0; j < B; j++) {
+                        const off = (i * B + j) * 1024;
+                        gpuSim.writeCell(i, j, 0, data.subarray(off, off + 1024));
+                    }
+                for (let p = 0; p < 60; p++) await gpuSim.runPass();
+                const census = await gpuSim.census();
+                lastCensus = census;
+                totalQuanta = gpuSim.totalQuanta;
+                requestCellViews();
+                return parseCensusResult(seed, census);
+            }
 
-            // Census: check for functional replicators
-            const census = await gpuSim.census();
-            lastCensus = census;
-            totalQuanta = gpuSim.totalQuanta;
+            // CPU fallback: create temporary BareSimCPU inline
+            // (worker protocol doesn't support run-N-passes-then-census)
+            const { BareSimCPU } = await import('./bare-sim-cpu.js');
+            const tmpSim = new BareSimCPU(B, 1024, { seed: 42 });
+            tmpSim.storage.set(data);
+            for (let p = 0; p < 60; p++) await tmpSim.runPass();
+            const census = await tmpSim.census();
+
+            // Also load onto the display worker so user can see it
+            if (worker) {
+                workerSend({type:'init', B});
+                await new Promise(resolve => {
+                    const origH = worker.onmessage;
+                    worker.onmessage = (e) => { origH(e); if (e.data.type === 'ready') resolve(); };
+                });
+                for (let i = 0; i < B; i++)
+                    for (let j = 0; j < B; j++) {
+                        const off = (i * B + j) * 1024;
+                        workerSend({type:'writeCell', i, j, offset: 0,
+                            data: Array.from(tmpSim.storage.subarray(off, off + 1024))});
+                    }
+                workerSend({type:'census'});
+            }
             requestCellViews();
+            return parseCensusResult(seed, census);
+        }
 
-            if (census.functional < 2) return null; // no spread
-
-            // Find the replicator signature
-            const top = census.topLoops[0];
+        function parseCensusResult(seed, census) {
+            if (!census || census.functional < 2) return null;
+            const top = census.topLoops && census.topLoops[0];
             if (!top) return null;
             const [sig, count] = top;
             const progBytes = [];
             for (let i = 0; i < sig.length; i += 2)
                 progBytes.push(parseInt(sig.substr(i, 2), 16));
-
             return {
-                seed,
-                spread: count,
-                functional: census.functional,
-                hex: sig,
-                length: progBytes.length,
-                program: progBytes,
+                seed, spread: count, functional: census.functional,
+                hex: sig, length: progBytes.length, program: progBytes,
                 time: new Date().toISOString(),
             };
         }
