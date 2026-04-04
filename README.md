@@ -6,7 +6,10 @@
 
 A 6502life board is a 2D grid of cells, each running a 6502 CPU with 1KB of memory.
 Adjacent cells share memory, allowing programs to read and write their neighbors.
-The board is initialized from a **ChaCha20 stream cipher** keyed by a 32-bit seed.
+The board is initialized from a **BLAKE3** hash keyed by a 32-bit seed,
+using the **Turtle's Tiers** biased soup -- an inverse-CDF mapping that
+concentrates probability on replicator-relevant opcodes ($B5, $9D, $00,
+$04, $CA, branch opcodes, safe NOP inserts).
 
 Most seeds produce gibberish. But roughly 1 in 2^60 random 8-byte sequences
 encodes a viable **self-replicating program** -- a copy loop that spreads
@@ -17,7 +20,8 @@ B5 00 9D 00 04 E8 90 F8    LDA $00,X / STA $0400,X / INX / BCC loop
 ```
 
 Finding a seed that contains one of these replicators is a **cryptopuzzle**.
-The ChaCha20 cipher ensures there is no shortcut -- you must search the space.
+The BLAKE3 hash ensures there is no shortcut -- you must search the space.
+The reference mining implementation is GPU-accelerated JAX in `jax6502/`.
 
 ## Replicator Variants
 
@@ -35,6 +39,25 @@ Longer variants (9-25 bytes) include **NOP slides** -- harmless opcodes
 inserted between the core bytes. There are 92 safe slide opcodes
 (22 single-byte + 43 two-byte + 27 three-byte). Many more variants
 remain to be discovered.
+
+## Mined Organisms
+
+The JAX GPU miner (`jax6502/mine_dfa.py`) has found 9 viable organisms
+so far, from 12.3 million seeds scanned in ~1 hour:
+
+| Seed | Cell | Program | Variant |
+|------|------|---------|---------|
+| 417314 | (28,6) | `B5 00 9D 00 04 CA 90 F8` | DEX/BCC |
+| 2805158 | (53,25) | `B5 00 9D 00 04 CA 50 F8` | DEX/BVC |
+| 4818116 | (30,45) | `B5 00 9D 00 04 CA 50 F8` | DEX/BVC |
+| 1548160 | (15,38) | `B5 00 9D 00 04 D8 7C BA CA CA 50 F4` | 12-byte, NOP slide |
+| 2025457 | (22,36) | `04 00 B5 00 9D 00 04 CA 74 9D 90 F4` | 12-byte, NOP slide |
+
+(Full list in `jax6502/mined_organisms.json`)
+
+The 12-byte variants are especially interesting -- they include CLD ($D8),
+NOP zp,X ($7C), CLV ($BA), and other safe inserts that arose naturally
+from the Turtle's Tiers soup.
 
 ## Effective Information Content
 
@@ -115,9 +138,10 @@ before seeing the initialization.
 
 | Directory | Purpose |
 |-----------|---------|
+| `jax6502/` | **Primary implementation**: JAX GPU miner, DFA scanner, BLAKE3 init, Turtle's Tiers soup |
 | `webgpu/` | Bare-sim engine + browser demo (the site at 6502life.com) |
-| `dfa/` | WFST replicator pipeline: scoring, training, experiments |
-| `coin/` | Coin protocol: ChaCha20 init, Merkle trees, sessions, contracts |
+| `dfa/` | WFST replicator pipeline: scoring, training, importance sampling |
+| `coin/` | Coin protocol: BLAKE3 init, Merkle trees, sessions, board contracts |
 | `board/` | Full BoardController: 7x7 neighborhood, noise, BRK dispatch |
 | `engine/` | Shared layer: board creation, assembler, formatting |
 | `presets/` | Assembly presets (.asm files, auto-loaded) |
