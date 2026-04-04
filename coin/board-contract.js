@@ -20,7 +20,7 @@
  */
 
 import { sha256, toHex } from './hash.js';
-import { generateBoardInit, seedToKey, deriveNonce } from './chacha20.js';
+import { blake3Board, buildSoupLookup, generateBiasedCell } from './blake3.js';
 import { DEFAULT_COIN_PARAMS } from './economics.js';
 
 /**
@@ -85,15 +85,31 @@ export class BoardContract {
     }
 
     /**
-     * Generate the initial board memory using ChaCha20.
+     * Generate the initial board memory using BLAKE3 + Turtle's Tiers bias.
+     * Each cell gets 1024 bytes of biased pseudorandom data derived from
+     * the initSeed via single-block BLAKE3 compression.
      * @returns {Uint8Array} size*size*1024 bytes
      */
     generateInit() {
-        return generateBoardInit(this.initSeed, this.size, {
-            saltWithParams: this.saltWithParams,
-            boardParams: this.boardParams,
-            difficulty: this.difficulty,
-        });
+        const seed = typeof this.initSeed === 'string'
+            ? hashSeedToU32(this.initSeed)
+            : this.initSeed >>> 0;
+        const nCells = this.size * this.size;
+        const cellBytes = 1024;
+        const total = nCells * cellBytes;
+        const board = new Uint8Array(total);
+        const lookup = buildSoupLookup();
+
+        for (let i = 0; i < nCells; i++) {
+            // Generate 1024 bytes per cell: 32 chunks of 32 biased bytes
+            for (let chunk = 0; chunk < cellBytes; chunk += 32) {
+                const subIndex = i * (cellBytes / 32) + (chunk / 32);
+                const biased = generateBiasedCell(seed, subIndex, lookup);
+                board.set(biased, i * cellBytes + chunk);
+            }
+        }
+
+        return board;
     }
 
     /**
@@ -108,7 +124,7 @@ export class BoardContract {
             seed: this.initSeed,
             rules: {
                 ...this.boardParams,
-                initMethod: 'chacha20',
+                initMethod: 'blake3',
                 saltWithParams: this.saltWithParams,
                 difficulty: this.difficulty,
             },
@@ -150,6 +166,17 @@ function countLeadingZeroBits(hex) {
         break;
     }
     return bits;
+}
+
+/**
+ * Hash a string seed to a 32-bit unsigned integer via SHA-256.
+ * Takes the first 4 bytes of SHA-256(seed) as little-endian uint32.
+ * @param {string} seed
+ * @returns {number}
+ */
+function hashSeedToU32(seed) {
+    const hash = sha256(new TextEncoder().encode(seed));
+    return (hash[0] | (hash[1] << 8) | (hash[2] << 16) | (hash[3] << 24)) >>> 0;
 }
 
 /**

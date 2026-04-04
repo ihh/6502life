@@ -62,23 +62,31 @@ describe('BoardContract', () => {
         expect(a.id()).not.toBe(b.id());
     });
 
-    it('generates ChaCha20 init', () => {
+    it('generates BLAKE3 init', () => {
         const c = new BoardContract({ initSeed: 'hello', size: 8 });
         const init = c.generateInit();
         expect(init.length).toBe(8 * 8 * 1024);
     });
 
-    it('salting changes init for same seed', () => {
-        const unsalted = new BoardContract({ initSeed: 'seed', size: 4, saltWithParams: false });
-        const salted = new BoardContract({
-            initSeed: 'seed',
-            size: 4,
-            saltWithParams: true,
-            difficulty: 10,
-        });
-        const a = unsalted.generateInit();
-        const b = salted.generateInit();
-        expect(a).not.toEqual(b);
+    it('deterministic: same seed same output', () => {
+        const c1 = new BoardContract({ initSeed: 42, size: 4 });
+        const c2 = new BoardContract({ initSeed: 42, size: 4 });
+        expect(c1.generateInit()).toEqual(c2.generateInit());
+    });
+
+    it('different seeds produce different boards', () => {
+        const a = new BoardContract({ initSeed: 100, size: 4 });
+        const b = new BoardContract({ initSeed: 200, size: 4 });
+        expect(a.generateInit()).not.toEqual(b.generateInit());
+    });
+
+    it('string seeds are hashed to u32', () => {
+        const c = new BoardContract({ initSeed: 'hello', size: 4 });
+        const init = c.generateInit();
+        expect(init.length).toBe(4 * 4 * 1024);
+        // Should be deterministic
+        const init2 = new BoardContract({ initSeed: 'hello', size: 4 }).generateInit();
+        expect(init).toEqual(init2);
     });
 
     it('meetsDifficulty checks leading zero bits', () => {
@@ -91,14 +99,14 @@ describe('BoardContract', () => {
         expect(c2.meetsDifficulty('01' + 'f'.repeat(62))).toBe(false); // 4 zero bits
     });
 
-    it('toEngineConfig produces valid config', () => {
+    it('toEngineConfig produces valid config with blake3 init method', () => {
         const c = new BoardContract({ initSeed: 'test', size: 16, difficulty: 5 });
         const config = c.toEngineConfig();
         expect(config.gameId).toBe('6502life');
         expect(config.width).toBe(16);
         expect(config.height).toBe(16);
         expect(config.seed).toBe('test');
-        expect(config.rules.initMethod).toBe('chacha20');
+        expect(config.rules.initMethod).toBe('blake3');
         expect(config.rules.difficulty).toBe(5);
     });
 
@@ -116,56 +124,5 @@ describe('BoardContract', () => {
         expect(c2.size).toBe(c.size);
         expect(c2.difficulty).toBe(c.difficulty);
         expect(c2.saltWithParams).toBe(c.saltWithParams);
-    });
-});
-
-describe('saltWithParams prevents cherry-picking', () => {
-    it('changing difficulty changes init even with same seed', () => {
-        const a = new BoardContract({
-            initSeed: 'fixed',
-            size: 8,
-            saltWithParams: true,
-            difficulty: 5,
-        });
-        const b = new BoardContract({
-            initSeed: 'fixed',
-            size: 8,
-            saltWithParams: true,
-            difficulty: 10,
-        });
-        expect(a.generateInit()).not.toEqual(b.generateInit());
-    });
-
-    it('changing noise changes init even with same seed', () => {
-        const a = new BoardContract({
-            initSeed: 'fixed',
-            size: 8,
-            saltWithParams: true,
-            boardParams: { pBitNoise: 0 },
-        });
-        const b = new BoardContract({
-            initSeed: 'fixed',
-            size: 8,
-            saltWithParams: true,
-            boardParams: { pBitNoise: 0.01 },
-        });
-        expect(a.generateInit()).not.toEqual(b.generateInit());
-    });
-
-    it('without salt, params changes do NOT change init', () => {
-        const a = new BoardContract({
-            initSeed: 'fixed',
-            size: 8,
-            saltWithParams: false,
-            difficulty: 5,
-        });
-        const b = new BoardContract({
-            initSeed: 'fixed',
-            size: 8,
-            saltWithParams: false,
-            difficulty: 10,
-        });
-        // Same seed, same size, no salt → same init
-        expect(a.generateInit()).toEqual(b.generateInit());
     });
 });

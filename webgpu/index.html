@@ -118,6 +118,7 @@
                 </select>
             </div>
             <div class="ctrl-col">
+                <input id="seedInput" type="number" placeholder="seed" style="width:70px;font:11px monospace;background:#222;color:#0f0;border:1px solid #0a0;padding:2px">
                 <button id="soup">Soup</button>
                 <select id="repSelect"></select>
                 <button id="rep">Rep</button>
@@ -520,36 +521,56 @@
             requestAnimationFrame(renderLoop);
         }
 
-        // --- SHA-256 soup: fill board with provably random bytes ---
-        async function sha256soup(totalBytes) {
-            const out = new Uint8Array(totalBytes);
-            const seed = crypto.getRandomValues(new Uint8Array(32));
-            let filled = 0, counter = 0;
-            while (filled < totalBytes) {
-                const input = new Uint8Array(36);
-                input.set(seed);
-                input[32] = (counter >> 24) & 0xFF;
-                input[33] = (counter >> 16) & 0xFF;
-                input[34] = (counter >> 8) & 0xFF;
-                input[35] = counter & 0xFF;
-                const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', input));
-                const n = Math.min(32, totalBytes - filled);
-                out.set(hash.subarray(0, n), filled);
-                filled += n;
-                counter++;
+        // --- BLAKE3 + Turtle's Tiers biased soup ---
+        // Matches jax6502/mine_blake3.py + mine_turtles_tiers.py exactly.
+        const _B3_IV = new Uint32Array([0x6A09E667,0xBB67AE85,0x3C6EF372,0xA54FF53A,0x510E527F,0x9B05688C,0x1F83D9AB,0x5BE0CD19]);
+        const _B3_PERM = [[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],[2,6,3,10,7,0,4,13,1,11,12,5,9,14,15,8],[3,4,10,12,13,2,7,14,6,5,9,0,11,15,8,1],[10,7,12,9,14,3,13,15,4,0,11,2,5,8,1,6],[12,13,9,11,15,10,14,8,7,2,5,3,0,1,6,4],[9,14,11,5,8,12,15,1,13,3,0,10,2,6,4,7],[11,15,5,0,1,9,8,6,14,10,2,12,3,4,7,13]];
+        function _b3g(s,a,b,c,d,mx,my){s[a]=(s[a]+s[b]+mx)>>>0;s[d]=((s[d]^s[a])>>>16|(s[d]^s[a])<<16)>>>0;s[c]=(s[c]+s[d])>>>0;s[b]=((s[b]^s[c])>>>20|(s[b]^s[c])<<12)>>>0;s[a]=(s[a]+s[b]+my)>>>0;s[d]=((s[d]^s[a])>>>24|(s[d]^s[a])<<8)>>>0;s[c]=(s[c]+s[d])>>>0;s[b]=((s[b]^s[c])>>>25|(s[b]^s[c])<<7)>>>0;}
+        function blake3compress(msg,iv,counter,blockLen,flags){
+            const s=new Uint32Array([iv[0],iv[1],iv[2],iv[3],iv[4],iv[5],iv[6],iv[7],_B3_IV[0],_B3_IV[1],_B3_IV[2],_B3_IV[3],counter>>>0,0,blockLen,flags]);
+            for(const p of _B3_PERM){_b3g(s,0,4,8,12,msg[p[0]],msg[p[1]]);_b3g(s,1,5,9,13,msg[p[2]],msg[p[3]]);_b3g(s,2,6,10,14,msg[p[4]],msg[p[5]]);_b3g(s,3,7,11,15,msg[p[6]],msg[p[7]]);_b3g(s,0,5,10,15,msg[p[8]],msg[p[9]]);_b3g(s,1,6,11,12,msg[p[10]],msg[p[11]]);_b3g(s,2,7,8,13,msg[p[12]],msg[p[13]]);_b3g(s,3,4,9,14,msg[p[14]],msg[p[15]]);}
+            const out=new Uint32Array(8);for(let i=0;i<8;i++)out[i]=(s[i]^s[i+8])>>>0;return out;
+        }
+        function blake3cell(seed,ci,n=24){const msg=new Uint32Array(16);msg[0]=seed>>>0;msg[1]=ci>>>0;const out=blake3compress(msg,_B3_IV,0,8,1|2|8);return new Uint8Array(out.buffer).slice(0,n);}
+
+        // Turtle's Tiers soup weights
+        const _SW=new Float64Array(256).fill(1);
+        _SW[0]=400;_SW[4]=100;_SW[0xB5]=200;_SW[0x9D]=200;_SW[0xB7]=63;_SW[0x99]=63;
+        _SW[0xCA]=200;_SW[0xE8]=40;_SW[0x88]=7;_SW[0xC8]=2;_SW[3]=5;_SW[0xFF]=5;
+        for(const b of[0x10,0x30,0x50,0x70,0x90,0xB0,0xD0,0xF0])_SW[b]=40;
+        for(const b of[0xEA,0x1A,0x3A,0x5A,0x7A,0xDA,0xFA,0x08,0x48,0x58,0x78,0x9A,0xD8,0xF8,0x18,0x38,0xB8,0xA8,0xAA,0xBA,0x98,0x8A,0x68,0x80,0x82,0x89,0xC2,0xE2,0x44,0x64,0x14,0x34,0x54,0x74,0xD4,0xF4,0xA0,0xA2,0xA9,0x0C,0x1C,0x3C,0x5C,0x7C,0xDC,0xFC])if(_SW[b]<11)_SW[b]=11;
+        const _SOUP_LUT=(()=>{const t=_SW.reduce((a,b)=>a+b,0),cdf=new Float64Array(256);let c=0;for(let i=0;i<256;i++){c+=_SW[i]/t;cdf[i]=c;}const lut=new Uint8Array(65536);let bi=0;for(let i=0;i<65536;i++){while(bi<255&&cdf[bi]<(i+0.5)/65536)bi++;lut[i]=bi;}return lut;})();
+        function applyBias(raw){const out=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)out[i]=_SOUP_LUT[Math.min(raw[i]*257,65535)];return out;}
+        function blake3biasedCell(seed,ci){const raw=blake3cell(seed,ci,24);return applyBias(raw);}
+
+        function blake3soup(seed,boardSize){
+            const nCells=boardSize*boardSize, M=1024;
+            const out=new Uint8Array(nCells*M);
+            for(let ci=0;ci<nCells;ci++){
+                const biased=blake3biasedCell(seed,ci);
+                out.set(biased,ci*M); // first 24 bytes biased, rest zero
             }
             return out;
         }
 
-        async function initSoup() {
+        let currentSeed = 0;
+
+        async function initSoup(seedOverride) {
             const wasRunning = running;
             if (running) { running = false; if (!gpuMode && worker) workerSend({type:'stop'}); }
             totalQuanta = 0; rateEMA = 0;
-            const totalBytes = B * B * 1024;
-            const data = await sha256soup(totalBytes);
+
+            // Use seed from input, override, or random
+            const seedInput = $('seedInput');
+            const seed = seedOverride != null ? seedOverride
+                : seedInput.value ? parseInt(seedInput.value)
+                : (crypto.getRandomValues(new Uint32Array(1))[0]);
+            currentSeed = seed;
+            seedInput.value = seed;
+
+            const data = blake3soup(seed, B);
             if (gpuMode && gpuSim) {
                 gpuSim.totalQuanta = 0;
-                // Write in cell-sized chunks (aligned to 4 bytes)
                 for (let i = 0; i < B; i++)
                     for (let j = 0; j < B; j++) {
                         const off = (i * B + j) * 1024;
@@ -558,7 +579,6 @@
                 lastCensus = await gpuSim.census();
             } else if (worker) {
                 workerSend({type:'init', B});
-                // Wait for ready, then fill
                 await new Promise(resolve => {
                     const orig = worker.onmessage;
                     worker.onmessage = (e) => {
@@ -576,7 +596,7 @@
             glowWrite.fill(0); glowFetch.fill(0);
             currentTrace = null;
             updateNeighbor(); requestCellViews();
-            print('Soup: SHA-256 random board initialized.');
+            print(`Soup: BLAKE3 seed=${seed} (Turtle's Tiers bias).`);
             if (wasRunning) { running = true; startSim(); }
         }
 
