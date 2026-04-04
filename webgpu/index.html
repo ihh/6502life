@@ -118,11 +118,9 @@
                 </select>
             </div>
             <div class="ctrl-col">
-                <input id="seedInput" type="number" placeholder="seed" style="width:70px;font:11px monospace;background:#222;color:#0f0;border:1px solid #0a0;padding:2px">
-                <button id="soup">Soup</button>
                 <select id="repSelect"></select>
-                <button id="rep">Rep</button>
-                <button id="jam">Jam</button>
+                <input id="seedInput" type="number" placeholder="seed" style="width:80px;font:11px monospace;background:#222;color:#0f0;border:1px solid #0a0;padding:2px">
+                <button id="soup">Go</button>
                 <button id="mine" title="GPU mine for replicator seeds">Mine</button>
             </div>
             <div class="ctrl-col">
@@ -1006,43 +1004,34 @@
                 console.error(e);
             }
         };
-        // Populate replicator preset dropdown
+        // Populate dropdown: discoveries first, then mined presets
         {
             const sel = $('repSelect');
-            REPLICATOR_PRESETS.forEach((p, i) => {
+            // Placeholder
+            const ph = document.createElement('option');
+            ph.value = '';
+            ph.textContent = '— select seed —';
+            sel.appendChild(ph);
+            // Only show presets that have seeds
+            REPLICATOR_PRESETS.filter(p => p.seed != null).forEach((p, i) => {
                 const opt = document.createElement('option');
-                opt.value = i;
-                opt.textContent = p.seed != null ? `seed:${p.seed} ${p.name}` : p.name;
+                opt.value = 'preset_' + p.seed;
+                opt.textContent = `seed:${p.seed} ${p.name}`;
                 sel.appendChild(opt);
             });
+            // Selecting immediately reseeds the board
             sel.onchange = () => {
                 const v = sel.value;
-                if (v.startsWith('disc_')) {
-                    const seed = parseInt(v.slice(5));
-                    $('seedInput').value = seed;
-                    selectedPreset = -1;
-                } else {
-                    selectedPreset = parseInt(v);
-                    const preset = REPLICATOR_PRESETS[selectedPreset];
-                    if (preset && preset.seed != null) $('seedInput').value = preset.seed;
-                }
+                if (!v) return;
+                const seed = parseInt(v.replace(/^(disc_|preset_)/, ''));
+                if (isNaN(seed)) return;
+                $('seedInput').value = seed;
+                initSoup(seed);
             };
         }
-        $('rep').onclick = () => {
-            const v = $('repSelect').value;
-            if (v.startsWith('disc_')) {
-                // Discovered organism: load from BLAKE3 seed
-                initSoup(parseInt(v.slice(5)));
-            } else if (selectedPreset >= 0) {
-                const preset = REPLICATOR_PRESETS[selectedPreset];
-                if (preset.seed != null) {
-                    initSoup(preset.seed);
-                } else {
-                    initRep();
-                }
-            }
-        };
-        $('jam').onclick = () => initJam();
+        // Go button / Enter key: load whatever seed is in the input
+        $('soup').onclick = () => initSoup();
+        $('seedInput').onkeydown = (e) => { if (e.key === 'Enter') initSoup(); };
 
         main();
     </script>
