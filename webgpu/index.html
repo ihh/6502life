@@ -859,67 +859,76 @@
         for (const d of loadDiscoveries()) addDiscoveryToDropdown(d);
 
         // --- Verify a DFA hit by simulation ---
-        // Uses the display sim (GPU or worker) so the user sees it happen.
-        // Falls back to inline BareSimCPU if neither is available.
+        // Extract candidate bytes from BLAKE3 soup, simulate on a small
+        // board (4x4) like the JAX miner does. If it spreads, it's real.
+        // Then load the full BLAKE3 soup onto the display for the user.
         async function verifyHit(seed) {
-            const data = blake3soup(seed, B);
-
-            if (gpuMode && gpuSim) {
-                // GPU path — fastest, visual
-                gpuSim.totalQuanta = 0;
-                for (let i = 0; i < B; i++)
-                    for (let j = 0; j < B; j++) {
-                        const off = (i * B + j) * 1024;
-                        gpuSim.writeCell(i, j, 0, data.subarray(off, off + 1024));
-                    }
-                for (let p = 0; p < 60; p++) await gpuSim.runPass();
-                const census = await gpuSim.census();
-                lastCensus = census;
-                totalQuanta = gpuSim.totalQuanta;
-                requestCellViews();
-                return parseCensusResult(seed, census);
-            }
-
-            // CPU fallback: create temporary BareSimCPU inline
-            // (worker protocol doesn't support run-N-passes-then-census)
             const { BareSimCPU } = await import('./bare-sim-cpu.js');
-            const tmpSim = new BareSimCPU(B, 1024, { seed: 42 });
-            tmpSim.storage.set(data);
-            for (let p = 0; p < 60; p++) await tmpSim.runPass();
-            const census = await tmpSim.census();
 
-            // Also load onto the display worker so user can see it
-            if (worker) {
-                workerSend({type:'init', B});
-                await new Promise(resolve => {
-                    const origH = worker.onmessage;
-                    worker.onmessage = (e) => { origH(e); if (e.data.type === 'ready') resolve(); };
-                });
-                for (let i = 0; i < B; i++)
-                    for (let j = 0; j < B; j++) {
-                        const off = (i * B + j) * 1024;
-                        workerSend({type:'writeCell', i, j, offset: 0,
-                            data: Array.from(tmpSim.storage.subarray(off, off + 1024))});
+            // Generate the biased soup for this seed
+            const nCells = B * B;
+            // Find which cell(s) the DFA matched by running JS DFAs
+            const { buildAllDFAs, N_DFAS, ACCEPT } = await import('./miner.js');
+            if (!verifyHit._dfas) verifyHit._dfas = buildAllDFAs();
+            const dfas = verifyHit._dfas;
+
+            for (let ci = 0; ci < nCells; ci++) {
+                const raw = blake3cell(seed, ci, 24);
+                const biased = applyBias(raw);
+                const cell = new Uint8Array(32);
+                cell.set(biased);
+
+                // Run JS DFAs on this cell
+                let accepted = false;
+                for (let d = 0; d < N_DFAS; d++) {
+                    let state = 0;
+                    for (const b of cell) state = dfas[d][state * 256 + b];
+                    if (state === ACCEPT) { accepted = true; break; }
+                }
+                if (!accepted) continue;
+
+                // DFA match! Simulate on a tiny 4x4 board
+                const testSim = new BareSimCPU(4, 1024, { seed: 42 });
+                testSim.writeCell(0, 0, 0, cell);
+                testSim.writeCell(0, 0, 0xF9, [0x00, 0x00]); // PC=0
+                testSim.writeCell(0, 0, 0xFB, [0x30]);        // P
+                testSim.writeCell(0, 0, 0xFF, [0xFF]);         // S
+                for (let p = 0; p < 100; p++) await testSim.runPass();
+                const census = await testSim.census();
+
+                if (census.functional >= 2) {
+                    // It spreads! Extract program signature
+                    const top = census.topLoops[0];
+                    if (!top) continue;
+                    const [sig, count] = top;
+                    const progBytes = [];
+                    for (let k = 0; k < sig.length; k += 2)
+                        progBytes.push(parseInt(sig.substr(k, 2), 16));
+
+                    // Load the full BLAKE3 soup onto the display
+                    const soupData = blake3soup(seed, B);
+                    if (gpuMode && gpuSim) {
+                        gpuSim.totalQuanta = 0;
+                        for (let i = 0; i < B; i++)
+                            for (let j = 0; j < B; j++) {
+                                const off = (i * B + j) * 1024;
+                                gpuSim.writeCell(i, j, 0, soupData.subarray(off, off + 1024));
+                            }
+                        lastCensus = await gpuSim.census();
+                        totalQuanta = gpuSim.totalQuanta;
                     }
-                workerSend({type:'census'});
-            }
-            requestCellViews();
-            return parseCensusResult(seed, census);
-        }
+                    requestCellViews();
 
-        function parseCensusResult(seed, census) {
-            if (!census || census.functional < 2) return null;
-            const top = census.topLoops && census.topLoops[0];
-            if (!top) return null;
-            const [sig, count] = top;
-            const progBytes = [];
-            for (let i = 0; i < sig.length; i += 2)
-                progBytes.push(parseInt(sig.substr(i, 2), 16));
-            return {
-                seed, spread: count, functional: census.functional,
-                hex: sig, length: progBytes.length, program: progBytes,
-                time: new Date().toISOString(),
-            };
+                    const row = Math.floor(ci / B), col = ci % B;
+                    return {
+                        seed, spread: count, functional: census.functional,
+                        cell: [row, col], hex: sig,
+                        length: progBytes.length, program: progBytes,
+                        time: new Date().toISOString(),
+                    };
+                }
+            }
+            return null; // all DFA matches were duds
         }
 
         // --- GPU Mining (toggle state with visual preview) ---
@@ -935,20 +944,24 @@
             if (pendingVerify.length > 0) {
                 const seed = pendingVerify.shift();
                 print(`  Verifying seed=${seed}...`);
-                const result = await verifyHit(seed);
-                currentSeed = seed;
-                $('seedInput').value = seed;
+                try {
+                    const result = await verifyHit(seed);
+                    currentSeed = seed;
+                    $('seedInput').value = seed;
 
-                if (result) {
-                    mineVerified++;
-                    saveDiscovery(result);
-                    const hex = result.program.map(b=>b.toString(16).padStart(2,'0')).join(' ');
-                    print(`  ⭐ VERIFIED seed=${seed} spread=${result.spread} L=${result.length} [${hex}]`);
-                    $('mine').textContent = `Stop (${mineVerified}★ ${mineDfaHits}dfa, ${(mineTotal/(performance.now()-mineT0)*1000).toFixed(0)}/s)`;
-                } else {
-                    print(`  ✗ dud seed=${seed} (DFA match but no spread)`);
+                    if (result) {
+                        mineVerified++;
+                        saveDiscovery(result);
+                        const hex = result.program.map(b=>b.toString(16).padStart(2,'0')).join(' ');
+                        print(`  ⭐ VERIFIED seed=${seed} spread=${result.spread} L=${result.length} [${hex}]`);
+                    } else {
+                        print(`  ✗ dud seed=${seed}`);
+                    }
+                } catch(e) {
+                    print(`  ✗ verify error: ${e.message}`);
+                    console.error('verifyHit error:', e);
                 }
-
+                $('mine').textContent = `Stop (${mineVerified}★ ${mineDfaHits}dfa)`;
                 if (mining) requestAnimationFrame(() => mineLoop());
                 return;
             }
