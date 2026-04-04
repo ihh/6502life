@@ -153,7 +153,7 @@
         function print(msg) { logEl.textContent += msg + '\n'; }
 
         let running=false, gpuMode=false, gpuAvailable=false, gpuSim=null, worker=null;
-        const B=32, MEAN_CYC=4096, CHAR_W=8, CHAR_H=12;
+        const B=64, MEAN_CYC=4096, CHAR_W=8, CHAR_H=12;
 
         // Target speed in cycles/cell/sec from dropdown (value is in K)
         function targetCycPerSec() { return (parseFloat($('speed').value) || 300) * 1000; }
