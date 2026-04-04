@@ -395,7 +395,16 @@
             } else {
                 statsEl.style.color = '';
             }
-            if (!mining) statsEl.textContent=c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s '+fpsVal+'fps';
+            if (!mining) {
+                const disc = loadDiscoveries();
+                const stats = loadMineStats();
+                const totalSeeds = stats.totalSeeds || 0;
+                if (totalSeeds > 0 || disc.length > 0) {
+                    statsEl.textContent = c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s  |  seeds:'+totalSeeds.toLocaleString()+' discoveries:'+disc.length;
+                } else {
+                    statsEl.textContent = c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s '+fpsVal+'fps';
+                }
+            }
 
             gridCtx.fillStyle='#111'; gridCtx.fillRect(0,0,gridCanvas.width,gridCanvas.height);
             gridCtx.font='10px monospace'; gridCtx.textBaseline='top';
@@ -837,16 +846,43 @@
 
         // --- Discovered organisms: localStorage persistence ---
         const STORAGE_KEY = '6502life_discoveries';
+        const MINE_STATS_KEY = '6502life_mine_stats';
         function loadDiscoveries() {
             try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
             catch { return []; }
         }
+        function loadMineStats() {
+            try { return JSON.parse(localStorage.getItem(MINE_STATS_KEY) || '{}'); }
+            catch { return {}; }
+        }
+        function saveMineStats() {
+            localStorage.setItem(MINE_STATS_KEY, JSON.stringify({
+                totalSeeds: mineTotal, dfaHits: mineDfaHits, verified: mineVerified }));
+        }
         function saveDiscovery(d) {
             const all = loadDiscoveries();
-            if (all.some(x => x.seed === d.seed)) return; // dedup
-            all.unshift(d); // newest first
+            if (all.some(x => x.seed === d.seed)) return;
+            all.unshift(d);
             localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
             addDiscoveryToDropdown(d);
+            updateDiscoveryStats();
+        }
+        function deleteDiscovery(seed) {
+            const all = loadDiscoveries().filter(x => x.seed !== seed);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+            // Remove from dropdown
+            const opt = $('repSelect').querySelector(`option[value="disc_${seed}"]`);
+            if (opt) opt.remove();
+            updateDiscoveryStats();
+        }
+        function clearAllDiscoveries() {
+            localStorage.removeItem(STORAGE_KEY);
+            localStorage.removeItem(MINE_STATS_KEY);
+            mineTotal = 0; mineDfaHits = 0; mineVerified = 0;
+            // Remove all disc_ options
+            for (const opt of [...$('repSelect').querySelectorAll('option[value^="disc_"]')]) opt.remove();
+            updateDiscoveryStats();
+            print('Cleared all discoveries.');
         }
         function addDiscoveryToDropdown(d) {
             const sel = $('repSelect');
@@ -854,12 +890,25 @@
             opt.value = 'disc_' + d.seed;
             opt.textContent = `★ seed:${d.seed} spread=${d.spread} L=${d.length || '?'}`;
             opt.style.color = '#0f0';
-            // Insert before the first non-discovery option
             const firstPreset = sel.querySelector('option:not([value^="disc_"])');
             sel.insertBefore(opt, firstPreset);
         }
+        function updateDiscoveryStats() {
+            const disc = loadDiscoveries();
+            const stats = loadMineStats();
+            const seeds = (stats.totalSeeds || 0) + mineTotal;
+            const dfa = (stats.dfaHits || 0) + mineDfaHits;
+            const hits = disc.length;
+            if (seeds > 0 || hits > 0) {
+                statsEl.textContent = mining
+                    ? `⛏ MINING  seeds:${seeds.toLocaleString()}  near-misses:${dfa}  hits:${hits}`
+                    : `seeds tried:${seeds.toLocaleString()}  near-misses:${dfa}  discoveries:${hits}`;
+                statsEl.style.color = mining ? '#ff0' : '#0a0';
+            }
+        }
         // Load saved discoveries into dropdown on startup
         for (const d of loadDiscoveries()) addDiscoveryToDropdown(d);
+        updateDiscoveryStats();
 
         // --- Verify a DFA hit by simulation ---
         // Extract candidate bytes from BLAKE3 soup, simulate on a small
@@ -951,11 +1000,16 @@
         function updateMiningStats() {
             const elapsed = (performance.now() - mineT0) / 1000;
             const rate = elapsed > 0 ? mineTotal / elapsed : 0;
-            statsEl.textContent = `⛏ MINING  seeds:${mineTotal.toLocaleString()}  near-misses:${mineDfaHits}  hits:${mineVerified}  ${(rate).toFixed(0)}/s`;
+            const stats = loadMineStats();
+            const totalSeeds = (stats.totalSeeds || 0) + mineTotal;
+            const totalDfa = (stats.dfaHits || 0) + mineDfaHits;
+            const disc = loadDiscoveries().length;
+            statsEl.textContent = `⛏ MINING  seeds:${totalSeeds.toLocaleString()}  near-misses:${totalDfa}  discoveries:${disc}  ${(rate).toFixed(0)}/s`;
             statsEl.style.color = '#ff0';
         }
         let mineTotal = 0, mineDfaHits = 0, mineVerified = 0, mineT0 = 0;
-        let pendingVerify = []; // seeds awaiting verification
+        let pendingVerify = [];
+        let mineDebugSeed = null; // if set, first batch starts here
 
         async function mineLoop() {
             if (!mining) return;
@@ -988,7 +1042,15 @@
 
             // Otherwise: scan a batch of seeds with DFAs
             const batchSize = 1024;
-            const seedBase = (crypto.getRandomValues(new Uint32Array(1))[0]) >>> 0;
+            let seedBase;
+            if (mineDebugSeed !== null) {
+                // Debug: start just before the target seed so it's in this batch
+                seedBase = (mineDebugSeed - Math.floor(batchSize / 2)) >>> 0;
+                print(`  Debug: scanning near seed ${mineDebugSeed}`);
+                mineDebugSeed = null;
+            } else {
+                seedBase = (crypto.getRandomValues(new Uint32Array(1))[0]) >>> 0;
+            }
 
             const hits = await miner.scanBatch(seedBase, batchSize);
             mineTotal += batchSize;
@@ -1027,8 +1089,14 @@
                 mining = false;
                 setMiningUI(false);
                 $('mine').textContent = 'Mine';
+                // Persist cumulative stats
+                const prev = loadMineStats();
+                mineTotal += prev.totalSeeds || 0;
+                mineDfaHits += prev.dfaHits || 0;
+                saveMineStats();
                 const elapsed = (performance.now() - mineT0) / 1000;
-                print(`Mining stopped. ${mineTotal} seeds in ${elapsed.toFixed(1)}s, ${mineDfaHits} DFA hits, ${mineVerified} verified.`);
+                print(`Mining stopped. ${elapsed.toFixed(1)}s this session.`);
+                updateDiscoveryStats();
                 return;
             }
 
@@ -1045,10 +1113,17 @@
                 mineTotal = 0; mineDfaHits = 0; mineVerified = 0;
                 pendingVerify = [];
                 mineT0 = performance.now();
+                // Debug: if seed input has a value, start scanning near it
+                const debugVal = $('seedInput').value;
+                mineDebugSeed = debugVal ? parseInt(debugVal) : null;
                 running = false;
                 $('toggle').textContent = 'Start';
                 $('mine').textContent = 'Stop';
-                print('Mining... DFA hits will be verified by simulation.');
+                if (mineDebugSeed !== null) {
+                    print(`Mining near seed ${mineDebugSeed} (debug)...`);
+                } else {
+                    print('Mining... DFA hits will be verified by simulation.');
+                }
                 mineLoop();
             } catch(e) {
                 print('Mining error: ' + e.message);
@@ -1080,10 +1155,22 @@
                 initSoup(seed);
             };
         }
-        // Go button / Enter key: load whatever seed is in the input
-        // seed input: Enter key loads BLAKE3 soup
-
+        // Enter key in seed input loads BLAKE3 soup
         $('seedInput').onkeydown = (e) => { if (e.key === 'Enter') initSoup(); };
+        // Right-click on dropdown: delete discovery
+        $('repSelect').oncontextmenu = (e) => {
+            const v = $('repSelect').value;
+            if (v && v.startsWith('disc_')) {
+                e.preventDefault();
+                const seed = parseInt(v.slice(5));
+                if (confirm(`Delete discovery seed ${seed}?`)) {
+                    deleteDiscovery(seed);
+                    $('repSelect').value = '';
+                }
+            }
+        };
+        // Console API for clearing all
+        window.clearDiscoveries = clearAllDiscoveries;
 
         main();
     </script>
