@@ -10,6 +10,7 @@ import AssemblyEditor from './AssemblyEditor.jsx';
 import ControlBar from './ControlBar.jsx';
 import BulkOps from './BulkOps.jsx';
 import SaveLoad from './SaveLoad.jsx';
+import ReplicatorPresets from './ReplicatorPresets.jsx';
 
 export default function Dashboard({ controller, visualizer, boardSize, boardSizes, onSizeChange }) {
     const sim = useSimulation(controller);
@@ -79,6 +80,11 @@ export default function Dashboard({ controller, visualizer, boardSize, boardSize
                         controller={controller}
                         selectedCell={sel.selectedCell}
                         onAssemble={refresh}
+                    />
+                    <ReplicatorPresets
+                        controller={controller}
+                        selectedCell={sel.selectedCell}
+                        onLoad={refresh}
                     />
                 </div>
             </div>
