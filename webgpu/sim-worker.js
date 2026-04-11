@@ -38,6 +38,9 @@ async function init(B) {
     postMessage({ type: 'ready' });
 }
 
+let censusSkip = 0;
+const CENSUS_INTERVAL = 4; // send census every N ticks (reduce CPU overhead)
+
 async function runLoop() {
     while (running) {
         passQueue += passesPerTick;
@@ -52,9 +55,13 @@ async function runLoop() {
         // Apply cosmic rays after passes
         if (n > 0) applyCosmicRays();
 
-        // Send census
-        const c = await sim.census();
-        postMessage({ type: 'census', data: c, totalQuanta: sim.totalQuanta });
+        // Send census periodically (not every tick)
+        censusSkip++;
+        if (censusSkip >= CENSUS_INTERVAL) {
+            censusSkip = 0;
+            const c = await sim.census();
+            postMessage({ type: 'census', data: c, totalQuanta: sim.totalQuanta });
+        }
 
         // Send trace if one was captured
         if (sim._lastTrace) {
@@ -62,7 +69,8 @@ async function runLoop() {
             sim._lastTrace = null;
         }
 
-        await new Promise(r => setTimeout(r, 16));
+        // Yield to allow message processing (speed/stop commands)
+        await new Promise(r => setTimeout(r, 0));
     }
 }
 
@@ -86,7 +94,7 @@ onmessage = async (e) => {
             break;
         case 'speed':
             passesPerTick = msg.speed || 1;
-            passQueue = 0;
+            // Don't reset passQueue — just change the rate
             break;
         case 'noise':
             noiseRate = msg.rate || 0;

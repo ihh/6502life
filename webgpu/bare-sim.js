@@ -29,6 +29,12 @@ export class BareSim {
         this.totalQuanta = 0;
         // Shadow buffer for read-modify-write in writeCell
         this._storageSnapshot = new Uint8Array(B * B * M);
+        // GPU census pipeline (lazy init)
+        this._censusPipeline = null;
+        this._censusBindGroup = null;
+        this._censusUniformBuffer = null;
+        this._censusHashBuffer = null;
+        this._censusReadBuffer = null;
     }
 
     static async create(B = 16, M = 1024, opts = {}) {
@@ -210,11 +216,14 @@ export class BareSim {
 
     async census() {
         const totalBytes = this.B * this.B * this.M;
-        // Read storage back to CPU
-        const readBuffer = this.device.createBuffer({
-            size: totalBytes,
-            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-        });
+        // Reuse read buffer across census calls (avoid alloc/destroy overhead)
+        if (!this._censusReadBuffer) {
+            this._censusReadBuffer = this.device.createBuffer({
+                size: totalBytes,
+                usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+            });
+        }
+        const readBuffer = this._censusReadBuffer;
         const commandEncoder = this.device.createCommandEncoder();
         commandEncoder.copyBufferToBuffer(this.storageBuffer, 0, readBuffer, 0, totalBytes);
         this.device.queue.submit([commandEncoder.finish()]);
@@ -250,7 +259,6 @@ export class BareSim {
         this._storageSnapshot.set(storage);
 
         readBuffer.unmap();
-        readBuffer.destroy();
 
         return {
             functional,
@@ -259,6 +267,60 @@ export class BareSim {
             topLoops: Object.entries(loopSigs).sort((a, b) => b[1] - a[1]).slice(0, 5),
             cellMap, cellChars,
         };
+    }
+
+    /**
+     * Fast GPU-side cell hash: returns Uint8Array[B*B] of per-cell hashes.
+     * Only transfers B*B bytes (4KB for 64x64) instead of the full 4MB board.
+     * Use for grid display every frame; use full census() less frequently.
+     */
+    async cellHashes() {
+        const nCells = this.B * this.B;
+        // Lazy-init the census compute pipeline
+        if (!this._censusPipeline) {
+            const code = await (await fetch('./census.wgsl?v=' + Date.now())).text();
+            const mod = this.device.createShaderModule({ code });
+            this._censusPipeline = this.device.createComputePipeline({
+                layout: 'auto',
+                compute: { module: mod, entryPoint: 'main' },
+            });
+            this._censusUniformBuffer = this.device.createBuffer({
+                size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+            // Output: one u32 per cell (only low byte matters)
+            this._censusHashBuffer = this.device.createBuffer({
+                size: nCells * 4,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+            this._censusReadBuffer = this.device.createBuffer({
+                size: nCells * 4,
+                usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+            this._censusBindGroup = this.device.createBindGroup({
+                layout: this._censusPipeline.getBindGroupLayout(0),
+                entries: [
+                    { binding: 0, resource: { buffer: this._censusUniformBuffer } },
+                    { binding: 1, resource: { buffer: this.storageBuffer } },
+                    { binding: 2, resource: { buffer: this._censusHashBuffer } },
+                ],
+            });
+        }
+        // Write uniforms
+        this.device.queue.writeBuffer(this._censusUniformBuffer, 0,
+            new Uint32Array([nCells, this.M, 0, 0]));
+        // Dispatch
+        const enc = this.device.createCommandEncoder();
+        const pass = enc.beginComputePass();
+        pass.setPipeline(this._censusPipeline);
+        pass.setBindGroup(0, this._censusBindGroup);
+        pass.dispatchWorkgroups(Math.ceil(nCells / 64));
+        pass.end();
+        enc.copyBufferToBuffer(this._censusHashBuffer, 0, this._censusReadBuffer, 0, nCells * 4);
+        this.device.queue.submit([enc.finish()]);
+        // Read back (only nCells*4 bytes = 16KB for 64x64, not 4MB)
+        await this._censusReadBuffer.mapAsync(GPUMapMode.READ);
+        const raw = new Uint32Array(this._censusReadBuffer.getMappedRange());
+        const hashes = new Uint8Array(nCells);
+        for (let i = 0; i < nCells; i++) hashes[i] = raw[i] & 0xFF;
+        this._censusReadBuffer.unmap();
+        return hashes;
     }
 
     getCellView(i, j) {

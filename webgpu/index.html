@@ -497,29 +497,42 @@
             }
         }
 
-        // --- Render loop: always 60fps. GPU sim runs inline with time budget. ---
+        // --- Render loop: 60fps rendering. ---
+        // GPU cell hashes (4KB) every frame for grid display.
+        // Full census (4MB readback) only every 2s for stats + cell inspector.
         let gpuPassDebt = 0;
+        let lastFullCensusTime = 0;
+        const FULL_CENSUS_MS = 2000;
         async function renderLoop() {
+            const now = performance.now();
             // GPU sim: run passes for this frame (fractional accumulator)
             if (running && gpuMode && gpuSim) {
                 gpuPassDebt += passesPerTick();
-                const t0 = performance.now();
+                const t0 = now;
                 let didPass = false;
-                while (gpuPassDebt >= 1 && performance.now() - t0 < 10) {
+                while (gpuPassDebt >= 1 && performance.now() - t0 < 12) {
                     await gpuSim.runPass();
                     await gpuSim.runPass();
                     gpuPassDebt--;
                     didPass = true;
                 }
                 if (gpuPassDebt > 3) gpuPassDebt = 3;
-                lastCensus = await gpuSim.census();
+                // Fast GPU hash for grid display (4KB readback, every frame)
+                if (gpuSim.cellHashes) {
+                    const hashes = await gpuSim.cellHashes();
+                    if (lastCensus) lastCensus.cellChars = hashes;
+                    else lastCensus = { cellChars: hashes, functional: 0, total: B*B, topLoops: [], cellMap: new Uint8Array(B*B) };
+                }
                 totalQuanta = gpuSim.totalQuanta;
-                // Cosmic rays: flip bits in snapshot, write back to GPU
+                // Full census: only every few seconds (4MB readback, for stats + inspector)
+                if (now - lastFullCensusTime > FULL_CENSUS_MS) {
+                    lastFullCensusTime = now;
+                    lastCensus = await gpuSim.census();
+                    totalQuanta = gpuSim.totalQuanta;
+                    requestCellViews();
+                }
                 if (didPass) applyCosmicRaysGpu(gpuSim);
             }
-
-            // Fetch latest cell views
-            if (running) requestCellViews();
 
             // Render everything
             for(let i=0;i<2048;i++){glowWrite[i]*=GLOW_DECAY;glowFetch[i]*=GLOW_DECAY;}
