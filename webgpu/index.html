@@ -541,6 +541,7 @@
         let hashPending = false; // true while a cellHashes readback is in flight
         let _diagTimer = performance.now();
         let _mainDiagT0 = 0, _mainFrames = 0, _mainMsgs = 0, _mainRenderMs = 0;
+        let _lastRenderedChars = null;
         async function renderLoop() {
             // One-time diagnostic (3s after start)
             if (_diagTimer && performance.now() - _diagTimer > 3000) {
@@ -612,11 +613,15 @@
                 if (didPass) applyCosmicRaysGpu(gpuSim);
             }
 
-            // Render everything
+            // Render: skip grid redraw if cellChars hasn't changed
             const _rt0 = performance.now();
             for(let i=0;i<2048;i++){glowWrite[i]*=GLOW_DECAY;glowFetch[i]*=GLOW_DECAY;}
             animateTrace();
-            renderGrid();
+            const curChars = lastCensus ? lastCensus.cellChars : null;
+            if (curChars !== _lastRenderedChars) {
+                _lastRenderedChars = curChars;
+                renderGrid();
+            }
             if(lastCellView0) renderCellView(ctx0,lastCellView0.data,0,0);
             if(lastCellView1) renderCellView(ctx1,lastCellView1.data,1024,1);
             renderDisasm();
