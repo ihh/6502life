@@ -504,6 +504,7 @@
         let lastFullCensusTime = 0;
         const FULL_CENSUS_MS = 2000;
         let gpuHashAvailable = true; // set false if cellHashes fails
+        let hashPending = false; // true while a cellHashes readback is in flight
         async function renderLoop() {
             const now = performance.now();
             if (running && gpuMode && gpuSim) {
@@ -518,15 +519,17 @@
                 }
                 if (gpuPassDebt > 3) gpuPassDebt = 3;
                 totalQuanta = gpuSim.totalQuanta;
-                // Fast GPU cell hashes for grid display (4KB, every frame)
-                if (gpuHashAvailable && gpuSim.cellHashes) {
-                    try {
-                        const hashes = await gpuSim.cellHashes();
+                // Fire-and-forget GPU cell hashes (non-blocking, 1-frame delay)
+                if (gpuHashAvailable && gpuSim.cellHashes && !hashPending) {
+                    hashPending = true;
+                    gpuSim.cellHashes().then(hashes => {
                         if (lastCensus) lastCensus.cellChars = hashes;
-                    } catch(e) {
+                        hashPending = false;
+                    }).catch(e => {
                         console.warn('cellHashes failed, falling back to full census:', e);
                         gpuHashAvailable = false;
-                    }
+                        hashPending = false;
+                    });
                 }
                 // Full census: periodically for functional count + cell inspector
                 const censusInterval = gpuHashAvailable ? FULL_CENSUS_MS : 100;
