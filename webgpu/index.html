@@ -656,11 +656,9 @@
                         if (e.data.type === 'ready') resolve();
                     };
                 });
-                for (let i = 0; i < B; i++)
-                    for (let j = 0; j < B; j++) {
-                        const off = (i * B + j) * 1024;
-                        workerSend({type:'writeCell', i, j, offset: 0, data: Array.from(data.subarray(off, off + 1024))});
-                    }
+                // Send entire board as a single transferable buffer (not 4096 individual messages)
+                const buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+                worker.postMessage({type:'loadBoard', data: buf}, [buf]);
                 workerSend({type:'census'});
             }
             glowWrite.fill(0); glowFetch.fill(0);
@@ -883,7 +881,8 @@
             if(navigator.gpu){try{
                 const adapter=await navigator.gpu.requestAdapter();
                 if(adapter){const{BareSim}=await import('./bare-sim.js?v=2');gpuSim=await BareSim.create(B);gpuAvailable=true;}
-            }catch(e){print('GPU: '+e.message);}}
+                else{console.warn('WebGPU: no adapter');}
+            }catch(e){console.error('WebGPU init failed:',e);print('GPU: '+e.message);}}
             // Always set up worker (needed for CPU mode)
             setupWorker();
             if(gpuAvailable){

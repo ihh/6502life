@@ -70,7 +70,8 @@ async function runLoop() {
         }
 
         // Yield to allow message processing (speed/stop commands)
-        await new Promise(r => setTimeout(r, 0));
+        // Use MessageChannel for faster yield than setTimeout (Safari throttles setTimeout(0))
+        await new Promise(r => { const ch = new MessageChannel(); ch.port1.onmessage = r; ch.port2.postMessage(0); });
     }
 }
 
@@ -82,6 +83,21 @@ onmessage = async (e) => {
             break;
         case 'writeCell':
             if (sim) sim.writeCell(msg.i, msg.j, msg.offset, msg.data);
+            break;
+        case 'loadBoard':
+            // Bulk load: msg.data is a Uint8Array of the entire board
+            if (sim) {
+                sim.storage.set(new Uint8Array(msg.data));
+                // Set register init values for all cells
+                const M = sim.M, BB = sim.B * sim.B;
+                for (let ci = 0; ci < BB; ci++) {
+                    const base = ci * M;
+                    sim.storage[base+0xF9]=0; sim.storage[base+0xFA]=0;
+                    sim.storage[base+0xFB]=0x30;
+                    sim.storage[base+0xFC]=0; sim.storage[base+0xFD]=0;
+                    sim.storage[base+0xFE]=0; sim.storage[base+0xFF]=0xFF;
+                }
+            }
             break;
         case 'start':
             passesPerTick = msg.speed || 1;
