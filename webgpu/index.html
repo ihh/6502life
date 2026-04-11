@@ -23,10 +23,11 @@
             width: 100%;
             max-width: 900px;
         }
-        .grid-col { grid-row: 1; grid-column: 1; }
+        .grid-col { grid-row: 1; grid-column: 1; overflow: hidden; min-height: 0; }
         #grid {
             width: 100%;
-            aspect-ratio: 2 / 3;
+            max-height: 100%;
+            object-fit: contain;
             cursor: crosshair;
             image-rendering: pixelated;
             display: block;
