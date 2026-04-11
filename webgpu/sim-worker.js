@@ -39,7 +39,7 @@ async function init(B) {
 }
 
 let censusSkip = 0;
-const CENSUS_INTERVAL = 4; // send census every N ticks (reduce CPU overhead)
+const CENSUS_INTERVAL = 1; // send census every tick for smooth grid updates
 
 async function runLoop() {
     while (running) {
@@ -85,19 +85,9 @@ onmessage = async (e) => {
             if (sim) sim.writeCell(msg.i, msg.j, msg.offset, msg.data);
             break;
         case 'loadBoard':
-            // Bulk load: msg.data is a Uint8Array of the entire board
-            if (sim) {
-                sim.storage.set(new Uint8Array(msg.data));
-                // Set register init values for all cells
-                const M = sim.M, BB = sim.B * sim.B;
-                for (let ci = 0; ci < BB; ci++) {
-                    const base = ci * M;
-                    sim.storage[base+0xF9]=0; sim.storage[base+0xFA]=0;
-                    sim.storage[base+0xFB]=0x30;
-                    sim.storage[base+0xFC]=0; sim.storage[base+0xFD]=0;
-                    sim.storage[base+0xFE]=0; sim.storage[base+0xFF]=0xFF;
-                }
-            }
+            // Bulk load: msg.data is an ArrayBuffer of the entire board
+            // (register init values already set by blake3soup)
+            if (sim) sim.storage.set(new Uint8Array(msg.data));
             break;
         case 'start':
             passesPerTick = msg.speed || 1;
