@@ -927,6 +927,16 @@
             startSim();
         }
 
+        // --- Touch debug (Chrome mobile) ---
+        document.addEventListener('touchstart', e => {
+            const t = e.target;
+            console.log('[touch] touchstart on', t.tagName, t.id || t.className, 'touches:', e.touches.length);
+        }, { passive: true });
+        document.addEventListener('click', e => {
+            const t = e.target;
+            console.log('[touch] click on', t.tagName, t.id || t.className);
+        }, true);
+
         $('toggle').onclick=()=>{
             running=!running;
             $('toggle').textContent=running?'Stop':'Start';
