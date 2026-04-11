@@ -833,6 +833,8 @@
                 } else if(msg.type==='quickCensus'){
                     if (lastCensus) lastCensus.cellChars = msg.cellChars;
                     totalQuanta=msg.totalQuanta;
+                } else if(msg.type==='quanta'){
+                    totalQuanta=msg.totalQuanta;
                 } else if(msg.type==='cellView'){
                     if(msg.i===inspectI&&msg.j===inspectJ) lastCellView0=msg;
                     else if(msg.i===inspectNI&&msg.j===inspectNJ) lastCellView1=msg;

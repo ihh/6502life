@@ -39,7 +39,7 @@ async function init(B) {
 }
 
 let censusSkip = 0;
-const FULL_CENSUS_INTERVAL = 8; // full census (functional count) every 8 ticks
+const FULL_CENSUS_INTERVAL = 16; // full census (functional count) every 16 ticks
 
 // Reusable yield channel (avoid creating new MessageChannel every tick)
 const _yieldCh = new MessageChannel();
@@ -61,15 +61,18 @@ async function runLoop() {
         // Apply cosmic rays after passes
         if (n > 0) applyCosmicRays();
 
-        // Send updates: quickCensus every 2 ticks, full census every 8
+        // Lightweight quanta update every tick (no hashing)
+        // quickCensus (grid chars) every 4 ticks, full census every 16
         censusSkip++;
         if (censusSkip >= FULL_CENSUS_INTERVAL) {
             censusSkip = 0;
             const c = sim.census();
             postMessage({ type: 'census', data: c, totalQuanta: sim.totalQuanta });
-        } else if (censusSkip % 2 === 0) {
+        } else if (censusSkip % 4 === 0) {
             const cellChars = sim.quickCensus();
             postMessage({ type: 'quickCensus', cellChars, totalQuanta: sim.totalQuanta });
+        } else {
+            postMessage({ type: 'quanta', totalQuanta: sim.totalQuanta });
         }
 
         // Send trace if one was captured
