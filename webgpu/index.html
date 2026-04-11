@@ -497,12 +497,12 @@
             }
         }
 
-        // --- Render loop: 60fps rendering. ---
-        // GPU cell hashes (4KB) every frame for grid display.
-        // Full census (4MB readback) only every 2s for stats + cell inspector.
+        // --- Render loop: 60fps rendering, census every 500ms. ---
+        // GPU census (4MB readback) is expensive — do it periodically, not every frame.
+        // Between censuses, render from cached data (grid still updates, just less often).
         let gpuPassDebt = 0;
-        let lastFullCensusTime = 0;
-        const FULL_CENSUS_MS = 2000;
+        let lastCensusTime = 0;
+        const CENSUS_MS = 500; // census every 500ms
         async function renderLoop() {
             const now = performance.now();
             // GPU sim: run passes for this frame (fractional accumulator)
@@ -517,16 +517,10 @@
                     didPass = true;
                 }
                 if (gpuPassDebt > 3) gpuPassDebt = 3;
-                // Fast GPU hash for grid display (4KB readback, every frame)
-                if (gpuSim.cellHashes) {
-                    const hashes = await gpuSim.cellHashes();
-                    if (lastCensus) lastCensus.cellChars = hashes;
-                    else lastCensus = { cellChars: hashes, functional: 0, total: B*B, topLoops: [], cellMap: new Uint8Array(B*B) };
-                }
                 totalQuanta = gpuSim.totalQuanta;
-                // Full census: only every few seconds (4MB readback, for stats + inspector)
-                if (now - lastFullCensusTime > FULL_CENSUS_MS) {
-                    lastFullCensusTime = now;
+                // Census: periodically (not every frame)
+                if (now - lastCensusTime > CENSUS_MS) {
+                    lastCensusTime = now;
                     lastCensus = await gpuSim.census();
                     totalQuanta = gpuSim.totalQuanta;
                     requestCellViews();
@@ -534,7 +528,7 @@
                 if (didPass) applyCosmicRaysGpu(gpuSim);
             }
 
-            // Render everything
+            // Render everything (from cached lastCensus)
             for(let i=0;i<2048;i++){glowWrite[i]*=GLOW_DECAY;glowFetch[i]*=GLOW_DECAY;}
             animateTrace();
             renderGrid();
@@ -717,8 +711,16 @@
 
         // === Worker ===
         function workerSend(msg){worker.postMessage(msg);}
-        function requestCellViews() {
+        let cellViewPending = false;
+        async function requestCellViews(forceCensus) {
             if(gpuMode&&gpuSim&&gpuSim.getCellView) {
+                if (forceCensus && !cellViewPending) {
+                    cellViewPending = true;
+                    lastCensus = await gpuSim.census();
+                    totalQuanta = gpuSim.totalQuanta;
+                    lastCensusTime = performance.now();
+                    cellViewPending = false;
+                }
                 lastCellView0=gpuSim.getCellView(inspectI,inspectJ);
                 lastCellView1=gpuSim.getCellView(inspectNI,inspectNJ);
             } else if(worker) {
@@ -768,7 +770,7 @@
                 inspectI=col;inspectJ=row;
                 updateNeighbor(); glowWrite.fill(0);glowFetch.fill(0);
                 bitmapEma[0].fill(0); bitmapEma[1].fill(0);
-                requestCellViews();
+                requestCellViews(true);
                 // Auto-place active specimen at new cell
                 if (activeSpecimen >= 0 && specimens[activeSpecimen]) {
                     injectSpecimen(activeSpecimen);

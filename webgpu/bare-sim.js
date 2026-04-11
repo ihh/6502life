@@ -217,13 +217,13 @@ export class BareSim {
     async census() {
         const totalBytes = this.B * this.B * this.M;
         // Reuse read buffer across census calls (avoid alloc/destroy overhead)
-        if (!this._censusReadBuffer) {
-            this._censusReadBuffer = this.device.createBuffer({
+        if (!this._fullCensusReadBuf) {
+            this._fullCensusReadBuf = this.device.createBuffer({
                 size: totalBytes,
                 usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
             });
         }
-        const readBuffer = this._censusReadBuffer;
+        const readBuffer = this._fullCensusReadBuf;
         const commandEncoder = this.device.createCommandEncoder();
         commandEncoder.copyBufferToBuffer(this.storageBuffer, 0, readBuffer, 0, totalBytes);
         this.device.queue.submit([commandEncoder.finish()]);
