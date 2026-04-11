@@ -23,11 +23,10 @@
             width: 100%;
             max-width: 900px;
         }
-        .grid-col { grid-row: 1; grid-column: 1; overflow: hidden; min-height: 0; }
+        .grid-col { grid-row: 1; grid-column: 1; }
         #grid {
             width: 100%;
-            max-height: 100%;
-            object-fit: contain;
+            aspect-ratio: 2 / 3;
             cursor: crosshair;
             image-rendering: pixelated;
             display: block;
@@ -931,22 +930,17 @@
         // --- Touch debug (on-screen, for Chrome iOS) ---
         const _touchLog = [];
         function touchDbg(msg) {
-            _touchLog.push(msg);
-            if (_touchLog.length > 5) _touchLog.shift();
+            _touchLog.push(performance.now().toFixed(0) + ' ' + msg);
+            if (_touchLog.length > 8) _touchLog.shift();
             logEl.textContent = _touchLog.join('\n');
         }
-        document.addEventListener('touchstart', e => {
-            const t = e.target;
-            touchDbg('touch:' + t.tagName + '#' + (t.id||'') + ' ' + e.touches.length + 't');
-        }, { passive: true });
-        document.addEventListener('click', e => {
-            const t = e.target;
-            touchDbg('click:' + t.tagName + '#' + (t.id||''));
-        }, true);
-        document.addEventListener('pointerdown', e => {
-            const t = e.target;
-            touchDbg('ptr:' + t.tagName + '#' + (t.id||'') + ' ' + e.pointerType);
-        }, true);
+        for (const ev of ['touchstart','touchend','touchcancel','pointerdown','pointerup','click']) {
+            document.addEventListener(ev, e => {
+                const t = e.target;
+                const extra = ev === 'touchstart' ? ' ' + e.touches.length + 't' : '';
+                touchDbg(ev + ':' + t.tagName + '#' + (t.id||t.className||'') + extra);
+            }, { capture: true, passive: true });
+        }
 
         $('toggle').onclick=()=>{
             running=!running;
