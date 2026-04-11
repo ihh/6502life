@@ -39,7 +39,7 @@ async function init(B) {
 }
 
 let censusSkip = 0;
-const CENSUS_INTERVAL = 2; // send census every 2 ticks
+const FULL_CENSUS_INTERVAL = 8; // full census (functional count) every 8 ticks
 
 // Reusable yield channel (avoid creating new MessageChannel every tick)
 const _yieldCh = new MessageChannel();
@@ -61,12 +61,15 @@ async function runLoop() {
         // Apply cosmic rays after passes
         if (n > 0) applyCosmicRays();
 
-        // Send census periodically (not every tick)
+        // Send grid update every tick (fast), full census less often
         censusSkip++;
-        if (censusSkip >= CENSUS_INTERVAL) {
+        if (censusSkip >= FULL_CENSUS_INTERVAL) {
             censusSkip = 0;
             const c = sim.census();
             postMessage({ type: 'census', data: c, totalQuanta: sim.totalQuanta });
+        } else {
+            const cellChars = sim.quickCensus();
+            postMessage({ type: 'quickCensus', cellChars, totalQuanta: sim.totalQuanta });
         }
 
         // Send trace if one was captured

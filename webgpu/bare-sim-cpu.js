@@ -277,13 +277,28 @@ export class BareSimCPU {
         this.totalQuanta += N;
     }
 
-    census() {
-        const B = this.B, M = this.M;
-        let functional = 0;
-        const loopSigs = {}, cellMap = new Uint8Array(B * B);
+    // Fast: only compute cellChars (for grid display)
+    quickCensus() {
+        const B = this.B, M = this.M, c = this.storage;
         const cellChars = new Uint8Array(B * B);
         for (let ci = 0; ci < B * B; ci++) {
-            const base = ci * M, c = this.storage;
+            const base = ci * M;
+            let h = 5381;
+            for (let k = 0; k < 0xF0; k++) h = ((h * 33) ^ c[base + k]) >>> 0;
+            for (let k = 0x200; k < 0x400; k++) h = ((h * 33) ^ c[base + k]) >>> 0;
+            cellChars[ci] = 33 + (h % 94);
+        }
+        return cellChars;
+    }
+
+    // Full: cellChars + functional count + loop signatures
+    census() {
+        const B = this.B, M = this.M, c = this.storage;
+        let functional = 0;
+        const loopSigs = {}, cellMap = new Uint8Array(B * B);
+        const cellChars = this.quickCensus();
+        for (let ci = 0; ci < B * B; ci++) {
+            const base = ci * M;
             if (c[base] === 0xB5 && c[base+2] === 0x9D && c[base+3] === 0x00 &&
                 c[base+4] === 0x04 && (c[base+5] === 0xE8 || c[base+5] === 0xCA) &&
                 [0xD0,0x90,0x50,0x10,0x30,0xB0,0x70].includes(c[base+6])) {
@@ -292,12 +307,6 @@ export class BareSimCPU {
                 const sig = Array.from(c.slice(base, base+8)).map(b => b.toString(16).padStart(2,'0')).join('');
                 loopSigs[sig] = (loopSigs[sig] || 0) + 1;
             }
-            // Hash non-volatile: page 0 ($00-$EF), page 2 ($200-$2FF), page 3 ($300-$3FF)
-            // Skip $F0-$FF (registers) and $100-$1FF (stack)
-            let h = 5381;
-            for (let k = 0; k < 0xF0; k++) h = ((h * 33) ^ c[base + k]) >>> 0;
-            for (let k = 0x200; k < 0x400; k++) h = ((h * 33) ^ c[base + k]) >>> 0;
-            cellChars[ci] = 33 + (h % 94); // ASCII 33-126
         }
         return {
             functional, total: B * B,
