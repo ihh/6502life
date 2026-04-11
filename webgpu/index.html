@@ -502,7 +502,7 @@
         // Between censuses, render from cached data (grid still updates, just less often).
         let gpuPassDebt = 0;
         let lastCensusTime = 0;
-        const CENSUS_MS = 100; // census every 100ms (10Hz grid updates)
+        const CENSUS_MS = 20; // census every 20ms (50Hz grid updates)
         async function renderLoop() {
             const now = performance.now();
             // GPU sim: run passes for this frame (fractional accumulator)
