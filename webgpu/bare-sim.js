@@ -334,6 +334,46 @@ export class BareSim {
         };
     }
 
+    /**
+     * Read specific cells from GPU (non-blocking).
+     * Returns a Promise that resolves to an array of {i, j, data} objects.
+     * Much cheaper than full census (reads only requested cells, not 4MB).
+     */
+    async readCells(cells) {
+        const M = this.M;
+        const totalBytes = cells.length * M;
+        // Reuse a small staging buffer
+        if (!this._cellReadBuf || this._cellReadBuf.size < totalBytes) {
+            if (this._cellReadBuf) this._cellReadBuf.destroy();
+            this._cellReadBuf = this.device.createBuffer({
+                size: totalBytes,
+                usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+            });
+        }
+        const enc = this.device.createCommandEncoder();
+        for (let k = 0; k < cells.length; k++) {
+            const { i, j } = cells[k];
+            const srcOffset = (i * this.B + j) * M;
+            enc.copyBufferToBuffer(this.storageBuffer, srcOffset, this._cellReadBuf, k * M, M);
+        }
+        this.device.queue.submit([enc.finish()]);
+        await this._cellReadBuf.mapAsync(GPUMapMode.READ);
+        const mapped = new Uint8Array(this._cellReadBuf.getMappedRange());
+        const results = cells.map((c, k) => ({
+            i: c.i, j: c.j,
+            data: new Uint8Array(mapped.slice(k * M, (k + 1) * M)),
+            writes: new Float32Array(M),
+            fetches: new Float32Array(M),
+        }));
+        this._cellReadBuf.unmap();
+        // Also update snapshot for these cells
+        for (let k = 0; k < cells.length; k++) {
+            const base = (cells[k].i * this.B + cells[k].j) * M;
+            this._storageSnapshot.set(results[k].data, base);
+        }
+        return results;
+    }
+
     destroy() {
         this.storageBuffer.destroy();
         this.opcodeBuffer.destroy();

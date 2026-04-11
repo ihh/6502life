@@ -554,6 +554,18 @@
                         cellViewPending = false;
                     }).catch(() => { cellViewPending = false; });
                 }
+                // Fire-and-forget cell view reads (2KB, non-blocking)
+                if (gpuSim.readCells && !cellViewPending) {
+                    cellViewPending = true;
+                    gpuSim.readCells([
+                        {i: inspectI, j: inspectJ},
+                        {i: inspectNI, j: inspectNJ}
+                    ]).then(views => {
+                        lastCellView0 = views[0];
+                        lastCellView1 = views[1];
+                        cellViewPending = false;
+                    }).catch(() => { cellViewPending = false; });
+                }
                 if (didPass) applyCosmicRaysGpu(gpuSim);
             }
 
@@ -858,6 +870,11 @@
             $('engine').value = 'cpu';
             if (!worker) { setupWorker(); }
             workerSend({type:'init', B});
+            // Transfer current board state from GPU snapshot to worker
+            if (gpuSim && gpuSim._storageSnapshot) {
+                const buf = gpuSim._storageSnapshot.buffer.slice(0);
+                worker.postMessage({type:'loadBoard', data: buf}, [buf]);
+            }
             workerSend({type:'noise', rate: getNoiseRate()});
         }
 
