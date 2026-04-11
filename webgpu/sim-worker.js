@@ -47,8 +47,17 @@ function yieldToMessages() {
     return new Promise(r => { _yieldCh.port1.onmessage = r; _yieldCh.port2.postMessage(0); });
 }
 
+// --- Diagnostic counters ---
+let _diagTicks = 0, _diagT0 = 0;
+let _diagPassMs = 0, _diagCensusMs = 0, _diagYieldMs = 0, _diagPostMs = 0;
+let _diagPasses = 0, _diagYieldCount = 0;
+
 async function runLoop() {
+    _diagT0 = performance.now();
+    _diagTicks = 0;
     while (running) {
+        const t1 = performance.now();
+
         passQueue += passesPerTick;
         const n = Math.floor(passQueue);
         passQueue -= n;
@@ -57,9 +66,13 @@ async function runLoop() {
             sim.runPass();
             sim.runPass();
         }
+        _diagPasses += n;
 
         // Apply cosmic rays after passes
         if (n > 0) applyCosmicRays();
+
+        const t2 = performance.now();
+        _diagPassMs += t2 - t1;
 
         // Lightweight quanta update every tick (no hashing)
         // quickCensus (grid chars) every 4 ticks, full census every 16
@@ -67,12 +80,19 @@ async function runLoop() {
         if (censusSkip >= FULL_CENSUS_INTERVAL) {
             censusSkip = 0;
             const c = sim.census();
+            const t3a = performance.now();
+            _diagCensusMs += t3a - t2;
             postMessage({ type: 'census', data: c, totalQuanta: sim.totalQuanta });
+            _diagPostMs += performance.now() - t3a;
         } else if (censusSkip % 4 === 0) {
             const cellChars = sim.quickCensus();
+            const t3a = performance.now();
+            _diagCensusMs += t3a - t2;
             postMessage({ type: 'quickCensus', cellChars, totalQuanta: sim.totalQuanta });
+            _diagPostMs += performance.now() - t3a;
         } else {
             postMessage({ type: 'quanta', totalQuanta: sim.totalQuanta });
+            _diagPostMs += performance.now() - t2;
         }
 
         // Send trace if one was captured
@@ -82,7 +102,24 @@ async function runLoop() {
         }
 
         // Yield to allow message processing (speed/stop commands)
+        const tY0 = performance.now();
         await yieldToMessages();
+        _diagYieldMs += performance.now() - tY0;
+        _diagYieldCount++;
+
+        // Diagnostic: every 3 seconds, report timing breakdown
+        _diagTicks++;
+        const elapsed = performance.now() - _diagT0;
+        if (elapsed > 3000) {
+            console.log(`[worker diag] ${(elapsed/1000).toFixed(1)}s: ` +
+                `ticks=${_diagTicks} passes=${_diagPasses} ` +
+                `pass=${_diagPassMs.toFixed(0)}ms census=${_diagCensusMs.toFixed(0)}ms ` +
+                `post=${_diagPostMs.toFixed(0)}ms yield=${_diagYieldMs.toFixed(0)}ms ` +
+                `(${_diagYieldCount} yields, avg=${(_diagYieldMs/_diagYieldCount).toFixed(1)}ms)`);
+            _diagT0 = performance.now();
+            _diagTicks = 0; _diagPassMs = 0; _diagCensusMs = 0;
+            _diagYieldMs = 0; _diagPostMs = 0; _diagPasses = 0; _diagYieldCount = 0;
+        }
     }
 }
 
