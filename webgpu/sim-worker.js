@@ -41,6 +41,12 @@ async function init(B) {
 let censusSkip = 0;
 const CENSUS_INTERVAL = 2; // send census every 2 ticks
 
+// Reusable yield channel (avoid creating new MessageChannel every tick)
+const _yieldCh = new MessageChannel();
+function yieldToMessages() {
+    return new Promise(r => { _yieldCh.port1.onmessage = r; _yieldCh.port2.postMessage(0); });
+}
+
 async function runLoop() {
     while (running) {
         passQueue += passesPerTick;
@@ -48,8 +54,8 @@ async function runLoop() {
         passQueue -= n;
 
         for (let i = 0; i < n; i++) {
-            await sim.runPass();
-            await sim.runPass();
+            sim.runPass();
+            sim.runPass();
         }
 
         // Apply cosmic rays after passes
@@ -59,7 +65,7 @@ async function runLoop() {
         censusSkip++;
         if (censusSkip >= CENSUS_INTERVAL) {
             censusSkip = 0;
-            const c = await sim.census();
+            const c = sim.census();
             postMessage({ type: 'census', data: c, totalQuanta: sim.totalQuanta });
         }
 
@@ -70,8 +76,7 @@ async function runLoop() {
         }
 
         // Yield to allow message processing (speed/stop commands)
-        // Use MessageChannel for faster yield than setTimeout (Safari throttles setTimeout(0))
-        await new Promise(r => { const ch = new MessageChannel(); ch.port1.onmessage = r; ch.port2.postMessage(0); });
+        await yieldToMessages();
     }
 }
 
@@ -115,7 +120,7 @@ onmessage = async (e) => {
             break;
         case 'census':
             if (sim) {
-                const c = await sim.census();
+                const c = sim.census();
                 postMessage({ type: 'census', data: c, totalQuanta: sim.totalQuanta });
             }
             break;

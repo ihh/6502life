@@ -207,7 +207,7 @@ export class BareSimCPU {
         for (let k = 0; k < data.length; k++) this.storage[base + k] = data[k];
     }
 
-    async runPass() {
+    runPass() {
         const B = this.B, M = this.M, N = (B * B) / 2, rng = this.rng;
         const rv = rng.below(8);
         const tiling = rv & 1, offI = (rv >> 1) & 1, offJ = (rv >> 2) & 1;
@@ -277,7 +277,7 @@ export class BareSimCPU {
         this.totalQuanta += N;
     }
 
-    async census() {
+    census() {
         const B = this.B, M = this.M;
         let functional = 0;
         const loopSigs = {}, cellMap = new Uint8Array(B * B);
