@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <title>6502life Bare Sim</title>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; touch-action: manipulation; }
+        * { box-sizing: border-box; margin: 0; padding: 0; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+        button, select, input { touch-action: auto; }
         body { font-family: monospace; background: #111; color: #0f0; padding: 12px;
                overscroll-behavior: none; }
         h3 { margin-bottom: 4px; }
@@ -518,7 +519,7 @@
                 gpuPassDebt += passesPerTick();
                 const t0 = now;
                 let didPass = false;
-                while (gpuPassDebt >= 1 && performance.now() - t0 < 12) {
+                while (gpuPassDebt >= 1 && performance.now() - t0 < 8) {
                     gpuSim.runPass();
                     gpuSim.runPass();
                     gpuPassDebt--;
