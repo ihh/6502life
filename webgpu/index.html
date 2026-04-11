@@ -522,11 +522,12 @@
                 // Fire-and-forget GPU cell hashes (non-blocking, 1-frame delay)
                 if (gpuHashAvailable && gpuSim.cellHashes && !hashPending) {
                     hashPending = true;
-                    gpuSim.cellHashes().then(hashes => {
+                    const timeout = new Promise((_, rej) => setTimeout(() => rej('timeout'), 200));
+                    Promise.race([gpuSim.cellHashes(), timeout]).then(hashes => {
                         if (lastCensus) lastCensus.cellChars = hashes;
                         hashPending = false;
                     }).catch(e => {
-                        console.warn('cellHashes failed, falling back to full census:', e);
+                        console.warn('cellHashes unavailable:', e);
                         gpuHashAvailable = false;
                         hashPending = false;
                     });
@@ -732,7 +733,7 @@
                     cellViewPending = true;
                     lastCensus = await gpuSim.census();
                     totalQuanta = gpuSim.totalQuanta;
-                    lastCensusTime = performance.now();
+                    lastFullCensusTime = performance.now();
                     cellViewPending = false;
                 }
                 lastCellView0=gpuSim.getCellView(inspectI,inspectJ);
