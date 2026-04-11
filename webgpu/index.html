@@ -966,10 +966,14 @@
         // --- Chrome iOS fix: click events not synthesized from touch ---
         // Use pointerup directly for interactive elements instead of onclick.
         function onTap(el, fn) {
+            let _touchFired = false;
             el.addEventListener('pointerup', e => {
-                if (e.pointerType === 'touch') { e.preventDefault(); fn(e); }
+                if (e.pointerType === 'touch') { _touchFired = true; fn(e); }
             });
-            el.addEventListener('click', fn);
+            el.addEventListener('click', e => {
+                if (_touchFired) { _touchFired = false; return; } // already handled by pointerup
+                fn(e);
+            });
         }
         // Fix <select> elements on Chrome iOS: force-open picker on pointerup
         document.querySelectorAll('select').forEach(sel => {

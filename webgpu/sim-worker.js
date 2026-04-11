@@ -61,13 +61,13 @@ async function runLoop() {
         // Apply cosmic rays after passes
         if (n > 0) applyCosmicRays();
 
-        // Send grid update every tick (fast), full census less often
+        // Send updates: quickCensus every 2 ticks, full census every 8
         censusSkip++;
         if (censusSkip >= FULL_CENSUS_INTERVAL) {
             censusSkip = 0;
             const c = sim.census();
             postMessage({ type: 'census', data: c, totalQuanta: sim.totalQuanta });
-        } else {
+        } else if (censusSkip % 2 === 0) {
             const cellChars = sim.quickCensus();
             postMessage({ type: 'quickCensus', cellChars, totalQuanta: sim.totalQuanta });
         }
