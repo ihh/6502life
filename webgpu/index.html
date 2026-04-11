@@ -541,7 +541,21 @@
             for(const p of _B3_PERM){_b3g(s,0,4,8,12,msg[p[0]],msg[p[1]]);_b3g(s,1,5,9,13,msg[p[2]],msg[p[3]]);_b3g(s,2,6,10,14,msg[p[4]],msg[p[5]]);_b3g(s,3,7,11,15,msg[p[6]],msg[p[7]]);_b3g(s,0,5,10,15,msg[p[8]],msg[p[9]]);_b3g(s,1,6,11,12,msg[p[10]],msg[p[11]]);_b3g(s,2,7,8,13,msg[p[12]],msg[p[13]]);_b3g(s,3,4,9,14,msg[p[14]],msg[p[15]]);}
             const out=new Uint32Array(8);for(let i=0;i<8;i++)out[i]=(s[i]^s[i+8])>>>0;return out;
         }
-        function blake3cell(seed,ci,n=24){const msg=new Uint32Array(16);msg[0]=seed>>>0;msg[1]=ci>>>0;const out=blake3compress(msg,_B3_IV,0,8,1|2|8);return new Uint8Array(out.buffer).slice(0,n);}
+        // BLAKE3 XOF: counter mode for extended output (counter=0 matches original blake3cell)
+        function blake3cell(seed,ci,n=24){
+            const msg=new Uint32Array(16);msg[0]=seed>>>0;msg[1]=ci>>>0;
+            const flags=1|2|8; // CHUNK_START|CHUNK_END|ROOT
+            const result=new Uint8Array(n);
+            let off=0,ctr=0;
+            while(off<n){
+                const out=blake3compress(msg,_B3_IV,ctr,8,flags);
+                const blk=new Uint8Array(out.buffer);
+                const len=Math.min(32,n-off);
+                result.set(blk.subarray(0,len),off);
+                off+=len;ctr++;
+            }
+            return result;
+        }
 
         // Turtle's Tiers soup weights
         const _SW=new Float64Array(256).fill(1);
@@ -551,14 +565,24 @@
         for(const b of[0xEA,0x1A,0x3A,0x5A,0x7A,0xDA,0xFA,0x08,0x48,0x58,0x78,0x9A,0xD8,0xF8,0x18,0x38,0xB8,0xA8,0xAA,0xBA,0x98,0x8A,0x68,0x80,0x82,0x89,0xC2,0xE2,0x44,0x64,0x14,0x34,0x54,0x74,0xD4,0xF4,0xA0,0xA2,0xA9,0x0C,0x1C,0x3C,0x5C,0x7C,0xDC,0xFC])if(_SW[b]<11)_SW[b]=11;
         const _SOUP_LUT=(()=>{const t=_SW.reduce((a,b)=>a+b,0),cdf=new Float64Array(256);let c=0;for(let i=0;i<256;i++){c+=_SW[i]/t;cdf[i]=c;}const lut=new Uint8Array(65536);let bi=0;for(let i=0;i<65536;i++){while(bi<255&&cdf[bi]<(i+0.5)/65536)bi++;lut[i]=bi;}return lut;})();
         function applyBias(raw){const out=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)out[i]=_SOUP_LUT[Math.min(raw[i]*257,65535)];return out;}
-        function blake3biasedCell(seed,ci){const raw=blake3cell(seed,ci,24);return applyBias(raw);}
 
         function blake3soup(seed,boardSize){
             const nCells=boardSize*boardSize, M=1024;
             const out=new Uint8Array(nCells*M);
             for(let ci=0;ci<nCells;ci++){
-                const biased=blake3biasedCell(seed,ci);
-                out.set(biased,ci*M); // first 24 bytes biased, rest zero
+                const base=ci*M;
+                // Generate full 1024 raw bytes via BLAKE3 XOF, apply bias
+                const raw=blake3cell(seed,ci,M);
+                const biased=applyBias(raw);
+                out.set(biased,base);
+                // Register save area (0xF9-0xFF): proper init values
+                out[base+0xF9]=0x00; // PCHI
+                out[base+0xFA]=0x00; // PCLO (PC=0x0000)
+                out[base+0xFB]=0x30; // P (flags: U+B set)
+                out[base+0xFC]=0x00; // A
+                out[base+0xFD]=0x00; // X
+                out[base+0xFE]=0x00; // Y
+                out[base+0xFF]=0xFF; // S (stack pointer)
             }
             return out;
         }
@@ -824,10 +848,16 @@
                 modeEl.textContent='[CPU]';
                 workerSend({type:'init',B});
             }
-            print(B+'x'+B+' board. Click to inspect, drag to set neighbor direction.');
             initGridCanvas(); initBrush(); fpsT0=lastRateTime=performance.now();
             updateNeighbor();
             requestAnimationFrame(renderLoop);
+            // Default: load a known working seed so visitors see a live board
+            await initSoup(7430868);
+            print(B+'x'+B+' board. Seed 7430868 (#7 DEX/BCC). Click to inspect, drag to set neighbor direction.');
+            // Auto-start
+            running = true;
+            $('toggle').textContent = 'Stop';
+            startSim();
         }
 
         $('toggle').onclick=()=>{
@@ -908,8 +938,8 @@
             const hits = disc.length;
             if (seeds > 0 || hits > 0) {
                 statsEl.textContent = mining
-                    ? `⛏ MINING  seeds:${seeds.toLocaleString()}  near-misses:${dfa}  hits:${hits}`
-                    : `seeds tried:${seeds.toLocaleString()}  near-misses:${dfa}  discoveries:${hits}`;
+                    ? `⛏ MINING  seeds:${seeds.toLocaleString()}  candidates:${dfa}  hits:${hits}`
+                    : `seeds tried:${seeds.toLocaleString()}  candidates:${dfa}  discoveries:${hits}`;
                 statsEl.style.color = mining ? '#ff0' : '#0a0';
             }
         }
@@ -923,46 +953,47 @@
         // Then load the full BLAKE3 soup onto the display for the user.
         async function verifyHit(seed) {
             const { BareSimCPU } = await import('./bare-sim-cpu.js');
+            const { findCorePattern } = await import('./miner.js');
 
-            // Generate the biased soup for this seed
             const nCells = B * B;
-            // Find which cell(s) the DFA matched by running JS DFAs
-            const { buildAllDFAs, N_DFAS, ACCEPT } = await import('./miner.js');
-            if (!verifyHit._dfas) verifyHit._dfas = buildAllDFAs();
-            const dfas = verifyHit._dfas;
+            const testB = 4; // verify on 4x4 board
 
             for (let ci = 0; ci < nCells; ci++) {
-                const raw = blake3cell(seed, ci, 24);
-                const biased = applyBias(raw);
-                const cell = new Uint8Array(32);
-                cell.set(biased);
+                const biased24 = applyBias(blake3cell(seed, ci, 24));
 
-                // Run JS DFAs on this cell
-                let accepted = false;
-                for (let d = 0; d < N_DFAS; d++) {
-                    let state = 0;
-                    for (const b of cell) state = dfas[d][state * 256 + b];
-                    if (state === ACCEPT) { accepted = true; break; }
-                }
-                if (!accepted) continue;
+                // Find 6-byte core pattern in the 24 biased bytes
+                const match = findCorePattern(biased24);
+                if (!match) continue;
 
-                // DFA match! Simulate on a tiny 4x4 board
-                const testSim = new BareSimCPU(4, 1024, { seed: 42 });
-                testSim.writeCell(0, 0, 0, cell);
+                // Core match! Generate full 1024-byte biased cell and simulate
+                const fullRaw = blake3cell(seed, ci, 1024);
+                const fullBiased = applyBias(fullRaw);
+                const testSim = new BareSimCPU(testB, 1024, { seed: 42 });
+                testSim.writeCell(0, 0, 0, fullBiased);
                 testSim.writeCell(0, 0, 0xF9, [0x00, 0x00]); // PC=0
                 testSim.writeCell(0, 0, 0xFB, [0x30]);        // P
                 testSim.writeCell(0, 0, 0xFF, [0xFF]);         // S
                 for (let p = 0; p < 100; p++) await testSim.runPass();
-                const census = await testSim.census();
 
-                if (census.functional >= 2) {
-                    // It spreads! Extract program signature
-                    const top = census.topLoops[0];
-                    if (!top) continue;
-                    const [sig, count] = top;
-                    const progBytes = [];
-                    for (let k = 0; k < sig.length; k += 2)
-                        progBytes.push(parseInt(sig.substr(k, 2), 16));
+                // Check spread: count cells with matching content hash
+                // (works regardless of where the replicator sits in the cell)
+                const hashes = new Uint8Array(testB * testB);
+                for (let ci2 = 0; ci2 < testB * testB; ci2++) {
+                    const base = ci2 * 1024;
+                    let h = 5381;
+                    for (let k = 0; k < 0xF0; k++) h = ((h * 33) ^ testSim.storage[base + k]) >>> 0;
+                    for (let k = 0x200; k < 0x400; k++) h = ((h * 33) ^ testSim.storage[base + k]) >>> 0;
+                    hashes[ci2] = 33 + (h % 94);
+                }
+                // Find the most common hash
+                const counts = {};
+                for (const h of hashes) counts[h] = (counts[h] || 0) + 1;
+                const maxCount = Math.max(...Object.values(counts));
+
+                if (maxCount >= testB * testB / 2) {
+                    // It spread to half the board! Extract program signature
+                    const coreHex = [...biased24.slice(match.offset, match.offset + 8)]
+                        .map(b => b.toString(16).padStart(2, '0')).join('');
 
                     // Load the full BLAKE3 soup onto the display
                     const soupData = blake3soup(seed, B);
@@ -979,15 +1010,18 @@
                     requestCellViews();
 
                     const row = Math.floor(ci / B), col = ci % B;
+                    const progBytes = [];
+                    for (let k = 0; k < coreHex.length; k += 2)
+                        progBytes.push(parseInt(coreHex.substr(k, 2), 16));
                     return {
-                        seed, spread: count, functional: census.functional,
-                        cell: [row, col], hex: sig,
+                        seed, spread: maxCount, functional: maxCount,
+                        cell: [row, col], hex: coreHex,
                         length: progBytes.length, program: progBytes,
                         time: new Date().toISOString(),
                     };
                 }
             }
-            return null; // all DFA matches were duds
+            return null; // no viable core patterns in this seed
         }
 
         // --- GPU Mining (toggle state with visual preview) ---
@@ -1010,7 +1044,7 @@
             const totalSeeds = (stats.totalSeeds || 0) + mineTotal;
             const totalDfa = (stats.dfaHits || 0) + mineDfaHits;
             const disc = loadDiscoveries().length;
-            statsEl.textContent = `⛏ MINING  seeds:${totalSeeds.toLocaleString()}  near-misses:${totalDfa}  discoveries:${disc}  ${(rate).toFixed(0)}/s`;
+            statsEl.textContent = `⛏ MINING  seeds:${totalSeeds.toLocaleString()}  candidates:${totalDfa}  discoveries:${disc}  ${(rate).toFixed(0)}/s`;
             statsEl.style.color = '#ff0';
         }
         // (mineTotal etc. declared above, before localStorage code)
@@ -1126,7 +1160,7 @@
                 if (mineDebugSeed !== null) {
                     print(`Mining near seed ${mineDebugSeed} (debug)...`);
                 } else {
-                    print('Mining... DFA hits will be verified by simulation.');
+                    print('Mining... core pattern hits verified by simulation.');
                 }
                 mineLoop();
             } catch(e) {

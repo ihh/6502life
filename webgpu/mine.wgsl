@@ -1,11 +1,11 @@
-// DFA Miner: BLAKE3 → Turtle's Tiers bias → 18 parallel DFAs
-// Each workgroup processes one seed, threads scan cells in parallel.
+// Core Pattern Miner: BLAKE3 → Turtle's Tiers bias → 6-byte pattern scan
+// Scans for replicator core sequences (no branch required).
+// CPU-side simulation verifies whether accidental loops make them viable.
 
 // Bindings:
 //   group 0, binding 0: uniforms (seed_base, board_size, n_seeds)
-//   group 0, binding 1: DFA tables [18][25][256] as u32
-//   group 0, binding 2: soup bias LUT [65536] as u32 (packed 4 bytes)
-//   group 0, binding 3: output hits [n_seeds] as u32
+//   group 0, binding 1: soup bias LUT [65536] as u32 (packed 4 bytes)
+//   group 0, binding 2: output hits [n_seeds] as u32
 
 struct Uniforms {
     seed_base: u32,
@@ -15,9 +15,8 @@ struct Uniforms {
 };
 
 @group(0) @binding(0) var<uniform> uni: Uniforms;
-@group(0) @binding(1) var<storage, read> dfa_tables: array<u32>;  // [18*25*256]
-@group(0) @binding(2) var<storage, read> soup_lut: array<u32>;    // [16384] packed 4 bytes each
-@group(0) @binding(3) var<storage, read_write> hits: array<u32>;
+@group(0) @binding(1) var<storage, read> soup_lut: array<u32>;    // [16384] packed 4 bytes each
+@group(0) @binding(2) var<storage, read_write> hits: array<u32>;
 
 // ── BLAKE3 constants ────────────────────────────────────────────────
 
@@ -56,13 +55,10 @@ fn b3_g(s: ptr<function, array<u32, 16>>, a: u32, b: u32, c: u32, d: u32, mx: u3
 // ── BLAKE3 compress: single block ───────────────────────────────────
 
 fn blake3_compress(seed: u32, cell_index: u32) -> array<u32, 8> {
-    // Message: seed || cell_index || zeros (16 words)
     var msg: array<u32, 16>;
     msg[0] = seed;
     msg[1] = cell_index;
-    // msg[2..15] = 0 (default)
 
-    // Initial state
     var s: array<u32, 16>;
     s[0] = B3_IV[0]; s[1] = B3_IV[1]; s[2] = B3_IV[2]; s[3] = B3_IV[3];
     s[4] = B3_IV[4]; s[5] = B3_IV[5]; s[6] = B3_IV[6]; s[7] = B3_IV[7];
@@ -72,7 +68,6 @@ fn blake3_compress(seed: u32, cell_index: u32) -> array<u32, 8> {
     s[14] = 8u;     // block_len
     s[15] = 11u;    // flags: CHUNK_START(1) | CHUNK_END(2) | ROOT(8)
 
-    // 7 rounds
     for (var r = 0u; r < 7u; r++) {
         let p = B3_PERM[r];
         b3_g(&s, 0,4,8,12,  msg[p[0]], msg[p[1]]);
@@ -85,7 +80,6 @@ fn blake3_compress(seed: u32, cell_index: u32) -> array<u32, 8> {
         b3_g(&s, 3,4,9,14,  msg[p[14]],msg[p[15]]);
     }
 
-    // XOR finalization
     var out: array<u32, 8>;
     for (var i = 0u; i < 8u; i++) {
         out[i] = s[i] ^ s[i + 8u];
@@ -96,9 +90,7 @@ fn blake3_compress(seed: u32, cell_index: u32) -> array<u32, 8> {
 // ── Bias lookup ─────────────────────────────────────────────────────
 
 fn soup_lookup(raw_byte: u32) -> u32 {
-    // raw * 257, clamped to 0-65535
     let idx = min(raw_byte * 257u, 65535u);
-    // LUT is packed as u32 (4 bytes per entry), so we need byte-level access
     let word_idx = idx / 4u;
     let byte_idx = idx % 4u;
     let word = soup_lut[word_idx];
@@ -109,8 +101,6 @@ fn soup_lookup(raw_byte: u32) -> u32 {
 
 fn generate_cell(seed: u32, cell_index: u32) -> array<u32, 6> {
     let raw = blake3_compress(seed, cell_index);
-    // raw is 8 u32 = 32 bytes, we use first 24 bytes = 6 u32
-    // Apply bias to each byte
     var biased: array<u32, 6>;
     for (var w = 0u; w < 6u; w++) {
         let word = raw[w];
@@ -123,45 +113,72 @@ fn generate_cell(seed: u32, cell_index: u32) -> array<u32, 6> {
     return biased;
 }
 
-// ── DFA scan ────────────────────────────────────────────────────────
+// ── 6-byte core pattern scan ────────────────────────────────────────
+// Checks for replicator core patterns at any position in 24 biased bytes.
+// 18 patterns: 6 variants × 3 rotations (X/Y × $0400/$03FF × inc/dec)
+//
+// Pattern encoding: each pattern is 6 bytes packed as lo (bytes 0-3) + hi (bytes 4-5).
+// Stored as two constant arrays indexed by pattern number.
 
-const N_DFAS: u32 = 18u;
-const N_STATES: u32 = 25u;
-const ACCEPT: u32 = 9u;
-const CELL_BYTES: u32 = 24u;
+const N_PATTERNS: u32 = 18u;
 
-fn dfa_lookup(dfa_idx: u32, state: u32, byte_val: u32) -> u32 {
-    // dfa_tables layout: [dfa_idx * N_STATES * 256 + state * 256 + byte_val]
-    let idx = dfa_idx * N_STATES * 256u + state * 256u + byte_val;
-    return dfa_tables[idx];
+// Bytes 0-3 of each pattern (little-endian u32)
+const PAT_LO = array<u32, 18>(
+    // X, $0400:  rot0         rot1         rot2
+    0x009D00B5u, 0xCA04009Du, 0x9D00B5CAu,  // DEX
+    0x009D00B5u, 0xE804009Du, 0x9D00B5E8u,  // INX
+    // Y, $0400:
+    0x009900B7u, 0x88040099u, 0x9900B788u,  // DEY
+    0x009900B7u, 0xC8040099u, 0x9900B7C8u,  // INY
+    // X, $03FF (INX only):
+    0xFF9D00B5u, 0xE803FF9Du, 0x9D00B5E8u,  // INX3FF
+    // Y, $03FF (INY only):
+    0xFF9900B7u, 0xC803FF99u, 0x9900B7C8u,  // INY3FF
+);
+
+// Bytes 4-5 of each pattern (u16 in low bits)
+const PAT_HI = array<u32, 18>(
+    0xCA04u, 0x00B5u, 0x0400u,  // DEX
+    0xE804u, 0x00B5u, 0x0400u,  // INX
+    0x8804u, 0x00B7u, 0x0400u,  // DEY
+    0xC804u, 0x00B7u, 0x0400u,  // INY
+    0xE803u, 0x00B5u, 0x03FFu,  // INX3FF
+    0xC803u, 0x00B7u, 0x03FFu,  // INY3FF
+);
+
+fn get_byte(cell: array<u32, 6>, pos: u32) -> u32 {
+    return (cell[pos / 4u] >> ((pos % 4u) * 8u)) & 0xFFu;
 }
 
-fn run_dfas_on_cell(cell: array<u32, 6>) -> bool {
-    // Run all 18 DFAs in parallel on the 24-byte cell
-    var states: array<u32, 18>;
-    // Initial states: all 0
+// Extract 4 bytes starting at pos as a u32 (little-endian)
+fn extract_u32_at(cell: array<u32, 6>, pos: u32) -> u32 {
+    let w = pos / 4u;
+    let b = pos % 4u;
+    if (b == 0u) { return cell[w]; }
+    return (cell[w] >> (b * 8u)) | (cell[w + 1u] << ((4u - b) * 8u));
+}
 
-    // Process 24 bytes (6 words × 4 bytes)
-    for (var w = 0u; w < 6u; w++) {
-        let word = cell[w];
-        for (var bi = 0u; bi < 4u; bi++) {
-            let byte_val = (word >> (bi * 8u)) & 0xFFu;
-            for (var d = 0u; d < N_DFAS; d++) {
-                states[d] = dfa_lookup(d, states[d], byte_val);
+// Extract 2 bytes starting at pos as a u16
+fn extract_u16_at(cell: array<u32, 6>, pos: u32) -> u32 {
+    let w = pos / 4u;
+    let b = pos % 4u;
+    if (b <= 2u) {
+        return (cell[w] >> (b * 8u)) & 0xFFFFu;
+    }
+    // b == 3: straddles two words
+    return ((cell[w] >> 24u) | (cell[w + 1u] << 8u)) & 0xFFFFu;
+}
+
+fn scan_core_patterns(cell: array<u32, 6>) -> bool {
+    // Check 19 positions (0..18) for any of the 18 six-byte core patterns
+    for (var pos = 0u; pos <= 18u; pos++) {
+        let lo = extract_u32_at(cell, pos);
+        let hi = extract_u16_at(cell, pos + 4u);
+        for (var p = 0u; p < N_PATTERNS; p++) {
+            if (lo == PAT_LO[p] && hi == PAT_HI[p]) {
+                return true;
             }
         }
-    }
-
-    // Also process 8 zero bytes (positions 24-31) to match JAX padding
-    for (var z = 0u; z < 8u; z++) {
-        for (var d = 0u; d < N_DFAS; d++) {
-            states[d] = dfa_lookup(d, states[d], 0u);
-        }
-    }
-
-    // Check if any DFA accepted
-    for (var d = 0u; d < N_DFAS; d++) {
-        if (states[d] == ACCEPT) { return true; }
     }
     return false;
 }
@@ -180,7 +197,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var ci = 0u; ci < n_cells; ci++) {
         if (found) { break; }
         let cell = generate_cell(seed, ci);
-        if (run_dfas_on_cell(cell)) {
+        if (scan_core_patterns(cell)) {
             found = true;
         }
     }
