@@ -505,15 +505,22 @@
         const FULL_CENSUS_MS = 2000;
         let gpuHashAvailable = true; // set false if cellHashes fails
         let hashPending = false; // true while a cellHashes readback is in flight
+        let _diagTimer = performance.now();
         async function renderLoop() {
+            // One-time diagnostic (3s after start)
+            if (_diagTimer && performance.now() - _diagTimer > 3000) {
+                console.log('[diag]', { running, gpuMode, gpuSim: !!gpuSim, gpuHashAvailable, hashPending, cellViewPending,
+                    totalQuanta, lastCensus: !!lastCensus, passesPerTick: passesPerTick(), gpuPassDebt });
+                _diagTimer = null;
+            }
             const now = performance.now();
             if (running && gpuMode && gpuSim) {
                 gpuPassDebt += passesPerTick();
                 const t0 = now;
                 let didPass = false;
                 while (gpuPassDebt >= 1 && performance.now() - t0 < 12) {
-                    await gpuSim.runPass();
-                    await gpuSim.runPass();
+                    gpuSim.runPass();
+                    gpuSim.runPass();
                     gpuPassDebt--;
                     didPass = true;
                 }

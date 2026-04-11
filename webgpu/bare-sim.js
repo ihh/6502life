@@ -127,7 +127,7 @@ export class BareSim {
         this.device.queue.writeBuffer(this.storageBuffer, alignedBase, buf);
     }
 
-    async runPass() {
+    runPass() {
         const B = this.B, M = this.M;
         const N = (B * B) / 2;
 
