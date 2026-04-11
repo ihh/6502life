@@ -927,14 +927,24 @@
             startSim();
         }
 
-        // --- Touch debug (Chrome mobile) ---
+        // --- Touch debug (on-screen, for Chrome iOS) ---
+        const _touchLog = [];
+        function touchDbg(msg) {
+            _touchLog.push(msg);
+            if (_touchLog.length > 5) _touchLog.shift();
+            logEl.textContent = _touchLog.join('\n');
+        }
         document.addEventListener('touchstart', e => {
             const t = e.target;
-            console.log('[touch] touchstart on', t.tagName, t.id || t.className, 'touches:', e.touches.length);
+            touchDbg('touch:' + t.tagName + '#' + (t.id||'') + ' ' + e.touches.length + 't');
         }, { passive: true });
         document.addEventListener('click', e => {
             const t = e.target;
-            console.log('[touch] click on', t.tagName, t.id || t.className);
+            touchDbg('click:' + t.tagName + '#' + (t.id||''));
+        }, true);
+        document.addEventListener('pointerdown', e => {
+            const t = e.target;
+            touchDbg('ptr:' + t.tagName + '#' + (t.id||'') + ' ' + e.pointerType);
         }, true);
 
         $('toggle').onclick=()=>{
