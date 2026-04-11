@@ -534,11 +534,18 @@
                 }
                 // Full census: periodically for functional count + cell inspector
                 const censusInterval = gpuHashAvailable ? FULL_CENSUS_MS : 100;
-                if (now - lastFullCensusTime > censusInterval) {
+                if (now - lastFullCensusTime > censusInterval && !cellViewPending) {
                     lastFullCensusTime = now;
-                    lastCensus = await gpuSim.census();
-                    totalQuanta = gpuSim.totalQuanta;
-                    requestCellViews();
+                    cellViewPending = true;
+                    gpuSim.census().then(c => {
+                        lastCensus = c;
+                        totalQuanta = gpuSim.totalQuanta;
+                        if(gpuSim.getCellView) {
+                            lastCellView0=gpuSim.getCellView(inspectI,inspectJ);
+                            lastCellView1=gpuSim.getCellView(inspectNI,inspectNJ);
+                        }
+                        cellViewPending = false;
+                    }).catch(() => { cellViewPending = false; });
                 }
                 if (didPass) applyCosmicRaysGpu(gpuSim);
             }
@@ -727,17 +734,22 @@
         // === Worker ===
         function workerSend(msg){worker.postMessage(msg);}
         let cellViewPending = false;
-        async function requestCellViews(forceCensus) {
+        function requestCellViews(forceCensus) {
             if(gpuMode&&gpuSim&&gpuSim.getCellView) {
                 if (forceCensus && !cellViewPending) {
                     cellViewPending = true;
-                    lastCensus = await gpuSim.census();
-                    totalQuanta = gpuSim.totalQuanta;
-                    lastFullCensusTime = performance.now();
-                    cellViewPending = false;
+                    gpuSim.census().then(c => {
+                        lastCensus = c;
+                        totalQuanta = gpuSim.totalQuanta;
+                        lastFullCensusTime = performance.now();
+                        lastCellView0=gpuSim.getCellView(inspectI,inspectJ);
+                        lastCellView1=gpuSim.getCellView(inspectNI,inspectNJ);
+                        cellViewPending = false;
+                    }).catch(() => { cellViewPending = false; });
+                } else {
+                    lastCellView0=gpuSim.getCellView(inspectI,inspectJ);
+                    lastCellView1=gpuSim.getCellView(inspectNI,inspectNJ);
                 }
-                lastCellView0=gpuSim.getCellView(inspectI,inspectJ);
-                lastCellView1=gpuSim.getCellView(inspectNI,inspectNJ);
             } else if(worker) {
                 workerSend({type:'getCellView',i:inspectI,j:inspectJ});
                 workerSend({type:'getCellView',i:inspectNI,j:inspectNJ});

@@ -209,8 +209,9 @@ export class BareSim {
         pass.dispatchWorkgroups(Math.ceil(N / 32)); // workgroup_size = 32
         pass.end();
         this.device.queue.submit([commandEncoder.finish()]);
-        await this.device.queue.onSubmittedWorkDone();
-
+        // Don't await — GPU processes queue in order, so subsequent
+        // writeBuffer/submit calls are safe without waiting. Avoiding
+        // onSubmittedWorkDone fixes Safari where it can stall indefinitely.
         this.totalQuanta += N;
     }
 
