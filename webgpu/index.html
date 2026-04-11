@@ -497,15 +497,15 @@
             }
         }
 
-        // --- Render loop: 60fps rendering, census every 500ms. ---
-        // GPU census (4MB readback) is expensive — do it periodically, not every frame.
-        // Between censuses, render from cached data (grid still updates, just less often).
+        // --- Render loop: 60fps rendering. ---
+        // GPU cellHashes (4KB readback) every frame for grid display.
+        // Full census (4MB readback) every 2s for functional count + cell inspector.
         let gpuPassDebt = 0;
-        let lastCensusTime = 0;
-        const CENSUS_MS = 20; // census every 20ms (50Hz grid updates)
+        let lastFullCensusTime = 0;
+        const FULL_CENSUS_MS = 2000;
+        let gpuHashAvailable = true; // set false if cellHashes fails
         async function renderLoop() {
             const now = performance.now();
-            // GPU sim: run passes for this frame (fractional accumulator)
             if (running && gpuMode && gpuSim) {
                 gpuPassDebt += passesPerTick();
                 const t0 = now;
@@ -518,9 +518,20 @@
                 }
                 if (gpuPassDebt > 3) gpuPassDebt = 3;
                 totalQuanta = gpuSim.totalQuanta;
-                // Census: periodically (not every frame)
-                if (now - lastCensusTime > CENSUS_MS) {
-                    lastCensusTime = now;
+                // Fast GPU cell hashes for grid display (4KB, every frame)
+                if (gpuHashAvailable && gpuSim.cellHashes) {
+                    try {
+                        const hashes = await gpuSim.cellHashes();
+                        if (lastCensus) lastCensus.cellChars = hashes;
+                    } catch(e) {
+                        console.warn('cellHashes failed, falling back to full census:', e);
+                        gpuHashAvailable = false;
+                    }
+                }
+                // Full census: periodically for functional count + cell inspector
+                const censusInterval = gpuHashAvailable ? FULL_CENSUS_MS : 100;
+                if (now - lastFullCensusTime > censusInterval) {
+                    lastFullCensusTime = now;
                     lastCensus = await gpuSim.census();
                     totalQuanta = gpuSim.totalQuanta;
                     requestCellViews();
@@ -528,7 +539,7 @@
                 if (didPass) applyCosmicRaysGpu(gpuSim);
             }
 
-            // Render everything (from cached lastCensus)
+            // Render everything
             for(let i=0;i<2048;i++){glowWrite[i]*=GLOW_DECAY;glowFetch[i]*=GLOW_DECAY;}
             animateTrace();
             renderGrid();
