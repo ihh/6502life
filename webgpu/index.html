@@ -927,20 +927,25 @@
             startSim();
         }
 
-        // --- Touch debug (on-screen, for Chrome iOS) ---
-        const _touchLog = [];
-        function touchDbg(msg) {
-            _touchLog.push(performance.now().toFixed(0) + ' ' + msg);
-            if (_touchLog.length > 8) _touchLog.shift();
-            logEl.textContent = _touchLog.join('\n');
-        }
-        for (const ev of ['touchstart','touchend','touchcancel','pointerdown','pointerup','click']) {
-            document.addEventListener(ev, e => {
-                const t = e.target;
-                const extra = ev === 'touchstart' ? ' ' + e.touches.length + 't' : '';
-                touchDbg(ev + ':' + t.tagName + '#' + (t.id||t.className||'') + extra);
-            }, { capture: true, passive: true });
-        }
+        // --- Chrome iOS fix: touchend→click synthesis is broken ---
+        // Chrome on iOS fires touchstart/touchend/pointerdown/pointerup but
+        // never synthesizes a click event. Detect this and manually fire click.
+        (function fixChromeiOSTaps() {
+            const els = document.querySelectorAll('button, select, input');
+            els.forEach(el => {
+                let awaitingClick = false;
+                el.addEventListener('pointerup', () => {
+                    awaitingClick = true;
+                    setTimeout(() => {
+                        if (awaitingClick) {
+                            awaitingClick = false;
+                            el.click();
+                        }
+                    }, 50);
+                });
+                el.addEventListener('click', () => { awaitingClick = false; });
+            });
+        })();
 
         $('toggle').onclick=()=>{
             running=!running;
