@@ -39,7 +39,7 @@ async function init(B) {
 }
 
 let censusSkip = 0;
-const CENSUS_INTERVAL = 1; // send census every tick for smooth grid updates
+const CENSUS_INTERVAL = 2; // send census every 2 ticks
 
 async function runLoop() {
     while (running) {
@@ -87,7 +87,12 @@ onmessage = async (e) => {
         case 'loadBoard':
             // Bulk load: msg.data is an ArrayBuffer of the entire board
             // (register init values already set by blake3soup)
-            if (sim) sim.storage.set(new Uint8Array(msg.data));
+            if (sim) {
+                sim.storage.set(new Uint8Array(msg.data));
+                console.log('[worker] loadBoard:', msg.data.byteLength, 'bytes');
+            } else {
+                console.warn('[worker] loadBoard: sim not initialized');
+            }
             break;
         case 'start':
             passesPerTick = msg.speed || 1;

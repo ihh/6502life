@@ -878,10 +878,11 @@
         async function main() {
             logEl.textContent='';
             // Try GPU init
+            console.log('WebGPU:', !!navigator.gpu, navigator.gpu ? 'available' : 'not available');
             if(navigator.gpu){try{
                 const adapter=await navigator.gpu.requestAdapter();
+                console.log('WebGPU adapter:', !!adapter);
                 if(adapter){const{BareSim}=await import('./bare-sim.js?v=2');gpuSim=await BareSim.create(B);gpuAvailable=true;}
-                else{console.warn('WebGPU: no adapter');}
             }catch(e){console.error('WebGPU init failed:',e);print('GPU: '+e.message);}}
             // Always set up worker (needed for CPU mode)
             setupWorker();
