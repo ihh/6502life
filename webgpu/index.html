@@ -375,7 +375,7 @@
             return cps.toFixed(0);
         }
 
-        function renderGrid() {
+        function updateStats() {
             if(!lastCensus) return;
             const c=lastCensus, now=performance.now();
             if(running && now-lastRateTime>300) {
@@ -386,7 +386,6 @@
             const cps=running?rateEMA:0;
             fpsFrames++;
             if(now-fpsT0>1000){fpsVal=Math.round(fpsFrames*1000/(now-fpsT0));fpsFrames=0;fpsT0=now;}
-            // Show rate with target comparison when underperforming
             const target = targetCycPerSec();
             const ratio = target > 0 ? cps / target : 1;
             let rateStr = formatRate(cps);
@@ -406,7 +405,11 @@
                     statsEl.textContent = c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s '+fpsVal+'fps';
                 }
             }
+        }
 
+        function renderGrid() {
+            if(!lastCensus) return;
+            const c=lastCensus;
             gridCtx.fillStyle='#111'; gridCtx.fillRect(0,0,gridCanvas.width,gridCanvas.height);
             gridCtx.font='10px monospace'; gridCtx.textBaseline='top';
             for(let j=B-1;j>=0;j--) for(let i=0;i<B;i++) {
@@ -543,6 +546,7 @@
                     const timeout = new Promise((_, rej) => setTimeout(() => rej('timeout'), 200));
                     Promise.race([gpuSim.cellHashes(), timeout]).then(hashes => {
                         if (lastCensus) lastCensus.cellChars = hashes;
+                        _gridGeneration++;
                         hashPending = false;
                     }).catch(e => {
                         console.warn('cellHashes unavailable:', e);
@@ -558,6 +562,7 @@
                     gpuSim.census().then(c => {
                         lastCensus = c;
                         totalQuanta = gpuSim.totalQuanta;
+                        _gridGeneration++;
                         if(gpuSim.getCellView) {
                             lastCellView0=gpuSim.getCellView(inspectI,inspectJ);
                             lastCellView1=gpuSim.getCellView(inspectNI,inspectNJ);
@@ -583,6 +588,7 @@
             // Render: skip grid redraw if cellChars hasn't changed
             const _rt0 = performance.now();
             for(let i=0;i<2048;i++){glowWrite[i]*=GLOW_DECAY;glowFetch[i]*=GLOW_DECAY;}
+            updateStats();
             animateTrace();
             if (_gridGeneration !== _lastRenderedGen || !running) {
                 _lastRenderedGen = _gridGeneration;
