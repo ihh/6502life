@@ -72,7 +72,12 @@ async function runLoop() {
         if (n > 0) applyCosmicRays();
 
         const t2 = performance.now();
-        _diagPassMs += t2 - t1;
+        const _passElapsed = t2 - t1;
+        _diagPassMs += _passElapsed;
+        // Log individual passes that take >500ms (stall detection)
+        if (_passElapsed > 500) {
+            console.log(`[worker STALL] pass took ${_passElapsed.toFixed(0)}ms (${n} passes, tick ${_diagTicks})`);
+        }
 
         // Lightweight quanta update every tick (no hashing)
         // quickCensus (grid chars) every 4 ticks, full census every 16
