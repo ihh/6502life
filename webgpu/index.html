@@ -1215,45 +1215,28 @@
                 return;
             }
 
-            // Otherwise: scan a batch of seeds with DFAs
-            const batchSize = 1024;
-            let seedBase;
-            if (mineDebugSeed !== null) {
-                // Debug: start just before the target seed so it's in this batch
-                seedBase = (mineDebugSeed - Math.floor(batchSize / 2)) >>> 0;
-                print(`  Debug: scanning near seed ${mineDebugSeed}`);
-                mineDebugSeed = null;
-            } else {
-                seedBase = (crypto.getRandomValues(new Uint32Array(1))[0]) >>> 0;
-            }
-
-            const hits = await miner.scanBatch(seedBase, batchSize);
-            mineTotal += batchSize;
-
-            for (let i = 0; i < hits.length; i++) {
-                if (hits[i]) {
-                    mineDfaHits++;
-                    pendingVerify.push((seedBase + i) >>> 0);
+            // Scan multiple batches per frame (GPU is fast, don't waste frames)
+            const batchSize = 4096;
+            const batchesPerFrame = 4;
+            for (let b = 0; b < batchesPerFrame && mining && pendingVerify.length === 0; b++) {
+                let seedBase;
+                if (mineDebugSeed !== null) {
+                    seedBase = (mineDebugSeed - Math.floor(batchSize / 2)) >>> 0;
+                    print(`  Debug: scanning near seed ${mineDebugSeed}`);
+                    mineDebugSeed = null;
+                } else {
+                    seedBase = (crypto.getRandomValues(new Uint32Array(1))[0]) >>> 0;
                 }
-            }
 
-            // Visual preview: flash a random seed from this batch
-            if (pendingVerify.length === 0) {
-                const previewSeed = (seedBase + Math.floor(Math.random() * batchSize)) >>> 0;
-                const previewData = blake3soup(previewSeed, B);
-                if (gpuMode && gpuSim) {
-                    for (let i = 0; i < B; i++)
-                        for (let j = 0; j < B; j++) {
-                            const off = (i * B + j) * 1024;
-                            gpuSim.writeCell(i, j, 0, previewData.subarray(off, off + 1024));
-                        }
-                    for (let p = 0; p < 3; p++) await gpuSim.runPass();
-                    lastCensus = await gpuSim.census();
-                    totalQuanta = gpuSim.totalQuanta;
+                const hits = await miner.scanBatch(seedBase, batchSize);
+                mineTotal += batchSize;
+
+                for (let i = 0; i < hits.length; i++) {
+                    if (hits[i]) {
+                        mineDfaHits++;
+                        pendingVerify.push((seedBase + i) >>> 0);
+                    }
                 }
-                requestCellViews();
-                currentSeed = previewSeed;
-                $('seedInput').value = previewSeed;
             }
 
             if (mining) requestAnimationFrame(() => mineLoop());
@@ -1281,7 +1264,7 @@
                 if (!miner) {
                     print('Initializing GPU miner...');
                     const { WebGPUMiner } = await import('./miner.js');
-                    miner = await WebGPUMiner.create({ boardSize: B, batchSize: 1024 });
+                    miner = await WebGPUMiner.create({ boardSize: B, batchSize: 4096 });
                 }
                 mining = true;
                 setMiningUI(true);
