@@ -1258,21 +1258,19 @@
                 }
             }
 
-            // Visual preview: flash a random seed from this batch
+            // Visual preview: show grid chars for a random seed (cheap: 24 bytes per cell)
             const _mt2 = performance.now();
             if (pendingVerify.length === 0) {
                 const previewSeed = (seedBase + Math.floor(Math.random() * batchSize)) >>> 0;
-                const previewData = blake3soup(previewSeed, B);
-                if (gpuMode && gpuSim) {
-                    for (let i = 0; i < B; i++)
-                        for (let j = 0; j < B; j++) {
-                            const off = (i * B + j) * 1024;
-                            gpuSim.writeCell(i, j, 0, previewData.subarray(off, off + 1024));
-                        }
-                    lastCensus = await gpuSim.census();
-                    totalQuanta = gpuSim.totalQuanta;
+                const nCells = B * B;
+                const chars = new Uint8Array(nCells);
+                for (let ci = 0; ci < nCells; ci++) {
+                    const biased = applyBias(blake3cell(previewSeed, ci, 24));
+                    chars[ci] = cellHash(biased, 0);
                 }
-                requestCellViews();
+                if (!lastCensus) lastCensus = { cellChars: chars, functional: 0, total: nCells, topLoops: [], cellMap: new Uint8Array(nCells) };
+                else lastCensus.cellChars = chars;
+                _gridGeneration++;
                 currentSeed = previewSeed;
                 $('seedInput').value = previewSeed;
             }
