@@ -72,8 +72,6 @@ async function runLoop() {
             postMessage({ type: 'quickCensus', cellChars, totalQuanta: sim.totalQuanta });
         } else {
             postMessage({ type: 'quanta', totalQuanta: sim.totalQuanta });
-        } else {
-            postMessage({ type: 'quanta', totalQuanta: sim.totalQuanta });
         }
 
         // Send trace if one was captured
