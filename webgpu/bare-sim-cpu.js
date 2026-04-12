@@ -10,28 +10,15 @@ import { PRNG } from './prng.js';
 const ADDR_MASK = 0x7FF;
 const MAX_STEPS = 350;
 
-// 6-bit parity hash for grid display.
-// Each bit = parity (XOR fold) of a memory region.
-// Bit 5 (MSB) = $80-$F8, bit 4 = $10-$7F, bit 3 = $00-$0F (zero page identity)
-// Bit 2 = $300-$3FF, bit 1 = $200-$2FF, bit 0 = $100-$1FF (stack)
-// Result + 63 → ASCII 63-126. Excludes register save bytes $F9-$FF.
-function regionParity(c, base, lo, hi) {
-    let x = 0;
-    for (let k = lo; k <= hi; k++) x ^= c[base + k];
-    // Fold byte to single bit
-    x ^= x >> 4; x ^= x >> 2; x ^= x >> 1;
-    return x & 1;
+// Cell display hash: djb2 of bytes $00-$14 (stable after replicator spread).
+// These 21 bytes include the replicator program and are not modified by execution.
+// Uses 6 bits → 64 chars in ASCII 63-126.
+function cellDisplayHash(c, base) {
+    let h = 5381;
+    for (let k = 0; k <= 0x14; k++) h = ((h * 33) ^ c[base + k]) >>> 0;
+    return 63 + (h & 63);
 }
-function cellParityHash(c, base) {
-    const h = (regionParity(c, base, 0x100, 0x1FF))       // bit 0: stack
-            | (regionParity(c, base, 0x200, 0x2FF) << 1)   // bit 1
-            | (regionParity(c, base, 0x300, 0x3FF) << 2)   // bit 2
-            | (regionParity(c, base, 0x00, 0x0F) << 3)     // bit 3: zp low
-            | (regionParity(c, base, 0x10, 0x7F) << 4)     // bit 4: zp mid
-            | (regionParity(c, base, 0x80, 0xF8) << 5);    // bit 5: zp high
-    return 63 + h;
-}
-export { cellParityHash };
+export { cellDisplayHash };
 const F_C = 0x01, F_Z = 0x02, F_I = 0x04, F_D = 0x08;
 const F_B = 0x10, F_U = 0x20, F_V = 0x40, F_N = 0x80;
 
@@ -308,7 +295,7 @@ export class BareSimCPU {
         const cellChars = new Uint8Array(B * B);
         for (let ci = 0; ci < B * B; ci++) {
             const base = ci * M;
-            cellChars[ci] = cellParityHash(c, base);
+            cellChars[ci] = cellDisplayHash(c, base);
         }
         return cellChars;
     }

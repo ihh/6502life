@@ -156,11 +156,11 @@
         let running=false, gpuMode=false, gpuAvailable=false, gpuSim=null, worker=null;
         const B=64, MEAN_CYC=4096, CHAR_W=10, CHAR_H=14;
 
-        // 6-bit parity hash for cell display character
-        function _rp(c,base,lo,hi){let x=0;for(let k=lo;k<=hi;k++)x^=c[base+k];x^=x>>4;x^=x>>2;x^=x>>1;return x&1;}
+        // Cell display hash: djb2 of bytes $00-$14 (stable after replicator spread)
         function cellHash(c,base){
-            return 63+((_rp(c,base,0x100,0x1FF))|(_rp(c,base,0x200,0x2FF)<<1)|(_rp(c,base,0x300,0x3FF)<<2)
-                |(_rp(c,base,0x00,0x0F)<<3)|(_rp(c,base,0x10,0x7F)<<4)|(_rp(c,base,0x80,0xF8)<<5));
+            let h=5381;
+            for(let k=0;k<=0x14;k++) h=((h*33)^c[base+k])>>>0;
+            return 63+(h&63);
         }
 
         // Target speed in cycles/cell/sec from dropdown (value is in K)
