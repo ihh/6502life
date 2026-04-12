@@ -1101,7 +1101,23 @@
                 const match = findCorePattern(biased24);
                 if (!match) continue;
 
-                // Core match! Generate full 1024-byte biased cell and simulate
+                // Pre-filter: require BCC/BVC + valid backward offset (0xE0-0xF8)
+                // OR JMP to address before core. Rejects ~99% of false positives cheaply.
+                let hasLoop = false;
+                for (let k = match.offset; k < 22; k++) {
+                    const b = biased24[k];
+                    if ((b === 0x90 || b === 0x50) && k + 1 < 24) {
+                        const off = biased24[k + 1];
+                        if (off >= 0xE0 && off <= 0xF8) { hasLoop = true; break; }
+                    }
+                    if (b === 0x4C && k + 2 < 24) { // JMP abs
+                        const target = biased24[k + 1] | (biased24[k + 2] << 8);
+                        if (target <= match.offset + 5) { hasLoop = true; break; }
+                    }
+                }
+                if (!hasLoop) continue;
+
+                // Passed pre-filter. Generate full cell and simulate.
                 const fullRaw = blake3cell(seed, ci, 1024);
                 const fullBiased = applyBias(fullRaw);
                 // Save pre-sim signature: first 21 bytes ($00-$14, stable after copy)
