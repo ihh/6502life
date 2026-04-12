@@ -1260,8 +1260,9 @@
 
             // Visual preview: show grid chars for a random seed (cheap: 24 bytes per cell)
             const _mt2 = performance.now();
-            if (pendingVerify.length === 0) {
-                const previewSeed = (seedBase + Math.floor(Math.random() * batchSize)) >>> 0;
+            {
+                const previewSeed = pendingVerify.length > 0
+                    ? pendingVerify[0] : (seedBase + Math.floor(Math.random() * batchSize)) >>> 0;
                 const nCells = B * B;
                 const chars = new Uint8Array(nCells);
                 for (let ci = 0; ci < nCells; ci++) {
