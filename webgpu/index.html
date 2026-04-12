@@ -90,7 +90,21 @@
     </style>
 </head>
 <body>
-    <h3 style="display:flex;justify-content:space-between;align-items:baseline">6502life Bare Sim <a href="https://github.com/ihh/6502life" style="font-size:12px;font-weight:normal;color:#0a0;text-decoration:none">github</a></h3>
+    <h3 style="display:flex;justify-content:space-between;align-items:baseline">6502life Bare Sim <span style="font-size:12px;font-weight:normal"><a href="#" id="whatLink" style="color:#0a0;text-decoration:none">(what is this?)</a> <a href="https://github.com/ihh/6502life" style="color:#0a0;text-decoration:none">github</a></span></h3>
+    <div id="whatPanel" style="display:none;background:#1a1a1a;border:1px solid #0a0;padding:10px 14px;margin-bottom:8px;font-size:12px;line-height:1.5;max-width:700px">
+This is a 64x64 virtual array of "cells", each running a 6502 processor with 1k of RAM.<br>
+At every time-step, one of the cells gets its memory mapped into 0x0000-0x03FF.<br>
+A random adjacent cell gets its memory mapped into 0x0400-0x07FF.<br>
+Then the CPU executes a random number of instructions before an interrupt occurs.<br>
+There's some other VM/OS tomfoolery where registers are saved/loaded from zero page, but that's about it.<br>
+<br>
+The main 64x64 board shows one character per cell (just a simple hash of the 1kb cell contents).<br>
+The bitmaps to the right of the board show the memory maps of the currently selected cells.<br>
+(Most viable self-replicators only copy zero page, so only the top quarter of the bitmaps tend to change.)<br>
+<br>
+The entire board is randomly seeded from a "soup" of opcodes. Sometimes, self-replicating programs emerge :)<br>
+The board is initialized by default with one such self-replicating seed; you can "discover" more by clicking the Mine button.
+    </div>
     <div id="mode"></div>
     <div id="stats"></div>
 
@@ -960,6 +974,8 @@
 
         // --- Chrome iOS fix: click events not synthesized from touch ---
         // Use pointerup directly for interactive elements instead of onclick.
+        $('whatLink').onclick = (e) => { e.preventDefault(); const p = $('whatPanel'); p.style.display = p.style.display === 'none' ? '' : 'none'; };
+
         function onTap(el, fn) {
             let _touchFired = false;
             el.addEventListener('pointerup', e => {
