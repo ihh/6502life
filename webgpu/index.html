@@ -865,11 +865,11 @@
                 inspectI=col;inspectJ=row;
                 updateNeighbor(); glowWrite.fill(0);glowFetch.fill(0);
                 bitmapEma[0].fill(0); bitmapEma[1].fill(0);
-                requestCellViews(true);
-                // Auto-place active specimen at new cell
+                // Inject specimen first (writes to GPU + snapshot), then refresh views
                 if (activeSpecimen >= 0 && specimens[activeSpecimen]) {
                     injectSpecimen(activeSpecimen);
                 }
+                requestCellViews(true);
             }
         }
         {
