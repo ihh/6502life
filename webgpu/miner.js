@@ -96,6 +96,11 @@ export class WebGPUMiner {
 
         const shaderCode = await (await fetch('mine.wgsl')).text();
         const shaderModule = device.createShaderModule({ code: shaderCode });
+        const compilationInfo = await shaderModule.getCompilationInfo();
+        for (const msg of compilationInfo.messages) {
+            console[msg.type === 'error' ? 'error' : 'warn'](
+                `[mine.wgsl ${msg.type}] line ${msg.lineNum}: ${msg.message}`);
+        }
 
         // Build soup LUT: 65536 bytes → packed as u32[16384]
         const lutBytes = buildSoupLUT();
