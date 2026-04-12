@@ -1111,18 +1111,14 @@
                 testSim.writeCell(0, 0, 0xFF, [0xFF]);         // S
                 for (let p = 0; p < 40; p++) testSim.runPass();
 
-                // Check spread: count cells with matching content hash
-                // (works regardless of where the replicator sits in the cell)
-                const hashes = new Uint8Array(testB * testB);
+                // Check spread: count cells matching the replicator cell's hash
+                const repHash = cellHash(testSim.storage, 0); // cell (0,0) = the replicator
+                let spreadCount = 0;
                 for (let ci2 = 0; ci2 < testB * testB; ci2++) {
-                    hashes[ci2] = cellHash(testSim.storage, ci2 * 1024);
+                    if (cellHash(testSim.storage, ci2 * 1024) === repHash) spreadCount++;
                 }
-                // Find the most common hash
-                const counts = {};
-                for (const h of hashes) counts[h] = (counts[h] || 0) + 1;
-                const maxCount = Math.max(...Object.values(counts));
 
-                if (maxCount >= testB * testB / 2) {
+                if (spreadCount >= testB * testB / 2) {
                     // It spread to half the board! Extract program signature
                     const coreHex = [...biased24.slice(match.offset, match.offset + 8)]
                         .map(b => b.toString(16).padStart(2, '0')).join('');
@@ -1146,7 +1142,7 @@
                     for (let k = 0; k < coreHex.length; k += 2)
                         progBytes.push(parseInt(coreHex.substr(k, 2), 16));
                     return {
-                        seed, spread: maxCount, functional: maxCount,
+                        seed, spread: spreadCount, functional: spreadCount,
                         cell: [row, col], hex: coreHex,
                         length: progBytes.length, program: progBytes,
                         time: new Date().toISOString(),
