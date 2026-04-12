@@ -1196,21 +1196,26 @@
         async function mineLoop() {
             if (!mining) return;
 
-            // If we have hits to verify, verify ONE per frame
+            // Verify candidates: batch multiple per frame, preview every ~200ms
             if (pendingVerify.length > 0) {
-                const seed = pendingVerify.shift();
-                showMinePreview(seed);
-                try {
-                    const result = await verifyHit(seed);
-                    if (result) {
-                        mineVerified++;
-                        saveDiscovery(result);
-                        const hex = result.program.map(b=>b.toString(16).padStart(2,'0')).join(' ');
-                        print(`  ⭐ VERIFIED seed=${seed} spread=${result.spread} L=${result.length} [${hex}]`);
+                const t0 = performance.now();
+                let lastPreviewSeed = null;
+                while (pendingVerify.length > 0 && performance.now() - t0 < 40) {
+                    const seed = pendingVerify.shift();
+                    lastPreviewSeed = seed;
+                    try {
+                        const result = await verifyHit(seed);
+                        if (result) {
+                            mineVerified++;
+                            saveDiscovery(result);
+                            const hex = result.program.map(b=>b.toString(16).padStart(2,'0')).join(' ');
+                            print(`  ⭐ VERIFIED seed=${seed} spread=${result.spread} L=${result.length} [${hex}]`);
+                        }
+                    } catch(e) {
+                        console.error('verifyHit error:', e);
                     }
-                } catch(e) {
-                    console.error('verifyHit error:', e);
                 }
+                if (lastPreviewSeed !== null) showMinePreview(lastPreviewSeed);
                 if (mining) {
                     $('mine').textContent = 'Stop';
                     requestAnimationFrame(() => mineLoop());
