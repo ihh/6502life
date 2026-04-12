@@ -1246,9 +1246,38 @@
                 }
             }
 
-            // Diagnostic: log first 5 batches
+            // Diagnostic: first 5 batches, plus CPU cross-check on first batch
             if (mineTotal <= batchSize * 5) {
-                console.log(`[mine] batch seedBase=${seedBase} hits=${batchHits}/${batchSize} pending=${pendingVerify.length} hitsArray=[${hits.slice(0,20).join(',')}...]`);
+                console.log(`[mine] batch seedBase=${seedBase} hits=${batchHits}/${batchSize} pending=${pendingVerify.length}`);
+            }
+            if (mineTotal === batchSize) {
+                // CPU cross-check: scan a known-good seed and a sample from this batch
+                const { findCorePattern } = await import('./miner.js');
+                for (const testSeed of [417314, seedBase, seedBase + 1]) {
+                    let cpuHit = false, cpuCore = false;
+                    for (let ci = 0; ci < B * B && !cpuHit; ci++) {
+                        const biased = applyBias(blake3cell(testSeed, ci, 24));
+                        const m = findCorePattern(biased);
+                        if (m) {
+                            cpuCore = true;
+                            // Check pre-filter (BCC/BVC + offset, or JMP)
+                            for (let k = m.offset; k < 22; k++) {
+                                const b = biased[k];
+                                if ((b === 0x90 || b === 0x50) && k + 1 < 24) {
+                                    const off = biased[k + 1];
+                                    if (off >= 0xE0 && off <= 0xF8) { cpuHit = true; break; }
+                                }
+                                if (b === 0x4C && k + 2 < 24) {
+                                    const target = biased[k + 1] | (biased[k + 2] << 8);
+                                    if (target <= m.offset + 5) { cpuHit = true; break; }
+                                }
+                            }
+                        }
+                    }
+                    const gpuHit = testSeed >= seedBase && testSeed < seedBase + batchSize
+                        ? hits[testSeed - seedBase] : '(not in batch)';
+                    console.log(`[mine xcheck] seed=${testSeed} cpuCore=${cpuCore} cpuHit=${cpuHit} gpuHit=${gpuHit}`);
+                }
             }
 
             // Preview a random seed from this batch
