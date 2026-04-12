@@ -1104,6 +1104,8 @@
                 // Core match! Generate full 1024-byte biased cell and simulate
                 const fullRaw = blake3cell(seed, ci, 1024);
                 const fullBiased = applyBias(fullRaw);
+                // Save pre-sim signature: first 21 bytes ($00-$14, stable after copy)
+                const preSig = fullBiased.slice(0, 0x15);
                 const testSim = new BareSimCPU(testB, 1024, { seed: 42 });
                 testSim.writeCell(0, 0, 0, fullBiased);
                 testSim.writeCell(0, 0, 0xF9, [0x00, 0x00]); // PC=0
@@ -1111,11 +1113,16 @@
                 testSim.writeCell(0, 0, 0xFF, [0xFF]);         // S
                 for (let p = 0; p < 40; p++) testSim.runPass();
 
-                // Check spread: count cells matching the replicator cell's hash
-                const repHash = cellHash(testSim.storage, 0); // cell (0,0) = the replicator
+                // Check spread: count cells whose $00-$14 bytes exactly match
+                // the pre-sim signature. Exact match avoids hash collisions.
                 let spreadCount = 0;
                 for (let ci2 = 0; ci2 < testB * testB; ci2++) {
-                    if (cellHash(testSim.storage, ci2 * 1024) === repHash) spreadCount++;
+                    const base = ci2 * 1024;
+                    let match = true;
+                    for (let k = 0; k < 0x15; k++) {
+                        if (testSim.storage[base + k] !== preSig[k]) { match = false; break; }
+                    }
+                    if (match) spreadCount++;
                 }
 
                 if (spreadCount >= testB * testB / 2) {
@@ -1325,6 +1332,12 @@
         }
         // Enter key in seed input loads BLAKE3 soup
         $('seedInput').onkeydown = (e) => { if (e.key === 'Enter') initSoup(); };
+        // Debounced: reload soup 500ms after user stops typing
+        let _seedDebounce = null;
+        $('seedInput').oninput = () => {
+            clearTimeout(_seedDebounce);
+            _seedDebounce = setTimeout(() => { if ($('seedInput').value) initSoup(); }, 500);
+        };
         // Right-click on dropdown: delete discovery
         $('repSelect').oncontextmenu = (e) => {
             const v = $('repSelect').value;
