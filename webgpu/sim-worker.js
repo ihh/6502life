@@ -67,9 +67,11 @@ async function runLoop() {
             censusSkip = 0;
             const c = sim.census();
             postMessage({ type: 'census', data: c, totalQuanta: sim.totalQuanta });
-        } else {
+        } else if (censusSkip % 2 === 0) {
             const cellChars = sim.quickCensus();
             postMessage({ type: 'quickCensus', cellChars, totalQuanta: sim.totalQuanta });
+        } else {
+            postMessage({ type: 'quanta', totalQuanta: sim.totalQuanta });
         } else {
             postMessage({ type: 'quanta', totalQuanta: sim.totalQuanta });
         }
