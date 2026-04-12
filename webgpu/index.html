@@ -1251,33 +1251,18 @@
                 console.log(`[mine] batch seedBase=${seedBase} hits=${batchHits}/${batchSize} pending=${pendingVerify.length}`);
             }
             if (mineTotal === batchSize) {
-                // CPU cross-check: scan a known-good seed and a sample from this batch
+                // GPU validation: scan a batch containing known-good seed 417314
+                const testBase = 417314;
+                const testHits = await miner.scanBatch(testBase, 1024);
+                let testFound = [];
+                for (let i = 0; i < 1024; i++) if (testHits[i]) testFound.push(testBase + i);
+                console.log(`[mine gpu-test] scanned ${testBase}-${testBase+1023}: ${testFound.length} hits: [${testFound.join(',')}]`);
+                console.log(`[mine gpu-test] seed 417314 gpu=${testHits[0]} (should be 1)`);
+                // CPU check for comparison
                 const { findCorePattern } = await import('./miner.js');
-                for (const testSeed of [417314, seedBase, seedBase + 1]) {
-                    let cpuHit = false, cpuCore = false;
-                    for (let ci = 0; ci < B * B && !cpuHit; ci++) {
-                        const biased = applyBias(blake3cell(testSeed, ci, 24));
-                        const m = findCorePattern(biased);
-                        if (m) {
-                            cpuCore = true;
-                            // Check pre-filter (BCC/BVC + offset, or JMP)
-                            for (let k = m.offset; k < 22; k++) {
-                                const b = biased[k];
-                                if ((b === 0x90 || b === 0x50) && k + 1 < 24) {
-                                    const off = biased[k + 1];
-                                    if (off >= 0xE0 && off <= 0xF8) { cpuHit = true; break; }
-                                }
-                                if (b === 0x4C && k + 2 < 24) {
-                                    const target = biased[k + 1] | (biased[k + 2] << 8);
-                                    if (target <= m.offset + 5) { cpuHit = true; break; }
-                                }
-                            }
-                        }
-                    }
-                    const gpuHit = testSeed >= seedBase && testSeed < seedBase + batchSize
-                        ? hits[testSeed - seedBase] : '(not in batch)';
-                    console.log(`[mine xcheck] seed=${testSeed} cpuCore=${cpuCore} cpuHit=${cpuHit} gpuHit=${gpuHit}`);
-                }
+                const biased = applyBias(blake3cell(417314, 28*64+6, 24));
+                console.log(`[mine gpu-test] seed 417314 cell(28,6) first8: ${[...biased.slice(0,8)].map(b=>b.toString(16).padStart(2,'0')).join(' ')}`);
+                console.log(`[mine gpu-test] cpuPattern: ${JSON.stringify(findCorePattern(biased))}`);
             }
 
             // Preview a random seed from this batch
