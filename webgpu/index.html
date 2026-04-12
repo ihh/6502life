@@ -1228,7 +1228,6 @@
             let seedBase;
             if (mineDebugSeed !== null) {
                 seedBase = (mineDebugSeed - Math.floor(batchSize / 2)) >>> 0;
-                print(`  Debug: scanning near seed ${mineDebugSeed}`);
                 mineDebugSeed = null;
             } else {
                 seedBase = (crypto.getRandomValues(new Uint32Array(1))[0]) >>> 0;
@@ -1272,7 +1271,6 @@
 
             try {
                 if (!miner) {
-                    print('Initializing GPU miner...');
                     const { WebGPUMiner } = await import('./miner.js');
                     miner = await WebGPUMiner.create({ boardSize: B, batchSize: 4096 });
                 }
@@ -1287,11 +1285,6 @@
                 running = false;
                 $('toggle').textContent = 'Start';
                 $('mine').textContent = 'Stop';
-                if (mineDebugSeed !== null) {
-                    print(`Mining near seed ${mineDebugSeed} (debug)...`);
-                } else {
-                    print('Mining... core pattern hits verified by simulation.');
-                }
                 mineLoop();
             } catch(e) {
                 print('Mining error: ' + e.message);
