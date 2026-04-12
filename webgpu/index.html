@@ -423,8 +423,8 @@
                 const disc = loadDiscoveries();
                 const stats = loadMineStats();
                 const totalSeeds = stats.totalSeeds || 0;
-                if (totalSeeds > 0 || disc.length > 0) {
-                    statsEl.textContent = c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s '+fpsVal+'fps  |  seeds:'+totalSeeds.toLocaleString()+' discoveries:'+disc.length;
+                if (disc.length > 0) {
+                    statsEl.textContent = c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s '+fpsVal+'fps  |  Mined: '+disc.length;
                 } else {
                     statsEl.textContent = c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s '+fpsVal+'fps';
                 }
@@ -1054,9 +1054,7 @@
             const dfa = (stats.dfaHits || 0) + mineDfaHits;
             const hits = disc.length;
             if (seeds > 0 || hits > 0) {
-                statsEl.textContent = mining
-                    ? `⛏ MINING  seeds:${seeds.toLocaleString()}  candidates:${dfa}  hits:${hits}`
-                    : `seeds tried:${seeds.toLocaleString()}  candidates:${dfa}  discoveries:${hits}`;
+                if (!mining) statsEl.textContent = `Mined: ${hits}`;
                 statsEl.style.color = mining ? '#ff0' : '#0a0';
             }
         }
@@ -1176,7 +1174,7 @@
             const totalSeeds = (stats.totalSeeds || 0) + mineTotal;
             const totalDfa = (stats.dfaHits || 0) + mineDfaHits;
             const disc = loadDiscoveries().length;
-            statsEl.textContent = `⛏ MINING  seeds:${totalSeeds.toLocaleString()}  candidates:${totalDfa}  discoveries:${disc}  ${(rate).toFixed(0)}/s`;
+            statsEl.textContent = `Mining ${(rate).toFixed(0)} seeds/sec. Viable: ${disc}`;
             statsEl.style.color = '#ff0';
         }
         // (mineTotal etc. declared above, before localStorage code)
