@@ -11,9 +11,9 @@
  * so the model can (however improbably) generate any byte sequence.
  *
  * Usage:
- *   import { buildKmerLUT, kmerFill } from './kmer-soup.js';
+ *   import { buildKmerLUT, kmerFill, KMER_TABLE } from './kmer-soup.js';
  *   const lut = buildKmerLUT();          // once at startup
- *   kmerFill(lut, rawBytes, out, 1024);  // fill 1024 bytes from PRNG
+ *   kmerFill(lut, rawBytes, out, 249);   // fill 249 bytes from PRNG
  */
 
 // ---------------------------------------------------------------------------
@@ -171,7 +171,7 @@ const N_KMERS = KMER_DEFS.length;
 
 /** Weights: Float64Array(N_KMERS) */
 const KMER_WEIGHTS = new Float64Array(N_KMERS);
-/** Byte data: array of Uint8Array */
+/** Byte data: array of Uint8Array, indexed by k-mer id */
 const KMER_BYTES = new Array(N_KMERS);
 
 for (let i = 0; i < N_KMERS; i++) {
@@ -179,6 +179,26 @@ for (let i = 0; i < N_KMERS; i++) {
     KMER_WEIGHTS[i] = def[0];
     KMER_BYTES[i] = new Uint8Array(def.slice(1));
 }
+
+// ---------------------------------------------------------------------------
+// Exposed table (read-only view for inspection / tuning tools)
+// ---------------------------------------------------------------------------
+
+/**
+ * The full k-mer table.  Each entry: { weight, bytes: Uint8Array }.
+ * Entries 0-255 are the 256 base single-byte k-mers; the rest are
+ * multi-byte instruction k-mers.  Mutating this after buildKmerLUT()
+ * has no effect on the LUT already built.
+ */
+export const KMER_TABLE = Object.freeze(
+    KMER_DEFS.map(def => Object.freeze({
+        weight: def[0],
+        bytes:  new Uint8Array(def.slice(1)),
+    }))
+);
+
+/** Number of k-mers */
+export { N_KMERS };
 
 // ---------------------------------------------------------------------------
 // LUT builder
@@ -240,6 +260,45 @@ export function kmerFill(kmerLUT, raw, out, len) {
         }
     }
     return ri;
+}
+
+// ---------------------------------------------------------------------------
+// GPU buffer builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Build packed GPU-ready buffers for the k-mer LUT + byte table.
+ *
+ * Returns:
+ *   lutPacked   — Uint32Array(16384): 65536 u16 LUT entries packed as u32
+ *   kmerData    — Uint32Array(N):     packed k-mer records, 1 u32 each:
+ *                 bits [1:0]  = length - 1  (0=1byte, 1=2byte, 2=3byte)
+ *                 bits [9:2]  = byte 0
+ *                 bits [17:10]= byte 1  (if length >= 2, else 0)
+ *                 bits [25:18]= byte 2  (if length == 3, else 0)
+ *   nKmers      — number of k-mers
+ */
+export function buildKmerGPUBuffers() {
+    const cpuLUT = buildKmerLUT();
+
+    // Pack LUT: two u16 per u32
+    const lutPacked = new Uint32Array(32768);
+    for (let i = 0; i < 65536; i += 2) {
+        lutPacked[i >> 1] = cpuLUT.lut[i] | (cpuLUT.lut[i + 1] << 16);
+    }
+
+    // Pack k-mer data: 1 u32 per k-mer
+    const kmerData = new Uint32Array(N_KMERS);
+    for (let i = 0; i < N_KMERS; i++) {
+        const b = KMER_BYTES[i];
+        let word = (b.length - 1);          // bits [1:0]
+        word |= (b[0] << 2);               // bits [9:2]
+        if (b.length >= 2) word |= (b[1] << 10);  // bits [17:10]
+        if (b.length >= 3) word |= (b[2] << 18);  // bits [25:18]
+        kmerData[i] = word;
+    }
+
+    return { lutPacked, kmerData, nKmers: N_KMERS };
 }
 
 // ---------------------------------------------------------------------------
