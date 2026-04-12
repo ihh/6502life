@@ -173,6 +173,10 @@ The board is initialized by default with one such self-replicating seed; you can
                     <option value="1e-8">1e-8</option>
                     <option value="1e-7">1e-7</option>
                 </select>
+                <select id="soup">
+                    <option value="tiers" selected>soup:tiers</option>
+                    <option value="kmer">soup:kmer</option>
+                </select>
                 <select id="brush"></select>
                 <button id="capture">Capture</button>
             </div>
@@ -182,6 +186,7 @@ The board is initialized by default with one such self-replicating seed; you can
     <pre id="log"></pre>
     <script type="module">
         import { disassemble } from './disasm.js';
+        import { buildKmerLUT, kmerFill } from './kmer-soup.js';
 
         const $ = id => document.getElementById(id);
         const logEl=$('log'), gridCanvas=$('grid'), statsEl=$('stats');
@@ -724,6 +729,27 @@ The board is initialized by default with one such self-replicating seed; you can
             return out;
         }
 
+        // K-mer soup: order-2 Markov model via weighted 1/2/3-byte k-mers
+        const _kmerLUT = buildKmerLUT();
+        function kmerSoup(seed, boardSize) {
+            const nCells = boardSize * boardSize, M = 1024;
+            const out = new Uint8Array(nCells * M);
+            for (let ci = 0; ci < nCells; ci++) {
+                const base = ci * M;
+                // 2 raw bytes per k-mer draw; worst case 1024 draws → 2048 bytes
+                const raw = blake3cell(seed, ci, 2048);
+                kmerFill(_kmerLUT, raw, out.subarray(base, base + M), M);
+                // Register save area (0xF9-0xFF): proper init values
+                out[base+0xF9]=0x00; out[base+0xFA]=0x00; // PC=0x0000
+                out[base+0xFB]=0x30; // P (flags: U+B set)
+                out[base+0xFC]=0x00; out[base+0xFD]=0x00;
+                out[base+0xFE]=0x00; out[base+0xFF]=0xFF; // S
+            }
+            return out;
+        }
+
+        function getSoupType() { return $('soup').value; }
+
         let currentSeed = 0;
 
         async function initSoup(seedOverride) {
@@ -739,7 +765,7 @@ The board is initialized by default with one such self-replicating seed; you can
             currentSeed = seed;
             seedInput.value = seed;
 
-            const data = blake3soup(seed, B);
+            const data = getSoupType() === 'kmer' ? kmerSoup(seed, B) : blake3soup(seed, B);
             if (gpuMode && gpuSim) {
                 gpuSim.totalQuanta = 0;
                 for (let i = 0; i < B; i++)
@@ -1222,7 +1248,7 @@ The board is initialized by default with one such self-replicating seed; you can
         // (miner, mining declared above)
         let miningStatsInterval = null;
         function setMiningUI(on) {
-            for (const id of ['toggle','repSelect','seedInput','speed','engine','noise','brush','capture'])
+            for (const id of ['toggle','repSelect','seedInput','speed','engine','noise','soup','brush','capture'])
                 if ($(id)) $(id).disabled = on;
             if (on) {
                 miningStatsInterval = setInterval(updateMiningStats, 500);
@@ -1388,6 +1414,8 @@ The board is initialized by default with one such self-replicating seed; you can
             clearTimeout(_seedDebounce);
             _seedDebounce = setTimeout(() => { if ($('seedInput').value) initSoup(); }, 500);
         };
+        // Changing soup model re-inits with same seed
+        $('soup').onchange = () => initSoup(currentSeed);
         // Right-click on dropdown: delete discovery
         $('repSelect').oncontextmenu = (e) => {
             const v = $('repSelect').value;
