@@ -364,26 +364,9 @@
             if(worker) worker.postMessage({type:'traceCell',i:inspectI,j:inspectJ});
         }
 
-        // Pre-rendered character atlas: 94 printable chars (33-126) as 8x12 bitmaps
-        let charAtlas = null; // ImageData pixel arrays per char
-        function buildCharAtlas() {
-            const tmp = document.createElement('canvas');
-            tmp.width = CHAR_W; tmp.height = CHAR_H;
-            const tc = tmp.getContext('2d');
-            tc.font = '10px monospace'; tc.textBaseline = 'top';
-            charAtlas = new Array(94);
-            for (let i = 0; i < 94; i++) {
-                tc.fillStyle = '#000'; tc.fillRect(0, 0, CHAR_W, CHAR_H);
-                tc.fillStyle = '#fff'; tc.fillText(String.fromCharCode(33 + i), 0, 0);
-                charAtlas[i] = tc.getImageData(0, 0, CHAR_W, CHAR_H).data;
-            }
-        }
-        let gridImageData = null;
         function initGridCanvas() {
             gridCanvas.width=B*CHAR_W; gridCanvas.height=B*CHAR_H;
             gridCtx.font='10px monospace'; gridCtx.textBaseline='top';
-            buildCharAtlas();
-            gridImageData = gridCtx.createImageData(B*CHAR_W, B*CHAR_H);
         }
 
         function formatRate(cps) {
@@ -424,33 +407,17 @@
                 }
             }
 
-            // Blit grid using pre-rendered char atlas + putImageData (single call, no fillText)
-            if (gridImageData && charAtlas) {
-                const gd = gridImageData.data;
-                const W = B * CHAR_W;
-                for(let j=B-1;j>=0;j--) for(let i=0;i<B;i++) {
-                    const ch = c.cellChars[i*B+j];
-                    const atlas = charAtlas[Math.max(0, Math.min(93, ch - 33))];
-                    const sx=i*CHAR_W, sy=(B-1-j)*CHAR_H;
-                    // Tint color
-                    let cr=0, cg=255, cb=0; // green
-                    if(i===inspectI&&j===inspectJ) { cr=80; cg=80; cb=255; }
-                    else if(i===inspectNI&&j===inspectNJ) { cr=255; cg=80; cb=80; }
-                    // Copy char pixels with tint
-                    for(let dy=0;dy<CHAR_H;dy++) {
-                        const rowOff = ((sy+dy)*W+sx)*4;
-                        const aOff = dy*CHAR_W*4;
-                        for(let dx=0;dx<CHAR_W;dx++) {
-                            const pi = rowOff+dx*4;
-                            const brightness = atlas[aOff+dx*4]; // red channel = brightness
-                            gd[pi]   = (brightness * cr) >> 8;
-                            gd[pi+1] = (brightness * cg) >> 8;
-                            gd[pi+2] = (brightness * cb) >> 8;
-                            gd[pi+3] = 255;
-                        }
-                    }
-                }
-                gridCtx.putImageData(gridImageData, 0, 0);
+            gridCtx.fillStyle='#111'; gridCtx.fillRect(0,0,gridCanvas.width,gridCanvas.height);
+            gridCtx.font='10px monospace'; gridCtx.textBaseline='top';
+            for(let j=B-1;j>=0;j--) for(let i=0;i<B;i++) {
+                const sx=i*CHAR_W, sy=(B-1-j)*CHAR_H;
+                const ch=String.fromCharCode(c.cellChars[i*B+j]);
+                if(i===inspectI&&j===inspectJ) {
+                    gridCtx.fillStyle='#00c'; gridCtx.fillRect(sx,sy,CHAR_W,CHAR_H); gridCtx.fillStyle='#fff';
+                } else if(i===inspectNI&&j===inspectNJ) {
+                    gridCtx.fillStyle='#a00'; gridCtx.fillRect(sx,sy,CHAR_W,CHAR_H); gridCtx.fillStyle='#fff';
+                } else { gridCtx.fillStyle='#0f0'; }
+                gridCtx.fillText(ch,sx,sy);
             }
         }
 
@@ -541,7 +508,7 @@
         let hashPending = false; // true while a cellHashes readback is in flight
         let _diagTimer = performance.now();
         let _mainDiagT0 = 0, _mainFrames = 0, _mainMsgs = 0, _mainRenderMs = 0;
-        let _lastRenderedChars = null;
+        let _gridGeneration = 0, _lastRenderedGen = -1;
         async function renderLoop() {
             // One-time diagnostic (3s after start)
             if (_diagTimer && performance.now() - _diagTimer > 3000) {
@@ -617,9 +584,8 @@
             const _rt0 = performance.now();
             for(let i=0;i<2048;i++){glowWrite[i]*=GLOW_DECAY;glowFetch[i]*=GLOW_DECAY;}
             animateTrace();
-            const curChars = lastCensus ? lastCensus.cellChars : null;
-            if (curChars !== _lastRenderedChars) {
-                _lastRenderedChars = curChars;
+            if (_gridGeneration !== _lastRenderedGen || !running) {
+                _lastRenderedGen = _gridGeneration;
                 renderGrid();
             }
             if(lastCellView0) renderCellView(ctx0,lastCellView0.data,0,0);
@@ -845,10 +811,10 @@
                         if(running) startSim();
                     }
                 } else if(msg.type==='census'){
-                    lastCensus=msg.data; totalQuanta=msg.totalQuanta; _mainMsgs++;
+                    lastCensus=msg.data; totalQuanta=msg.totalQuanta; _mainMsgs++; _gridGeneration++;
                 } else if(msg.type==='quickCensus'){
                     if (lastCensus) lastCensus.cellChars = msg.cellChars;
-                    totalQuanta=msg.totalQuanta; _mainMsgs++;
+                    totalQuanta=msg.totalQuanta; _mainMsgs++; _gridGeneration++;
                 } else if(msg.type==='quanta'){
                     totalQuanta=msg.totalQuanta; _mainMsgs++;
                 } else if(msg.type==='cellView'){
