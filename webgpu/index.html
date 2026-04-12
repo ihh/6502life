@@ -154,7 +154,14 @@
         function print(msg) { logEl.textContent += msg + '\n'; }
 
         let running=false, gpuMode=false, gpuAvailable=false, gpuSim=null, worker=null;
-        const B=64, MEAN_CYC=4096, CHAR_W=8, CHAR_H=12;
+        const B=64, MEAN_CYC=4096, CHAR_W=10, CHAR_H=14;
+
+        // 6-bit parity hash for cell display character
+        function _rp(c,base,lo,hi){let x=0;for(let k=lo;k<=hi;k++)x^=c[base+k];x^=x>>4;x^=x>>2;x^=x>>1;return x&1;}
+        function cellHash(c,base){
+            return 63+((_rp(c,base,0x100,0x1FF))|(_rp(c,base,0x200,0x2FF)<<1)|(_rp(c,base,0x300,0x3FF)<<2)
+                |(_rp(c,base,0x00,0x0F)<<3)|(_rp(c,base,0x10,0x7F)<<4)|(_rp(c,base,0x80,0xF8)<<5));
+        }
 
         // Target speed in cycles/cell/sec from dropdown (value is in K)
         function targetCycPerSec() { return (parseFloat($('speed').value) || 300) * 1000; }
@@ -228,11 +235,8 @@
             if (!lastCellView0 || !lastCensus) return;
             if (specimens.length >= MAX_SPECIMENS) return;
             const data = new Uint8Array(lastCellView0.data.slice(0, 1024));
-            // Compute hash for copy count
-            let h = 5381;
-            for (let k = 0; k < 0xF0; k++) h = ((h * 33) ^ data[k]) >>> 0;
-            for (let k = 0x200; k < 0x400; k++) h = ((h * 33) ^ data[k]) >>> 0;
-            const ch = String.fromCharCode(33 + (h % 94));
+            // Compute parity hash for copy count
+            const ch = String.fromCharCode(cellHash(data, 0));
             // Count copies: cells with same char in census
             const c = lastCensus;
             let copies = 0;
@@ -265,6 +269,7 @@
             if (gpuMode && gpuSim) {
                 lastCensus = await gpuSim.census();
                 totalQuanta = gpuSim.totalQuanta;
+                _gridGeneration++;
             } else if (worker) {
                 workerSend({type:'census'});
             }
@@ -290,15 +295,17 @@
                 div.className = 'specimen' + (i === activeSpecimen ? ' active' : '');
                 const label = document.createElement('span');
                 label.textContent = s.char + ' ' + s.time + ' x' + s.copies;
-                // Single click: inject once; if a different specimen is active, switch to it
-                label.onclick = () => {
+                // Single click on div: inject once
+                div.onclick = (e) => {
+                    if (e.target.className === 'spec-x') return; // don't inject on X button
                     if (activeSpecimen >= 0 && activeSpecimen !== i) {
                         clearActiveSpecimen();
                     }
                     injectSpecimen(i);
                 };
-                // Double click: toggle auto-placement mode
-                label.ondblclick = (e) => {
+                // Double click on div: toggle auto-placement mode
+                div.ondblclick = (e) => {
+                    if (e.target.className === 'spec-x') return;
                     e.preventDefault();
                     if (activeSpecimen === i) {
                         clearActiveSpecimen();
@@ -366,7 +373,7 @@
 
         function initGridCanvas() {
             gridCanvas.width=B*CHAR_W; gridCanvas.height=B*CHAR_H;
-            gridCtx.font='10px monospace'; gridCtx.textBaseline='top';
+            gridCtx.font='12px monospace'; gridCtx.textBaseline='top';
         }
 
         function formatRate(cps) {
@@ -411,7 +418,7 @@
             if(!lastCensus) return;
             const c=lastCensus;
             gridCtx.fillStyle='#111'; gridCtx.fillRect(0,0,gridCanvas.width,gridCanvas.height);
-            gridCtx.font='10px monospace'; gridCtx.textBaseline='top';
+            gridCtx.font='12px monospace'; gridCtx.textBaseline='top';
             for(let j=B-1;j>=0;j--) for(let i=0;i<B;i++) {
                 const sx=i*CHAR_W, sy=(B-1-j)*CHAR_H;
                 const ch=String.fromCharCode(c.cellChars[i*B+j]);
@@ -844,7 +851,10 @@
                 requestCellViews(true);
                 // Auto-place active specimen at new cell
                 if (activeSpecimen >= 0 && specimens[activeSpecimen]) {
+                    console.log('[specimen] injecting #'+activeSpecimen+' at ('+inspectI+','+inspectJ+')');
                     injectSpecimen(activeSpecimen);
+                } else {
+                    console.log('[specimen] no active specimen (activeSpecimen='+activeSpecimen+')');
                 }
             }
         }
@@ -1085,17 +1095,13 @@
                 testSim.writeCell(0, 0, 0xF9, [0x00, 0x00]); // PC=0
                 testSim.writeCell(0, 0, 0xFB, [0x30]);        // P
                 testSim.writeCell(0, 0, 0xFF, [0xFF]);         // S
-                for (let p = 0; p < 100; p++) await testSim.runPass();
+                for (let p = 0; p < 40; p++) testSim.runPass();
 
                 // Check spread: count cells with matching content hash
                 // (works regardless of where the replicator sits in the cell)
                 const hashes = new Uint8Array(testB * testB);
                 for (let ci2 = 0; ci2 < testB * testB; ci2++) {
-                    const base = ci2 * 1024;
-                    let h = 5381;
-                    for (let k = 0; k < 0xF0; k++) h = ((h * 33) ^ testSim.storage[base + k]) >>> 0;
-                    for (let k = 0x200; k < 0x400; k++) h = ((h * 33) ^ testSim.storage[base + k]) >>> 0;
-                    hashes[ci2] = 33 + (h % 94);
+                    hashes[ci2] = cellHash(testSim.storage, ci2 * 1024);
                 }
                 // Find the most common hash
                 const counts = {};
@@ -1185,8 +1191,10 @@
                     print(`  ✗ verify error: ${e.message}`);
                     console.error('verifyHit error:', e);
                 }
-                $('mine').textContent = 'Stop';
-                if (mining) requestAnimationFrame(() => mineLoop());
+                if (mining) {
+                    $('mine').textContent = 'Stop';
+                    requestAnimationFrame(() => mineLoop());
+                }
                 return;
             }
 

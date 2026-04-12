@@ -169,6 +169,13 @@ fn extract_u16_at(cell: array<u32, 6>, pos: u32) -> u32 {
     return ((cell[w] >> 24u) | (cell[w + 1u] << 8u)) & 0xFFFFu;
 }
 
+// Check if a byte is a branch opcode or JMP
+fn is_loop_candidate(b: u32) -> bool {
+    return b == 0x10u || b == 0x30u || b == 0x50u || b == 0x70u ||
+           b == 0x90u || b == 0xB0u || b == 0xD0u || b == 0xF0u ||
+           b == 0x4Cu; // JMP abs
+}
+
 fn scan_core_patterns(cell: array<u32, 6>) -> bool {
     // Check 19 positions (0..18) for any of the 18 six-byte core patterns
     for (var pos = 0u; pos <= 18u; pos++) {
@@ -176,7 +183,18 @@ fn scan_core_patterns(cell: array<u32, 6>) -> bool {
         let hi = extract_u16_at(cell, pos + 4u);
         for (var p = 0u; p < N_PATTERNS; p++) {
             if (lo == PAT_LO[p] && hi == PAT_HI[p]) {
-                return true;
+                // Core found at pos. Check remaining bytes for a branch/JMP.
+                for (var after = pos + 6u; after < 24u; after++) {
+                    if (is_loop_candidate(get_byte(cell, after))) {
+                        return true;
+                    }
+                }
+                // Also check bytes before (for rotated patterns where branch wraps)
+                for (var before = 0u; before < pos; before++) {
+                    if (is_loop_candidate(get_byte(cell, before))) {
+                        return true;
+                    }
+                }
             }
         }
     }

@@ -14,6 +14,7 @@
 
 import { buildOpcodeTable } from './opcode_table.js';
 import { PRNG } from './prng.js';
+import { cellParityHash } from './bare-sim-cpu.js';
 
 export class BareSim {
     constructor(device, pipeline, B, M, storageBuffer, opcodeBuffer, pairBuffer, budgetBuffer, seed) {
@@ -248,11 +249,7 @@ export class BareSim {
                     .map(b => b.toString(16).padStart(2, '0')).join('');
                 loopSigs[sig] = (loopSigs[sig] || 0) + 1;
             }
-            // Hash non-volatile: page 0 ($00-$EF), page 2 ($200-$2FF), page 3 ($300-$3FF)
-            let h = 5381;
-            for (let k = 0; k < 0xF0; k++) h = ((h * 33) ^ c[base + k]) >>> 0;
-            for (let k = 0x200; k < 0x400; k++) h = ((h * 33) ^ c[base + k]) >>> 0;
-            cellChars[ci] = 33 + (h % 94);
+            cellChars[ci] = cellParityHash(c, base);
         }
 
         // Copy snapshot BEFORE unmap (getMappedRange view is detached on unmap)
