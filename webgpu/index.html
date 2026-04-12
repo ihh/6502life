@@ -974,7 +974,7 @@ The board is initialized by default with one such self-replicating seed; you can
 
         // --- Chrome iOS fix: click events not synthesized from touch ---
         // Use pointerup directly for interactive elements instead of onclick.
-        $('whatLink').onclick = (e) => { e.preventDefault(); const p = $('whatPanel'); p.style.display = p.style.display === 'none' ? '' : 'none'; };
+        onTap($('whatLink'), (e) => { e.preventDefault(); const p = $('whatPanel'); p.style.display = p.style.display === 'none' ? '' : 'none'; });
 
         function onTap(el, fn) {
             let _touchFired = false;
