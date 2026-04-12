@@ -1215,28 +1215,63 @@
                 return;
             }
 
-            // Scan multiple batches per frame (GPU is fast, don't waste frames)
+            // Scan a batch of seeds
             const batchSize = 4096;
-            const batchesPerFrame = 4;
-            for (let b = 0; b < batchesPerFrame && mining && pendingVerify.length === 0; b++) {
-                let seedBase;
-                if (mineDebugSeed !== null) {
-                    seedBase = (mineDebugSeed - Math.floor(batchSize / 2)) >>> 0;
-                    print(`  Debug: scanning near seed ${mineDebugSeed}`);
-                    mineDebugSeed = null;
-                } else {
-                    seedBase = (crypto.getRandomValues(new Uint32Array(1))[0]) >>> 0;
-                }
+            let seedBase;
+            if (mineDebugSeed !== null) {
+                seedBase = (mineDebugSeed - Math.floor(batchSize / 2)) >>> 0;
+                print(`  Debug: scanning near seed ${mineDebugSeed}`);
+                mineDebugSeed = null;
+            } else {
+                seedBase = (crypto.getRandomValues(new Uint32Array(1))[0]) >>> 0;
+            }
 
-                const hits = await miner.scanBatch(seedBase, batchSize);
-                mineTotal += batchSize;
+            const _mt0 = performance.now();
+            const hits = await miner.scanBatch(seedBase, batchSize);
+            const _mt1 = performance.now();
+            mineTotal += batchSize;
 
-                for (let i = 0; i < hits.length; i++) {
-                    if (hits[i]) {
-                        mineDfaHits++;
-                        pendingVerify.push((seedBase + i) >>> 0);
-                    }
+            let batchHits = 0;
+            for (let i = 0; i < hits.length; i++) {
+                if (hits[i]) {
+                    mineDfaHits++;
+                    batchHits++;
+                    pendingVerify.push((seedBase + i) >>> 0);
                 }
+            }
+
+            // Visual preview: flash a random seed from this batch
+            const _mt2 = performance.now();
+            if (pendingVerify.length === 0) {
+                const previewSeed = (seedBase + Math.floor(Math.random() * batchSize)) >>> 0;
+                const previewData = blake3soup(previewSeed, B);
+                if (gpuMode && gpuSim) {
+                    for (let i = 0; i < B; i++)
+                        for (let j = 0; j < B; j++) {
+                            const off = (i * B + j) * 1024;
+                            gpuSim.writeCell(i, j, 0, previewData.subarray(off, off + 1024));
+                        }
+                    lastCensus = await gpuSim.census();
+                    totalQuanta = gpuSim.totalQuanta;
+                }
+                requestCellViews();
+                currentSeed = previewSeed;
+                $('seedInput').value = previewSeed;
+            }
+            const _mt3 = performance.now();
+
+            // Diagnostic: log timing every 3 seconds
+            if (!mineLoop._diagT0) { mineLoop._diagT0 = _mt0; mineLoop._scanMs = 0; mineLoop._previewMs = 0; mineLoop._batches = 0; mineLoop._seeds = 0; }
+            mineLoop._scanMs += _mt1 - _mt0;
+            mineLoop._previewMs += _mt3 - _mt2;
+            mineLoop._batches++;
+            mineLoop._seeds += batchSize;
+            if (_mt3 - mineLoop._diagT0 > 3000) {
+                const el = _mt3 - mineLoop._diagT0;
+                console.log(`[mine diag] ${(el/1000).toFixed(1)}s: ${mineLoop._batches} batches, ${mineLoop._seeds} seeds, ` +
+                    `scan=${mineLoop._scanMs.toFixed(0)}ms preview=${mineLoop._previewMs.toFixed(0)}ms ` +
+                    `rate=${(mineLoop._seeds*1000/el).toFixed(0)}/s hits=${batchHits}`);
+                mineLoop._diagT0 = _mt3; mineLoop._scanMs = 0; mineLoop._previewMs = 0; mineLoop._batches = 0; mineLoop._seeds = 0;
             }
 
             if (mining) requestAnimationFrame(() => mineLoop());
@@ -1265,6 +1300,7 @@
                     print('Initializing GPU miner...');
                     const { WebGPUMiner } = await import('./miner.js');
                     miner = await WebGPUMiner.create({ boardSize: B, batchSize: 4096 });
+                    console.log('[mine] miner created, batchSize=4096');
                 }
                 mining = true;
                 setMiningUI(true);
