@@ -1234,9 +1234,7 @@
                 seedBase = (crypto.getRandomValues(new Uint32Array(1))[0]) >>> 0;
             }
 
-            const _mt0 = performance.now();
             const hits = await miner.scanBatch(seedBase, batchSize);
-            const _mt1 = performance.now();
             mineTotal += batchSize;
 
             let batchHits = 0;
@@ -1246,6 +1244,11 @@
                     batchHits++;
                     pendingVerify.push((seedBase + i) >>> 0);
                 }
+            }
+
+            // Diagnostic: log first 5 batches
+            if (mineTotal <= batchSize * 5) {
+                console.log(`[mine] batch seedBase=${seedBase} hits=${batchHits}/${batchSize} pending=${pendingVerify.length} hitsArray=[${hits.slice(0,20).join(',')}...]`);
             }
 
             // Preview a random seed from this batch
