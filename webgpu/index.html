@@ -10,7 +10,6 @@
         body { font-family: monospace; background: #111; color: #0f0; padding: 12px;
                overscroll-behavior: none; }
         h3 { margin-bottom: 4px; }
-        #mode { font-size: 12px; color: #0a0; }
         #stats { font-size: 13px; margin: 4px 0 8px; overflow: hidden;
                  white-space: nowrap; text-overflow: ellipsis; }
         #cellinfo { font-size: 11px; color: #080; margin: 2px 0; }
@@ -44,6 +43,17 @@
         }
         #cv0 { border: 1px solid #006; }
         #cv1 { border: 1px solid #600; }
+        .map-wrap { position: relative; }
+        .cell-char {
+            position: absolute; bottom: 0; right: 2px;
+            transform: translateY(50%);
+            font-family: monospace; font-size: 16px; line-height: 1;
+            padding: 0 2px;
+            color: #fff;
+            z-index: 1;
+        }
+        #cellChar0 { background: #00c; }
+        #cellChar1 { background: #a00; }
 
         .bottom {
             grid-row: 2; grid-column: 1 / -1;
@@ -55,7 +65,7 @@
         #disasm {
             font-size: 10px; line-height: 1.3; color: #0a0;
             white-space: pre; margin: 0;
-            min-height: 8em; max-height: 30em; overflow-y: auto;
+            max-height: 30em; overflow-y: auto;
         }
         .dasm-cur { color: #fff; background: #030; }
 
@@ -99,7 +109,7 @@
     </style>
 </head>
 <body>
-    <h3 style="display:flex;justify-content:space-between;align-items:baseline"><span>6502life Bare Sim <a href="#" id="whatLink" style="font-size:12px;font-weight:normal;color:#0a0;text-decoration:none">(what is this?)</a></span> <a href="https://github.com/ihh/6502life" style="font-size:12px;font-weight:normal;color:#0a0;text-decoration:none">github</a></h3>
+    <h3 style="display:flex;justify-content:space-between;align-items:baseline"><span>6502life Bare Sim <a href="#" id="whatLink" style="font-size:12px;font-weight:normal;color:#0a0;text-decoration:none">(what is this?)</a></span> <a href="https://github.com/ihh/6502life" id="ghLink" style="font-size:12px;font-weight:normal;color:#0a0;text-decoration:none">github</a></h3>
     <div id="whatPanel" style="display:none;background:#1a1a1a;border:1px solid #0a0;padding:10px 14px;margin-bottom:8px;font-size:12px;line-height:1.5;max-width:700px">
 This is a 64x64 virtual array of "cells", each running a 6502 processor with 1k of RAM.<br>
 At every time-step, one of the cells gets its memory mapped into 0x0000-0x03FF.<br>
@@ -114,7 +124,6 @@ The bitmaps to the right of the board show the memory maps of the currently sele
 The entire board is randomly seeded from a "soup" of opcodes. Sometimes, self-replicating programs emerge :)<br>
 The board is initialized by default with one such self-replicating seed; you can "discover" more by clicking the Mine button.
     </div>
-    <div id="mode"></div>
     <div id="stats"></div>
 
     <div class="main">
@@ -122,9 +131,15 @@ The board is initialized by default with one such self-replicating seed; you can
             <canvas id="grid"></canvas>
         </div>
         <div class="maps">
-            <canvas id="cv0" width="64" height="128"></canvas>
+            <div class="map-wrap">
+                <canvas id="cv0" width="64" height="128"></canvas>
+                <span id="cellChar0" class="cell-char"></span>
+            </div>
             <div id="cellinfo"></div>
-            <canvas id="cv1" width="64" height="128"></canvas>
+            <div class="map-wrap">
+                <canvas id="cv1" width="64" height="128"></canvas>
+                <span id="cellChar1" class="cell-char"></span>
+            </div>
             <div id="specimens"></div>
         </div>
         <div class="bottom">
@@ -171,7 +186,7 @@ The board is initialized by default with one such self-replicating seed; you can
 
         const $ = id => document.getElementById(id);
         const logEl=$('log'), gridCanvas=$('grid'), statsEl=$('stats');
-        const modeEl=$('mode'), cellInfoEl=$('cellinfo'), dasmEl=$('disasm');
+        const cellInfoEl=$('cellinfo'), dasmEl=$('disasm');
         const gridCtx = gridCanvas.getContext('2d');
         const ctx0 = $('cv0').getContext('2d'), ctx1 = $('cv1').getContext('2d');
         function print(msg) { logEl.textContent += msg + '\n'; }
@@ -443,13 +458,14 @@ The board is initialized by default with one such self-replicating seed; you can
                 statsEl.style.color = '';
             }
             if (!mining) {
+                const modeTag = gpuMode ? '[GPU] ' : '[CPU] ';
                 const disc = loadDiscoveries();
                 const stats = loadMineStats();
                 const totalSeeds = stats.totalSeeds || 0;
                 if (disc.length > 0) {
-                    statsEl.textContent = c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s '+fpsVal+'fps  |  Mined: '+disc.length;
+                    statsEl.textContent = modeTag+c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s '+fpsVal+'fps  |  Mined: '+disc.length;
                 } else {
-                    statsEl.textContent = c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s '+fpsVal+'fps';
+                    statsEl.textContent = modeTag+c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s '+fpsVal+'fps';
                 }
             }
         }
@@ -506,32 +522,51 @@ The board is initialized by default with one such self-replicating seed; you can
             ctx.putImageData(img,0,0);
         }
 
+        let dasmVisible = false;
         let dasmExpanded = false;
         let lastDasmKey = '';
         function renderDisasm() {
             if(!lastCellView0) { dasmEl.textContent=''; lastDasmKey=''; return; }
             const mem=lastCellView0.data;
             const pc=(mem[0xF9]<<8)|mem[0xFA];
-            // Only rebuild if PC or expansion state changed
-            const key = inspectI + ',' + inspectJ + '/' + pc + '/' + totalQuanta + '/' + (dasmExpanded ? 'x' : '');
+            const key = inspectI + ',' + inspectJ + '/' + pc + '/' + totalQuanta + '/' + (dasmVisible ? 'v' : '') + (dasmExpanded ? 'x' : '');
             if (key === lastDasmKey) return;
             lastDasmKey = key;
-            const nLines = dasmExpanded ? 32 : 8;
-            const lines=disassemble(mem,pc,nLines,0x3FF);
             const hx = v => v.toString(16).toUpperCase().padStart(2,'0');
             const a=mem[0xFC], xr=mem[0xFD], yr=mem[0xFE], s=mem[0xFF], fl=mem[0xFB];
             const flags = (fl&0x80?'N':'-')+(fl&0x40?'V':'-')+'-'+(fl&0x10?'B':'-')+(fl&0x08?'D':'-')+(fl&0x04?'I':'-')+(fl&0x02?'Z':'-')+(fl&0x01?'C':'-');
-            let html='<span style="color:#080">A='+hx(a)+' X='+hx(xr)+' Y='+hx(yr)+' S='+hx(s)+' '+flags+'</span>\n';
-            for(let i=0;i<lines.length;i++) {
-                if(i===0) html+='<span class="dasm-cur">'+escHtml(lines[i].text)+'</span>\n';
-                else html+=escHtml(lines[i].text)+'\n';
+            let html='<span style="color:#080">A='+hx(a)+' X='+hx(xr)+' Y='+hx(yr)+' S='+hx(s)+' '+flags+'</span> ';
+            html+='<a data-action="toggle-dasm" style="color:#0a0;cursor:pointer">PC='+hx(pc>>8)+hx(pc&0xFF)+'</a>';
+            if (dasmVisible) {
+                const nLines = dasmExpanded ? 32 : 8;
+                const lines=disassemble(mem,pc,nLines,0x3FF);
+                html+='\n';
+                for(let i=0;i<lines.length;i++) {
+                    if(i===0) html+='<span class="dasm-cur">'+escHtml(lines[i].text)+'</span>\n';
+                    else html+=escHtml(lines[i].text)+'\n';
+                }
+                html+='<a data-action="toggle-expand" style="color:#080;cursor:pointer">'+(dasmExpanded ? 'Less' : 'More...')+'</a>';
             }
             dasmEl.innerHTML=html;
-            const link = document.createElement('a');
-            link.style.cssText = 'color:#080;cursor:pointer';
-            link.textContent = dasmExpanded ? 'Less' : 'More...';
-            onTap(link, () => { dasmExpanded = !dasmExpanded; lastDasmKey=''; renderDisasm(); });
-            dasmEl.appendChild(link);
+        }
+        // Event delegation for disasm links (survives DOM rebuilds, works on mobile+desktop)
+        {
+            let _touchFired = false;
+            function handleDasmAction(action) {
+                if (action === 'toggle-dasm') { dasmVisible = !dasmVisible; lastDasmKey=''; renderDisasm(); }
+                else if (action === 'toggle-expand') { dasmExpanded = !dasmExpanded; lastDasmKey=''; renderDisasm(); }
+            }
+            dasmEl.addEventListener('pointerup', e => {
+                const link = e.target.closest('[data-action]');
+                if (!link) return;
+                if (e.pointerType === 'touch') { _touchFired = true; handleDasmAction(link.dataset.action); }
+            });
+            dasmEl.addEventListener('click', e => {
+                const link = e.target.closest('[data-action]');
+                if (!link) return;
+                if (_touchFired) { _touchFired = false; return; }
+                handleDasmAction(link.dataset.action);
+            });
         }
         function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
@@ -623,6 +658,10 @@ The board is initialized by default with one such self-replicating seed; you can
             if (_gridGeneration !== _lastRenderedGen || !running) {
                 _lastRenderedGen = _gridGeneration;
                 renderGrid();
+                if (lastCensus) {
+                    $('cellChar0').textContent = String.fromCharCode(lastCensus.cellChars[inspectI*B+inspectJ]);
+                    $('cellChar1').textContent = String.fromCharCode(lastCensus.cellChars[inspectNI*B+inspectNJ]);
+                }
             }
             if(lastCellView0) renderCellView(ctx0,lastCellView0.data,0,0);
             if(lastCellView1) renderCellView(ctx1,lastCellView1.data,1024,1);
@@ -913,7 +952,7 @@ The board is initialized by default with one such self-replicating seed; you can
 
         function switchToGpu() {
             gpuMode = true;
-            modeEl.textContent = '[GPU]';
+            statsEl.textContent = '[GPU]';
             $('engine').value = 'gpu';
             // Init with replicator
             gpuSim.writeCell(0,0,0,REP_CODE);
@@ -923,7 +962,7 @@ The board is initialized by default with one such self-replicating seed; you can
 
         function switchToCpu() {
             gpuMode = false;
-            modeEl.textContent = '[CPU]';
+            statsEl.textContent = '[CPU]';
             $('engine').value = 'cpu';
             if (!worker) { setupWorker(); }
             workerSend({type:'init', B});
@@ -966,7 +1005,7 @@ The board is initialized by default with one such self-replicating seed; you can
                 // Disable GPU option if not available
                 $('engine').querySelector('[value=gpu]').disabled = true;
                 $('engine').value = 'cpu';
-                modeEl.textContent='[CPU]';
+                statsEl.textContent='[CPU]';
                 workerSend({type:'init',B});
             }
             initGridCanvas(); initBrush(); fpsT0=lastRateTime=performance.now();
@@ -984,6 +1023,7 @@ The board is initialized by default with one such self-replicating seed; you can
         // --- Chrome iOS fix: click events not synthesized from touch ---
         // Use pointerup directly for interactive elements instead of onclick.
         onTap($('whatLink'), (e) => { e.preventDefault(); const p = $('whatPanel'); p.style.display = p.style.display === 'none' ? '' : 'none'; });
+        onTap($('ghLink'), () => { window.open('https://github.com/ihh/6502life', '_blank'); });
 
         function onTap(el, fn) {
             let _touchFired = false;
