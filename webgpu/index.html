@@ -823,12 +823,13 @@
                         if(running) startSim();
                     }
                 } else if(msg.type==='census'){
-                    lastCensus=msg.data; totalQuanta=msg.totalQuanta; _mainMsgs++; _gridGeneration++;
+                    lastCensus=msg.data; totalQuanta=msg.totalQuanta; _gridGeneration++;
                 } else if(msg.type==='quickCensus'){
                     if (lastCensus) lastCensus.cellChars = msg.cellChars;
-                    totalQuanta=msg.totalQuanta; _mainMsgs++; _gridGeneration++;
+                    totalQuanta=msg.totalQuanta; _gridGeneration++;
                 } else if(msg.type==='quanta'){
-                    totalQuanta=msg.totalQuanta;                } else if(msg.type==='cellView'){
+                    totalQuanta=msg.totalQuanta;
+                } else if(msg.type==='cellView'){
                     if(msg.i===inspectI&&msg.j===inspectJ) lastCellView0=msg;
                     else if(msg.i===inspectNI&&msg.j===inspectNJ) lastCellView1=msg;
                 } else if(msg.type==='trace'){
@@ -851,6 +852,7 @@
                     injectSpecimen(activeSpecimen);
                 }
                 requestCellViews(true);
+                _gridGeneration++; // force redraw for highlight change
             }
         }
         {
