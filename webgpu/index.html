@@ -248,7 +248,7 @@
             renderSpecimens();
         }
 
-        async function injectSpecimen(idx) {
+        function injectSpecimen(idx) {
             const spec = specimens[idx];
             if (!spec) return;
             const brush = getBrushSize();
@@ -265,10 +265,27 @@
                     }
                 }
             }
-            // Refresh census so grid updates
+            // Update snapshot + grid without a full census (avoids mapAsync races)
             if (gpuMode && gpuSim) {
-                lastCensus = await gpuSim.census();
-                totalQuanta = gpuSim.totalQuanta;
+                // Write to snapshot so getCellView reflects the change immediately
+                for (let di = -r; di <= r; di++) {
+                    for (let dj = -r; dj <= r; dj++) {
+                        const ci2 = ((inspectI + di) % B + B) % B;
+                        const cj2 = ((inspectJ + dj) % B + B) % B;
+                        const base = (ci2 * B + cj2) * 1024;
+                        if (gpuSim._storageSnapshot) gpuSim._storageSnapshot.set(spec.data, base);
+                    }
+                }
+                // Recompute cellChars for affected cells
+                if (lastCensus) {
+                    for (let di = -r; di <= r; di++) {
+                        for (let dj = -r; dj <= r; dj++) {
+                            const ci2 = ((inspectI + di) % B + B) % B;
+                            const cj2 = ((inspectJ + dj) % B + B) % B;
+                            lastCensus.cellChars[ci2 * B + cj2] = cellHash(spec.data, 0);
+                        }
+                    }
+                }
                 _gridGeneration++;
             } else if (worker) {
                 workerSend({type:'census'});
@@ -851,10 +868,7 @@
                 requestCellViews(true);
                 // Auto-place active specimen at new cell
                 if (activeSpecimen >= 0 && specimens[activeSpecimen]) {
-                    console.log('[specimen] injecting #'+activeSpecimen+' at ('+inspectI+','+inspectJ+')');
                     injectSpecimen(activeSpecimen);
-                } else {
-                    console.log('[specimen] no active specimen (activeSpecimen='+activeSpecimen+')');
                 }
             }
         }
