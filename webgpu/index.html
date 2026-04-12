@@ -87,6 +87,15 @@
 
         #log { white-space: pre; font-size: 11px; line-height: 1.2;
                max-height: 60px; overflow-y: auto; margin-top: 8px; }
+
+        @media (max-width: 600px) {
+            .bottom {
+                grid-template-columns: 1fr 1fr 1fr;
+            }
+            #disasm {
+                grid-column: 1 / -1;
+            }
+        }
     </style>
 </head>
 <body>
@@ -521,7 +530,7 @@ The board is initialized by default with one such self-replicating seed; you can
             const link = document.createElement('a');
             link.style.cssText = 'color:#080;cursor:pointer';
             link.textContent = dasmExpanded ? 'Less' : 'More...';
-            link.onclick = () => { dasmExpanded = !dasmExpanded; lastDasmKey=''; renderDisasm(); };
+            onTap(link, () => { dasmExpanded = !dasmExpanded; lastDasmKey=''; renderDisasm(); });
             dasmEl.appendChild(link);
         }
         function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
