@@ -1190,9 +1190,11 @@
             // If we have hits to verify, verify ONE per frame (show it on screen)
             if (pendingVerify.length > 0) {
                 const seed = pendingVerify.shift();
-                print(`  Verifying seed=${seed}...`);
+                const _vt0 = performance.now();
                 try {
                     const result = await verifyHit(seed);
+                    const _vt1 = performance.now();
+                    console.log(`[mine verify] seed=${seed} ${result?'VIABLE':'dud'} ${(_vt1-_vt0).toFixed(0)}ms pending=${pendingVerify.length}`);
                     currentSeed = seed;
                     $('seedInput').value = seed;
 
