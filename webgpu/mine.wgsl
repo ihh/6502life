@@ -169,32 +169,31 @@ fn extract_u16_at(cell: array<u32, 6>, pos: u32) -> u32 {
     return ((cell[w] >> 24u) | (cell[w + 1u] << 8u)) & 0xFFFFu;
 }
 
-// Check if a byte is a branch opcode or JMP
-fn is_loop_candidate(b: u32) -> bool {
-    return b == 0x10u || b == 0x30u || b == 0x50u || b == 0x70u ||
-           b == 0x90u || b == 0xB0u || b == 0xD0u || b == 0xF0u ||
-           b == 0x4Cu; // JMP abs
+// Check for BCC/BVC + valid backward offset, or JMP to core
+fn has_valid_loop(cell: array<u32, 6>, core_pos: u32) -> bool {
+    // Scan from core position to end for BCC(0x90)/BVC(0x50) + offset 0xE0-0xF8
+    for (var k = core_pos; k < 22u; k++) {
+        let b = get_byte(cell, k);
+        if ((b == 0x90u || b == 0x50u) && k + 1u < 24u) {
+            let off = get_byte(cell, k + 1u);
+            if (off >= 0xE0u && off <= 0xF8u) { return true; }
+        }
+        // JMP abs to address at or before the core
+        if (b == 0x4Cu && k + 2u < 24u) {
+            let target = get_byte(cell, k + 1u) | (get_byte(cell, k + 2u) << 8u);
+            if (target <= core_pos + 5u) { return true; }
+        }
+    }
+    return false;
 }
 
 fn scan_core_patterns(cell: array<u32, 6>) -> bool {
-    // Check 19 positions (0..18) for any of the 18 six-byte core patterns
     for (var pos = 0u; pos <= 18u; pos++) {
         let lo = extract_u32_at(cell, pos);
         let hi = extract_u16_at(cell, pos + 4u);
         for (var p = 0u; p < N_PATTERNS; p++) {
             if (lo == PAT_LO[p] && hi == PAT_HI[p]) {
-                // Core found at pos. Check remaining bytes for a branch/JMP.
-                for (var after = pos + 6u; after < 24u; after++) {
-                    if (is_loop_candidate(get_byte(cell, after))) {
-                        return true;
-                    }
-                }
-                // Also check bytes before (for rotated patterns where branch wraps)
-                for (var before = 0u; before < pos; before++) {
-                    if (is_loop_candidate(get_byte(cell, before))) {
-                        return true;
-                    }
-                }
+                if (has_valid_loop(cell, pos)) { return true; }
             }
         }
     }
