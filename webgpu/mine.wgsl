@@ -180,8 +180,8 @@ fn has_valid_loop(cell: array<u32, 6>, core_pos: u32) -> bool {
         }
         // JMP abs to address at or before the core
         if (b == 0x4Cu && k + 2u < 24u) {
-            let target = get_byte(cell, k + 1u) | (get_byte(cell, k + 2u) << 8u);
-            if (target <= core_pos + 5u) { return true; }
+            let addr = get_byte(cell, k + 1u) | (get_byte(cell, k + 2u) << 8u);
+            if (addr <= core_pos + 5u) { return true; }
         }
     }
     return false;
