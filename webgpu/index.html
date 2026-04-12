@@ -424,7 +424,7 @@
                 const stats = loadMineStats();
                 const totalSeeds = stats.totalSeeds || 0;
                 if (totalSeeds > 0 || disc.length > 0) {
-                    statsEl.textContent = c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s  |  seeds:'+totalSeeds.toLocaleString()+' discoveries:'+disc.length;
+                    statsEl.textContent = c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s '+fpsVal+'fps  |  seeds:'+totalSeeds.toLocaleString()+' discoveries:'+disc.length;
                 } else {
                     statsEl.textContent = c.functional+'/'+c.total+' alive '+rateStr+' cyc/cell/s '+fpsVal+'fps';
                 }
