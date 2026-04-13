@@ -24,7 +24,7 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uni: Uniforms;
 @group(0) @binding(1) var<storage, read> kmer_lut: array<u32>;
 @group(0) @binding(2) var<storage, read> kmer_data: array<u32>;
-@group(0) @binding(3) var<storage, read_write> storage: array<u32>;
+@group(0) @binding(3) var<storage, read_write> board_mem: array<u32>;
 
 // ── BLAKE3 ─────────────────────────────────────────────────────────────
 
@@ -104,7 +104,7 @@ fn store_byte(base_word: u32, offset: u32, val: u32) {
     let word_idx = base_word + (offset >> 2u);
     let shift = (offset & 3u) * 8u;
     let mask = 0xFFu << shift;
-    storage[word_idx] = (storage[word_idx] & ~mask) | ((val & 0xFFu) << shift);
+    board_mem[word_idx] = (board_mem[word_idx] & ~mask) | ((val & 0xFFu) << shift);
 }
 
 // ── Main ───────────────────────────────────────────────────────────────
